@@ -1,5 +1,6 @@
 # Elixir build artifacts
 _build/
+_build/dev/
 /cover/
 /deps/
 /doc/

@@ -9,12 +9,18 @@ defmodule Nex.Agent.Skills.Loader do
       description: Explains code with visual diagrams
       disable-model-invocation: false
       allowed-tools: Read, Grep
+      requires:
+        bins: [browser-use, npx]
+        env: [BROWSER_USE_API_KEY]
+      always: true
       ---
 
       When explaining code, always include:
       1. Start with an analogy
       2. Draw a diagram
   """
+
+  require Logger
 
   @doc """
   Load skills from a directory.
@@ -23,9 +29,10 @@ defmodule Nex.Agent.Skills.Loader do
 
       skills = Nex.Agent.Skills.Loader.load_from_dir("~/.claude/skills")
   """
-  @spec load_from_dir(String.t()) :: list(map())
-  def load_from_dir(dir) do
+  @spec load_from_dir(String.t(), keyword()) :: list(map())
+  def load_from_dir(dir, opts \\ []) do
     path = Path.expand(dir)
+    filter_unavailable = Keyword.get(opts, :filter_unavailable, true)
 
     if File.exists?(path) do
       path
@@ -34,6 +41,13 @@ defmodule Nex.Agent.Skills.Loader do
         has_skill_md?(name) || has_skill_dir?(path, name)
       end)
       |> Enum.flat_map(fn name -> load_skill(name, path) end)
+      |> then(fn skills ->
+        if filter_unavailable do
+          Enum.filter(skills, &check_requirements/1)
+        else
+          skills
+        end
+      end)
     else
       []
     end
@@ -41,21 +55,84 @@ defmodule Nex.Agent.Skills.Loader do
 
   @doc """
   Load all skills from standard locations:
-  - ~/.nex/agent/skills (global)
+  - ~/.nex/agent/workspace/skills (global)
   - .nex/skills (project)
+  - Built-in skills (nanobot/skills)
   """
-  @spec load_all() :: list(map())
-  def load_all do
+  @spec load_all(keyword()) :: list(map())
+  def load_all(opts \\ []) do
     global = Path.join(System.get_env("HOME", "~"), ".nex/agent/workspace/skills")
     project = ".nex/skills"
 
+    # Built-in skills from nanobot format
+    builtin = builtin_skills_dir()
+
+    filter_unavailable = Keyword.get(opts, :filter_unavailable, true)
+    loader_opts = [filter_unavailable: filter_unavailable]
+
     []
-    |> Kernel.++(load_from_dir(global))
-    |> Kernel.++(load_from_dir(project))
+    |> Kernel.++(load_from_dir(builtin, loader_opts))
+    |> Kernel.++(load_from_dir(global, loader_opts))
+    |> Kernel.++(load_from_dir(project, loader_opts))
     |> Enum.uniq_by(& &1[:name])
   end
 
+  @doc """
+  List all skills without filtering (includes unavailable).
+  """
+  @spec list_all() :: list(map())
+  def list_all, do: load_all(filter_unavailable: false)
+
+  @doc """
+  Check if skill requirements are met.
+  """
+  @spec check_requirements(map()) :: boolean()
+  def check_requirements(skill) do
+    requires = skill[:requires] || %{}
+
+    # Check binary requirements
+    bins = requires[:bins] || []
+    bins_ok = Enum.all?(bins, &find_executable/1)
+
+    # Check environment variable requirements
+    envs = requires[:env] || []
+    envs_ok = Enum.all?(envs, &System.get_env/1)
+
+    bins_ok and envs_ok
+  end
+
+  @doc """
+  Get missing requirements for a skill.
+  """
+  @spec missing_requirements(map()) :: String.t()
+  def missing_requirements(skill) do
+    requires = skill[:requires] || %{}
+
+    missing = []
+
+    bins = requires[:bins] || []
+
+    missing =
+      (missing ++ Enum.reject(bins, &find_executable/1))
+      |> Enum.map(&"CLI: #{&1}")
+
+    envs = requires[:env] || []
+
+    missing =
+      (missing ++ Enum.reject(envs, &System.get_env/1))
+      |> Enum.map(&"ENV: #{&1}")
+
+    Enum.join(missing, ", ")
+  end
+
   # Private functions
+
+  defp builtin_skills_dir do
+    # Try to find built-in skills relative to this file
+    # In production: priv/skills or similar
+    # For now, return empty path (no builtins by default)
+    ""
+  end
 
   defp has_skill_md?(name) do
     String.ends_with?(name, ".md")
@@ -70,15 +147,12 @@ defmodule Nex.Agent.Skills.Loader do
 
     cond do
       File.dir?(Path.join(base_path, name)) && File.exists?(skill_path) ->
-        # Directory with SKILL.md
         [parse_skill_file(skill_path, name)]
 
       File.exists?(skill_path) ->
-        # Legacy: .md file (not a directory)
         [parse_skill_file(skill_path, name)]
 
       String.ends_with?(name, ".md") ->
-        # Direct .md file
         direct_path = Path.join(base_path, name)
         [parse_skill_file(direct_path, Path.basename(name, ".md"))]
 
@@ -143,6 +217,9 @@ defmodule Nex.Agent.Skills.Loader do
           String.trim(body)
       end
 
+    # Parse requires section (supports both YAML and simple format)
+    requires = parse_requires(full_metadata["requires"])
+
     %{
       name: name,
       description: full_metadata["description"] || extract_first_paragraph(body),
@@ -154,12 +231,44 @@ defmodule Nex.Agent.Skills.Loader do
       allowed_tools: parse_allowed_tools(full_metadata["allowed-tools"]),
       user_invocable: full_metadata["user-invocable"] != "false",
       always: full_metadata["always"] == "true",
+      requires: requires,
       context: full_metadata["context"],
       agent: full_metadata["agent"],
       argument_hint: full_metadata["argument-hint"],
       path: path
     }
   end
+
+  defp parse_requires(nil), do: %{}
+  defp parse_requires(""), do: %{}
+
+  defp parse_requires(requires) when is_binary(requires) do
+    # Simple format: "binary1, binary2" or "ENV_VAR1, ENV_VAR2"
+    # Need to detect if it's bins or env - assume bins for backward compat
+    bins =
+      requires
+      |> String.split(",")
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.map(&String.replace(&1, ~r/^env:/, ""))
+
+    %{bins: bins, env: []}
+  end
+
+  defp parse_requires(requires) when is_map(requires) do
+    %{
+      bins: parse_list(requires["bins"]),
+      env: parse_list(requires["env"])
+    }
+  end
+
+  defp parse_requires(_), do: %{}
+
+  defp parse_list(nil), do: []
+  defp parse_list(""), do: []
+  defp parse_list(list) when is_list(list), do: list
+  defp parse_list(str) when is_binary(str), do: String.split(str, ",") |> Enum.map(&String.trim/1)
+  defp parse_list(_), do: []
 
   defp parse_frontmatter("") do
     %{}
@@ -205,6 +314,20 @@ defmodule Nex.Agent.Skills.Loader do
         para
         |> String.trim()
         |> String.slice(0..200)
+    end
+  end
+
+  # Check if executable exists in PATH
+  defp find_executable(bin) do
+    # On Windows, also check .exe, .cmd, .bat
+    case :os.type() do
+      {:win32, _} ->
+        Enum.any?([bin, "#{bin}.exe", "#{bin}.cmd", "#{bin}.bat"], fn b ->
+          System.find_executable(b) != nil
+        end)
+
+      _ ->
+        System.find_executable(bin) != nil
     end
   end
 end
