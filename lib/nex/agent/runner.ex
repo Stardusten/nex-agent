@@ -127,14 +127,23 @@ defmodule Nex.Agent.Runner do
     Logger.info("[Runner] LLM requests #{length(tool_calls)} tool call(s)")
 
     tool_call_dicts = normalize_tool_calls(tool_calls)
-    current_names = tool_call_dicts |> Enum.map(&get_in(&1, ["function", "name"])) |> Enum.sort()
-    tool_history = Keyword.get(opts, :_tool_history, [])
-    tool_history = [current_names | tool_history]
 
-    # Detect loop: same tool pattern repeated N times consecutively
+    current_signatures =
+      tool_call_dicts
+      |> Enum.map(fn tc ->
+        name = get_in(tc, ["function", "name"])
+        args = get_in(tc, ["function", "arguments"]) || ""
+        {name, args}
+      end)
+      |> Enum.sort()
+
+    tool_history = Keyword.get(opts, :_tool_history, [])
+    tool_history = [current_signatures | tool_history]
+
+    # Detect loop: exact same {tool_name, args} pattern repeated N times consecutively
     if length(tool_history) >= @max_loop_repeats and
          tool_history |> Enum.take(@max_loop_repeats) |> Enum.uniq() |> length() == 1 do
-      Logger.warning("[Runner] Loop detected: #{inspect(current_names)} repeated #{@max_loop_repeats}x, breaking")
+      Logger.warning("[Runner] Loop detected: #{inspect(current_signatures)} repeated #{@max_loop_repeats}x, breaking")
       {:ok, content || "I detected a repeated action loop and stopped. Please try a different approach.", session}
     else
       opts = Keyword.put(opts, :_tool_history, tool_history)
