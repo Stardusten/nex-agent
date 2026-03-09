@@ -11,6 +11,7 @@ defmodule Nex.Agent.Subagent do
   require Logger
 
   alias Nex.Agent.{Bus, Session}
+  alias Nex.Agent.SubAgent.Evolution
 
   @max_subagent_iterations 15
 
@@ -204,12 +205,17 @@ defmodule Nex.Agent.Subagent do
   # --- Subagent loop (runs in spawned process) ---
 
   defp run_subagent_loop(server, task_id, task_description, label, opts) do
+    start_time = System.monotonic_time(:millisecond)
+    
     provider = Keyword.get(opts, :provider, :anthropic)
     model = Keyword.get(opts, :model, "claude-sonnet-4-20250514")
     api_key = Keyword.get(opts, :api_key)
     base_url = Keyword.get(opts, :base_url)
     channel = Keyword.get(opts, :channel)
     chat_id = Keyword.get(opts, :chat_id)
+    
+    # Determine SubAgent module from label (if it contains module info)
+    subagent_module = Keyword.get(opts, :subagent_module, Nex.Agent.Subagent)
 
     session = Session.new("subagent:#{task_id}")
 
@@ -231,12 +237,34 @@ defmodule Nex.Agent.Subagent do
     """
 
     case Nex.Agent.Runner.run(session, prompt, runner_opts) do
-      {:ok, result, _session} ->
+      {:ok, result, final_session} ->
+        duration = System.monotonic_time(:millisecond) - start_time
+        
+        # Record performance metrics
+        Evolution.record_performance(subagent_module, %{
+          task_type: label,
+          success: true,
+          duration_ms: duration,
+          tool_calls: extract_tool_calls(final_session),
+          user_feedback: nil
+        })
+        
         send(server, {:task_complete, task_id, result})
         announce_result(task_id, label, task_description, result, channel, chat_id, :ok)
 
-      {:error, reason, _session} ->
+      {:error, reason, final_session} ->
+        duration = System.monotonic_time(:millisecond) - start_time
         error_msg = inspect(reason)
+        
+        # Record failure metrics
+        Evolution.record_performance(subagent_module, %{
+          task_type: label,
+          success: false,
+          duration_ms: duration,
+          tool_calls: extract_tool_calls(final_session),
+          user_feedback: nil
+        })
+        
         send(server, {:task_failed, task_id, error_msg})
         announce_result(task_id, label, task_description, error_msg, channel, chat_id, :error)
     end
@@ -296,5 +324,17 @@ defmodule Nex.Agent.Subagent do
 
   defp generate_id do
     :crypto.strong_rand_bytes(4) |> Base.encode16(case: :lower)
+  end
+  
+  defp extract_tool_calls(session) do
+    session.messages
+    |> Enum.filter(fn msg -> msg["role"] == "assistant" end)
+    |> Enum.flat_map(fn msg -> 
+      tool_calls = msg["tool_calls"] || []
+      Enum.map(tool_calls, fn tc -> 
+        get_in(tc, ["function", "name"]) || "unknown"
+      end)
+    end)
+    |> Enum.uniq()
   end
 end

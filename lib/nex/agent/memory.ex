@@ -302,6 +302,32 @@ defmodule Nex.Agent.Memory do
   Append to HISTORY.md (grep-searchable log)
   """
   @spec append_history(String.t()) :: :ok
+  @doc """
+  Store arbitrary data in memory (used by SubAgent evolution, etc.)
+  """
+  @spec store(map()) :: :ok
+  def store(data) when is_map(data) do
+    init()
+    
+    today = Date.utc_today() |> Date.to_string()
+    date_dir = Path.join(@memory_dir, today)
+    File.mkdir_p!(date_dir)
+    
+    file_path = Path.join(date_dir, "log.md")
+    timestamp = DateTime.utc_now() |> DateTime.to_iso8601()
+    
+    entry = Map.merge(data, %{
+      "_stored_at" => timestamp,
+      "_type" => Map.get(data, :type, "generic")
+    })
+    
+    # Append to today's log with special marker
+    content = "## STORE: #{data[:type] || "data"}\n#{Jason.encode!(entry)}\n\n"
+    File.write!(file_path, content, [:append])
+    
+    :ok
+  end
+  
   def append_history(entry) do
     init()
     history_file = Path.join(@memory_dir, "HISTORY.md")
