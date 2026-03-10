@@ -19,6 +19,7 @@ defmodule Nex.Agent.Workspace do
     - Long-term memory: ~/.nex/agent/workspace/memory/MEMORY.md
     - History log: ~/.nex/agent/workspace/memory/HISTORY.md
     - Custom skills: ~/.nex/agent/workspace/skills/{skill-name}/SKILL.md
+    - Workspace tools: ~/.nex/agent/workspace/tools/{tool-name}/
 
     ## Guidelines
     - State intent before tool calls, but NEVER predict results before receiving them.
@@ -33,7 +34,7 @@ defmodule Nex.Agent.Workspace do
 
     ## Tools and Skills
 
-    Built-in tools provide deterministic capabilities. Markdown skills provide reusable workflows.
+    Built-in tools provide deterministic capabilities. Workspace tools add reusable Elixir capabilities. Markdown skills provide reusable workflows.
 
     ### Built-in Tools
 
@@ -53,6 +54,17 @@ defmodule Nex.Agent.Workspace do
     - **memory_search** - Search long-term memory
     - **skill_list** - Inspect local Markdown skills
     - **skill_create** - Create new skills
+    - **tool_create** - Create workspace custom tools
+    - **tool_list** - Inspect built-in and custom tools
+    - **tool_delete** - Delete workspace custom tools
+
+    ### Workspace Tools
+
+    Custom Elixir tools live in `workspace/tools/<name>/`.
+
+    - **Create**: `tool_create(name, description, content)` - Create a workspace custom tool
+    - **Inspect**: `tool_list(scope, detail)` - Inspect built-in and custom tools
+    - **Delete**: `tool_delete(name)` - Delete a workspace custom tool
 
     ### Markdown Skills
 
@@ -62,7 +74,7 @@ defmodule Nex.Agent.Workspace do
 
     Skills appear with the `skill_` prefix (e.g., `skill_explain_code`).
 
-    Code-based capabilities belong in tools, not skills.
+    Code-based capabilities belong in built-in tools or workspace tools, not skills.
 
     ### Evolution
 
@@ -70,6 +82,7 @@ defmodule Nex.Agent.Workspace do
 
     - **Improve built-in**: `evolve(module, code, reason)` - Modify core modules
     - **Create new skills**: `skill_create()` - Add reusable workflows
+    - **Create new tools**: `tool_create()` - Add reusable Elixir capabilities when explicitly requested
     - **Self-modify**: `soul_update()` - Update personality and values
 
     Use `skill_create()` for reusable instructions. Use tools and `evolve()` for code-based capabilities.

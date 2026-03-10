@@ -54,6 +54,7 @@ defmodule Nex.Agent.Onboarding do
 
     dirs = [
       base_dir(),
+      Path.join(w, "tools"),
       Path.join(w, "skills"),
       Path.join(w, "sessions"),
       Path.join(w, "memory")
@@ -83,6 +84,28 @@ defmodule Nex.Agent.Onboarding do
     if File.exists?(old_sessions) and not File.exists?(new_sessions) do
       File.rename(old_sessions, new_sessions)
       Logger.info("[Onboarding] Migrated sessions/ to workspace/sessions/")
+    end
+
+    # Migrate legacy global tools/ into workspace/tools
+    old_tools = Path.join(b, "tools")
+    new_tools = Path.join(w, "tools")
+
+    if File.exists?(old_tools) do
+      File.mkdir_p!(new_tools)
+
+      old_tools
+      |> File.ls!()
+      |> Enum.each(fn entry ->
+        source = Path.join(old_tools, entry)
+        destination = Path.join(new_tools, entry)
+
+        unless File.exists?(destination) do
+          File.rename(source, destination)
+        end
+      end)
+
+      File.rm_rf!(old_tools)
+      Logger.info("[Onboarding] Migrated tools/ to workspace/tools/")
     end
 
     # Clean up legacy artifacts
@@ -191,7 +214,7 @@ defmodule Nex.Agent.Onboarding do
 
     ## Tools and Skills
 
-    Built-in tools provide deterministic capabilities. Markdown skills provide reusable workflows.
+    Built-in tools provide deterministic capabilities. Workspace tools add reusable Elixir capabilities. Markdown skills provide reusable workflows.
 
     ### Built-in Tools
 
@@ -211,6 +234,17 @@ defmodule Nex.Agent.Onboarding do
     - **memory_search** - Search long-term memory
     - **skill_list** - Inspect local Markdown skills
     - **skill_create** - Create local Markdown skills
+    - **tool_create** - Create workspace custom Elixir tools
+    - **tool_list** - Inspect built-in and custom tools
+    - **tool_delete** - Delete workspace custom tools
+
+    ### Workspace Tools
+
+    Custom Elixir tools live under `workspace/tools/<name>/`.
+
+    - **Create**: `tool_create(name, description, content)` - Add a workspace custom tool
+    - **Inspect**: `tool_list(scope, detail)` - View built-in and custom tools
+    - **Delete**: `tool_delete(name)` - Remove a custom tool
 
     ### Markdown Skills
 
@@ -219,7 +253,7 @@ defmodule Nex.Agent.Onboarding do
     - **Create**: `skill_create(name, description, content)` - Add a reusable workflow
     - **Use**: skills appear with the `skill_` prefix (e.g. `skill_explain_code`)
 
-    Code-based capabilities belong in tools, not skills.
+    Code-based capabilities belong in built-in tools or workspace tools, not skills.
 
     ### Evolution
 
@@ -227,6 +261,7 @@ defmodule Nex.Agent.Onboarding do
 
     - **Improve built-in**: `evolve(module, code, reason)` - Modify core modules
     - **Create new Markdown skills**: `skill_create()` - Add reusable workflows
+    - **Create new workspace tools**: `tool_create()` - Add reusable Elixir capabilities when explicitly requested
     - **Self-modify**: `soul_update()` - Update personality and values
 
     Use `skill_create()` for instructions. Use tools and `evolve()` for code-based capabilities.

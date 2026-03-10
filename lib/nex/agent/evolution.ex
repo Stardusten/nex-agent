@@ -14,6 +14,8 @@ defmodule Nex.Agent.Evolution do
 
   require Logger
 
+  alias Nex.Agent.Tool.CustomTools
+
   @versions_dir Path.join(System.get_env("HOME", "~"), ".nex/agent/evolution")
 
   @doc """
@@ -138,7 +140,7 @@ defmodule Nex.Agent.Evolution do
   """
   @spec can_evolve?(atom()) :: boolean()
   def can_evolve?(module) do
-    Code.ensure_loaded?(module)
+    Code.ensure_loaded?(module) or (CustomTools.custom_module?(module) and File.exists?(source_path(module)))
   end
 
   @doc """
@@ -146,8 +148,9 @@ defmodule Nex.Agent.Evolution do
   """
   @spec list_evolvable_modules() :: [atom()]
   def list_evolvable_modules do
-    app_modules()
+    (app_modules() ++ CustomTools.list_modules())
     |> Enum.filter(&can_evolve?/1)
+    |> Enum.uniq()
   end
 
   @doc """
@@ -202,6 +205,11 @@ defmodule Nex.Agent.Evolution do
   """
   @spec source_path(atom()) :: String.t()
   def source_path(module) do
+    if CustomTools.custom_module?(module) do
+      module
+      |> CustomTools.name_for_module()
+      |> CustomTools.source_path()
+    else
     beam_path = :code.where_is_file(~c"#{module}.beam") |> to_string()
 
     cond do
@@ -228,6 +236,7 @@ defmodule Nex.Agent.Evolution do
         |> String.replace("_build/", "lib/")
         |> String.replace("/ebin/", "/lib/")
         |> String.replace_suffix("", ".ex")
+    end
     end
   end
 

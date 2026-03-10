@@ -6,6 +6,7 @@ defmodule Nex.Agent.Tool.Reflect do
   @behaviour Nex.Agent.Tool.Behaviour
 
   alias Nex.Agent.Evolution
+  alias Nex.Agent.Tool.CustomTools
 
   def name, do: "reflect"
   def description, do: "Read the source code of any agent module for understanding and improvement."
@@ -37,7 +38,7 @@ defmodule Nex.Agent.Tool.Reflect do
       modules
       |> Enum.map(fn m ->
         name = m |> to_string() |> String.replace_prefix("Elixir.", "")
-        "- #{name}"
+        if CustomTools.custom_module?(m), do: "- #{name} (custom tool)", else: "- #{name}"
       end)
       |> Enum.join("\n")
 

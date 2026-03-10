@@ -46,5 +46,19 @@ defmodule Nex.Agent.OnboardingTest do
     bundled_skill = Path.join([legacy_skills_dir, "code-review", "SKILL.md"])
     assert File.exists?(bundled_skill)
     assert File.read!(bundled_skill) =~ "name: code-review"
+    assert File.dir?(Path.join([base_dir, "workspace", "tools"]))
+  end
+
+  test "ensure_initialized migrates legacy global tools into workspace tools", %{base_dir: base_dir} do
+    legacy_tool_dir = Path.join([base_dir, "tools", "hello_tool"])
+    File.mkdir_p!(legacy_tool_dir)
+    File.write!(Path.join(legacy_tool_dir, "tool.ex"), "defmodule Legacy.Tool do end")
+    File.write!(Path.join(legacy_tool_dir, "tool.json"), "{}")
+
+    :ok = Onboarding.ensure_initialized()
+
+    refute File.exists?(Path.join(base_dir, "tools"))
+    assert File.exists?(Path.join([base_dir, "workspace", "tools", "hello_tool", "tool.ex"]))
+    assert File.exists?(Path.join([base_dir, "workspace", "tools", "hello_tool", "tool.json"]))
   end
 end

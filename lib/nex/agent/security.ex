@@ -5,15 +5,6 @@ defmodule Nex.Agent.Security do
   Provides path validation, command whitelisting, and other security checks.
   """
 
-  @allowed_roots_default [
-    # Project directory
-    File.cwd!(),
-    # Agent workspace
-    Path.expand("~/.nex/agent"),
-    # Temp directory (for tests and operations)
-    "/tmp"
-  ]
-
   # Base commands allowed in production
   @allowed_commands_prod [
     # Version control
@@ -163,7 +154,7 @@ defmodule Nex.Agent.Security do
   def allowed_roots do
     # Can be configured via environment variable
     case System.get_env("NEX_ALLOWED_ROOTS") do
-      nil -> @allowed_roots_default
+      nil -> default_allowed_roots()
       paths -> String.split(paths, ":") |> Enum.map(&Path.expand/1)
     end
   end
@@ -255,5 +246,13 @@ defmodule Nex.Agent.Security do
     command
     |> String.replace(~r/'[^']*'/, "''")
     |> String.replace(~r/"[^"]*"/, "\"\"")
+  end
+
+  defp default_allowed_roots do
+    [
+      File.cwd!(),
+      Path.join(System.get_env("HOME", "~"), ".nex/agent"),
+      "/tmp"
+    ]
   end
 end

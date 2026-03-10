@@ -128,6 +128,7 @@ On first run, NexAgent creates the default config and workspace:
 ```text
 ~/.nex/agent/
 ├── config.json
+├── tools/
 └── workspace/
     ├── AGENTS.md
     ├── SOUL.md
@@ -273,11 +274,22 @@ Default built-in tools:
 - `spawn_task`
 - `skill_list`
 - `skill_create`
+- `tool_list`
+- `tool_create`
+- `tool_delete`
 - `soul_update`
 - `reflect`
 - `evolve`
 
 Together, these cover files, shell commands, web access, outbound messaging, memory retrieval, scheduling, and self-improvement.
+
+### Custom global tools
+
+Custom Elixir tools live in `~/.nex/agent/workspace/tools/<name>/` and are registered as first-class tools.
+
+- `tool_create` creates a workspace custom tool
+- `tool_list` inspects built-in and custom tools
+- `tool_delete` removes a custom tool
 
 ### Skills
 

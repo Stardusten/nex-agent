@@ -128,6 +128,7 @@ mix nex.agent onboard
 ```text
 ~/.nex/agent/
 ├── config.json
+├── tools/
 └── workspace/
     ├── AGENTS.md
     ├── SOUL.md
@@ -273,11 +274,22 @@ NexAgent 当前支持以下 provider:
 - `spawn_task`
 - `skill_list`
 - `skill_create`
+- `tool_list`
+- `tool_create`
+- `tool_delete`
 - `soul_update`
 - `reflect`
 - `evolve`
 
 这套工具覆盖了文件操作、命令执行、外部信息获取、消息发送、记忆检索、调度和自我进化。
+
+### Custom global tools
+
+自定义 Elixir tools 存放在 `~/.nex/agent/workspace/tools/<name>/`，会被注册成一等工具。
+
+- `tool_create` 创建 workspace 级自定义 tool
+- `tool_list` 查看内置和自定义 tools
+- `tool_delete` 删除自定义 tool
 
 ### Skills
 

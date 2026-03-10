@@ -17,6 +17,9 @@ defmodule Nex.Agent.Tool.Registry do
     Nex.Agent.Tool.WebFetch,
     Nex.Agent.Tool.Message,
     Nex.Agent.Tool.SkillCreate,
+    Nex.Agent.Tool.ToolCreate,
+    Nex.Agent.Tool.ToolList,
+    Nex.Agent.Tool.ToolDelete,
     Nex.Agent.Tool.SoulUpdate,
     Nex.Agent.Tool.SpawnTask,
     Nex.Agent.Tool.SkillList,
@@ -65,29 +68,30 @@ defmodule Nex.Agent.Tool.Registry do
     GenServer.call(__MODULE__, :list)
   end
 
+  @doc "Re-scan built-in, project, and custom tools."
+  def reload do
+    GenServer.call(__MODULE__, :reload)
+  end
+
   @doc "Get module for a tool name."
   def get(name) do
     GenServer.call(__MODULE__, {:get, name})
+  end
+
+  @doc "List default built-in tool names."
+  def builtin_names do
+    @default_tools
+    |> Enum.map(fn module ->
+      if function_exported?(module, :name, 0), do: module.name(), else: nil
+    end)
+    |> Enum.reject(&is_nil/1)
   end
 
   # Server
 
   @impl true
   def init(_opts) do
-    tools =
-      (@default_tools ++ discover_tool_modules())
-      |> Enum.uniq()
-      |> Enum.reduce(%{}, fn module, acc ->
-        case safe_tool_name(module) do
-          {:ok, name} ->
-            Map.put(acc, name, module)
-
-          :error ->
-            Logger.warning("[Registry] Failed to register tool: #{inspect(module)}")
-            acc
-        end
-      end)
-
+    tools = build_tools()
     Logger.info("[Registry] Started with #{map_size(tools)} tools: #{inspect(Map.keys(tools) |> Enum.sort())}")
     {:ok, %{tools: tools}}
   end
@@ -96,7 +100,14 @@ defmodule Nex.Agent.Tool.Registry do
   def handle_cast({:register, module}, %{tools: tools} = state) do
     case safe_tool_name(module) do
       {:ok, name} ->
-        {:noreply, %{state | tools: Map.put(tools, name, module)}}
+        case maybe_register_runtime_tool(tools, name, module) do
+          {:ok, updated_tools} ->
+            {:noreply, %{state | tools: updated_tools}}
+
+          {:error, reason} ->
+            Logger.warning("[Registry] Failed to register runtime tool #{inspect(module)}: #{reason}")
+            {:noreply, state}
+        end
 
       :error ->
         Logger.warning("[Registry] Failed to register module: #{inspect(module)}")
@@ -113,9 +124,15 @@ defmodule Nex.Agent.Tool.Registry do
   def handle_cast({:hot_swap, name, new_module}, %{tools: tools} = state) do
     case safe_tool_name(new_module) do
       {:ok, new_name} ->
-        tools = tools |> Map.delete(name) |> Map.put(new_name, new_module)
-        Logger.info("[Registry] Hot-swapped #{name} -> #{new_name}")
-        {:noreply, %{state | tools: tools}}
+        case maybe_hot_swap_runtime_tool(tools, name, new_name, new_module) do
+          {:ok, updated_tools} ->
+            Logger.info("[Registry] Hot-swapped #{name} -> #{new_name}")
+            {:noreply, %{state | tools: updated_tools}}
+
+          {:error, reason} ->
+            Logger.warning("[Registry] Hot-swap rejected for #{name}: #{reason}")
+            {:noreply, state}
+        end
 
       :error ->
         Logger.warning("[Registry] Hot-swap failed for #{name}: module doesn't implement callbacks")
@@ -175,6 +192,12 @@ defmodule Nex.Agent.Tool.Registry do
   end
 
   @impl true
+  def handle_call(:reload, _from, state) do
+    tools = build_tools()
+    {:reply, :ok, %{state | tools: tools}}
+  end
+
+  @impl true
   def handle_call({:get, name}, _from, %{tools: tools} = state) do
     {:reply, Map.get(tools, name), state}
   end
@@ -198,9 +221,8 @@ defmodule Nex.Agent.Tool.Registry do
     end
   end
 
-  # Scan tool directory for modules not in @default_tools.
-  # This picks up tools created via evolve that survive restarts.
-  defp discover_tool_modules do
+  # Scan repo tool directory for modules not in @default_tools.
+  defp discover_project_tool_modules do
     tool_dir = Path.join([File.cwd!(), "lib", "nex", "agent", "tool"])
 
     if File.dir?(tool_dir) do
@@ -225,7 +247,7 @@ defmodule Nex.Agent.Tool.Registry do
             end
 
             if function_exported?(module, :name, 0) do
-              Logger.info("[Registry] Discovered evolved tool: #{inspect(module)}")
+              Logger.info("[Registry] Discovered project tool: #{inspect(module)}")
               [module]
             else
               []
@@ -237,6 +259,84 @@ defmodule Nex.Agent.Tool.Registry do
       end)
     else
       []
+    end
+  end
+
+  defp discover_custom_tool_modules do
+    alias Nex.Agent.Tool.CustomTools
+
+    CustomTools.ensure_root_dir()
+
+    CustomTools.list()
+    |> Enum.flat_map(fn tool ->
+      case CustomTools.load_module_from_source(tool.source_path) do
+        {:ok, module} ->
+          Logger.info("[Registry] Discovered custom tool: #{inspect(module)}")
+          [module]
+
+        {:error, reason} ->
+          Logger.warning("[Registry] Failed to load custom tool #{tool["name"]}: #{reason}")
+          []
+      end
+    end)
+  end
+
+  defp register_modules(acc, modules, source) do
+    Enum.reduce(modules, acc, fn module, tools ->
+      case safe_tool_name(module) do
+        {:ok, name} ->
+          if Map.has_key?(tools, name) do
+            Logger.warning("[Registry] Skipping #{source} tool with conflicting name #{name}: #{inspect(module)}")
+            tools
+          else
+            Map.put(tools, name, module)
+          end
+
+        :error ->
+          Logger.warning("[Registry] Failed to register #{source} tool: #{inspect(module)}")
+          tools
+      end
+    end)
+  end
+
+  defp build_tools do
+    %{}
+    |> register_modules(@default_tools, "default")
+    |> register_modules(discover_project_tool_modules(), "project")
+    |> register_modules(discover_custom_tool_modules(), "custom")
+  end
+
+  defp maybe_register_runtime_tool(tools, name, module) do
+    case Map.get(tools, name) do
+      nil ->
+        {:ok, Map.put(tools, name, module)}
+
+      ^module ->
+        {:ok, tools}
+
+      existing ->
+        {:error, "tool name #{name} is already registered to #{inspect(existing)}"}
+    end
+  end
+
+  defp maybe_hot_swap_runtime_tool(tools, old_name, new_name, module) do
+    case Map.get(tools, old_name) do
+      nil ->
+        {:error, "existing tool #{old_name} is not registered"}
+
+      existing when old_name == new_name ->
+        if existing == module do
+          {:ok, tools}
+        else
+          {:ok, Map.put(tools, new_name, module)}
+        end
+
+      _existing ->
+        if Map.has_key?(tools, new_name) do
+          {:error, "tool name #{new_name} is already registered"}
+        else
+          {:ok, tools |> Map.delete(old_name) |> Map.put(new_name, module)}
+        end
     end
   end
 
