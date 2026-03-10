@@ -74,3 +74,4 @@ yarn-error.log
 .dev/
 .chat/
 docs/
+vendors/

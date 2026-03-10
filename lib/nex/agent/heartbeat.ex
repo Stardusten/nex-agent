@@ -497,8 +497,7 @@ defmodule Nex.Agent.Heartbeat do
       bus: Process.whereis(Nex.Agent.Bus) != nil,
       tool_registry: Process.whereis(Nex.Agent.Tool.Registry) != nil,
       inbound_worker: Process.whereis(Nex.Agent.InboundWorker) != nil,
-      cron: Process.whereis(Nex.Agent.Cron) != nil,
-      memory_index: Process.whereis(Nex.Agent.Memory.Index) != nil
+      cron: Process.whereis(Nex.Agent.Cron) != nil
     }
   end
 end

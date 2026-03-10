@@ -4,8 +4,6 @@ defmodule Nex.Agent.Session do
   Mirrors nanobot's session/manager.py Session class.
   """
 
-  require Logger
-
   defstruct [
     :key,
     :created_at,
@@ -76,7 +74,7 @@ defmodule Nex.Agent.Session do
   Get history for LLM - unconsolidated messages, aligned to user turn.
   """
   @spec get_history(t(), non_neg_integer()) :: [map()]
-  def get_history(%__MODULE__{} = session, max_messages \\ 50) do
+  def get_history(%__MODULE__{} = session, max_messages \\ 500) do
     unconsolidated = Enum.drop(session.messages, session.last_consolidated)
     sliced = Enum.take(unconsolidated, -max_messages)
 
@@ -85,18 +83,13 @@ defmodule Nex.Agent.Session do
     aligned =
       case Enum.find_index(sliced, fn m -> Map.get(m, "role") == "user" end) do
         nil ->
-          # No user message — check if we start with a valid assistant turn
-          case sliced do
-            [%{"role" => "assistant"} | _] -> sliced
-            _ -> []
-          end
+          sliced
         idx ->
           Enum.drop(sliced, idx)
       end
 
     aligned
     |> Enum.map(&sanitize_history_entry/1)
-    |> sanitize_tool_pairs()
   end
 
   defp sanitize_history_entry(m) do
@@ -107,12 +100,7 @@ defmodule Nex.Agent.Session do
 
     entry =
       if tool_calls = Map.get(m, "tool_calls") do
-        sanitized =
-          Enum.map(tool_calls, fn tc ->
-            if Map.get(tc, "id"), do: tc, else: Map.put(tc, "id", generate_fallback_id())
-          end)
-
-        Map.put(entry, "tool_calls", sanitized)
+        Map.put(entry, "tool_calls", tool_calls)
       else
         entry
       end
@@ -125,83 +113,10 @@ defmodule Nex.Agent.Session do
           if name = Map.get(m, "name"), do: Map.put(e, "name", name), else: e
         end)
       else
-        if Map.get(m, "role") == "tool" do
-          Map.put(entry, "tool_call_id", nil)
-        else
-          entry
-        end
+        entry
       end
 
-    if rc = Map.get(m, "reasoning_content") do
-      Map.put(entry, "reasoning_content", rc)
-    else
-      entry
-    end
-  end
-
-  # Keep history provider-safe: preserve matched tool pairs, strip orphaned tail fragments.
-  defp sanitize_tool_pairs(messages) do
-    {result, pending} =
-      Enum.reduce(messages, {[], MapSet.new()}, fn m, {acc, pending} ->
-        cond do
-          m["role"] == "assistant" && is_list(m["tool_calls"]) && m["tool_calls"] != [] ->
-            acc = strip_pending_tool_calls(acc, pending)
-            tc_ids = m["tool_calls"] |> Enum.map(& &1["id"]) |> MapSet.new()
-            {acc ++ [m], tc_ids}
-
-          m["role"] == "tool" ->
-            tcid = m["tool_call_id"]
-
-            if tcid && MapSet.member?(pending, tcid) do
-              {acc ++ [m], MapSet.delete(pending, tcid)}
-            else
-              {acc, pending}
-            end
-
-          m["role"] == "user" || m["role"] == "assistant" ->
-            acc = strip_pending_tool_calls(acc, pending)
-            {acc ++ [m], MapSet.new()}
-
-          true ->
-            {acc ++ [m], pending}
-        end
-      end)
-
-    strip_pending_tool_calls(result, pending)
-  end
-
-  defp strip_pending_tool_calls(messages, pending) do
-    if MapSet.size(pending) == 0 do
-      messages
-    else
-      Logger.warning(
-        "[Session] Stripping #{MapSet.size(pending)} orphaned tool_call(s): #{inspect(MapSet.to_list(pending))}"
-      )
-
-      {rev_before, rev_after} =
-        messages
-        |> Enum.reverse()
-        |> Enum.split_while(fn m ->
-          not (m["role"] == "assistant" && is_list(m["tool_calls"]))
-        end)
-
-      case rev_after do
-        [assistant | rest] ->
-          kept = Enum.reject(assistant["tool_calls"], &MapSet.member?(pending, &1["id"]))
-
-          updated =
-            if kept == [] do
-              Map.delete(assistant, "tool_calls")
-            else
-              %{assistant | "tool_calls" => kept}
-            end
-
-          Enum.reverse(rest) ++ [updated] ++ Enum.reverse(rev_before)
-
-        [] ->
-          messages
-      end
-    end
+    entry
   end
 
   @doc """
@@ -229,6 +144,7 @@ defmodule Nex.Agent.Session do
           "key" => session.key,
           "created_at" => session.created_at |> DateTime.to_iso8601(),
           "updated_at" => session.updated_at |> DateTime.to_iso8601(),
+          "metadata" => session.metadata,
           "last_consolidated" => session.last_consolidated
         }
         | session.messages
@@ -292,7 +208,7 @@ defmodule Nex.Agent.Session do
           messages: parsed_messages,
           created_at: parse_datetime(Map.get(meta, "created_at")),
           updated_at: parse_datetime(Map.get(meta, "updated_at")),
-          metadata: %{},
+          metadata: Map.get(meta, "metadata", %{}),
           last_consolidated: Map.get(meta, "last_consolidated", 0)
         }
 
@@ -312,9 +228,5 @@ defmodule Nex.Agent.Session do
       {:ok, dt, _} -> dt
       _ -> DateTime.utc_now()
     end
-  end
-
-  defp generate_fallback_id do
-    "call_" <> (:crypto.strong_rand_bytes(12) |> Base.encode16(case: :lower))
   end
 end

@@ -39,13 +39,12 @@ defmodule Nex.Agent.InboundWorkerTest do
 
     config = Config.default() |> Config.set(:provider, "ollama")
 
-    {:ok, _} =
-      InboundWorker.start_link(
-        config: config,
-        agent_start_fun: start_fun,
-        agent_prompt_fun: prompt_fun,
-        agent_abort_fun: abort_fun
-      )
+    assert_start_worker(
+      config: config,
+      agent_start_fun: start_fun,
+      agent_prompt_fun: prompt_fun,
+      agent_abort_fun: abort_fun
+    )
 
     Bus.subscribe(:telegram_outbound)
 
@@ -91,13 +90,12 @@ defmodule Nex.Agent.InboundWorkerTest do
 
     config = Config.default() |> Config.set(:provider, "ollama")
 
-    {:ok, _} =
-      InboundWorker.start_link(
-        config: config,
-        agent_start_fun: start_fun,
-        agent_prompt_fun: prompt_fun,
-        agent_abort_fun: abort_fun
-      )
+    assert_start_worker(
+      config: config,
+      agent_start_fun: start_fun,
+      agent_prompt_fun: prompt_fun,
+      agent_abort_fun: abort_fun
+    )
 
     Bus.subscribe(:telegram_outbound)
 
@@ -134,6 +132,13 @@ defmodule Nex.Agent.InboundWorkerTest do
         catch
           :exit, _ -> :ok
         end
+    end
+  end
+
+  defp assert_start_worker(opts) do
+    case InboundWorker.start_link(opts) do
+      {:ok, pid} -> pid
+      {:error, {:already_started, pid}} -> pid
     end
   end
 end

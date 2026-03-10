@@ -1,6 +1,6 @@
 defmodule Nex.Agent.InfrastructureSupervisor do
   @moduledoc """
-  Supervisor for infrastructure services: Bus, Tool.Registry, Memory.Index, Cron, Heartbeat.
+  Supervisor for infrastructure services: Bus, Tool.Registry, MCP, Cron, Heartbeat.
 
   All children are independent (:one_for_one) — one crashing does not affect others.
   """
@@ -16,7 +16,6 @@ defmodule Nex.Agent.InfrastructureSupervisor do
     children = [
       Nex.Agent.Bus,
       Nex.Agent.Tool.Registry,
-      Nex.Agent.Memory.Index,
       Nex.Agent.MCP.ServerManager,
       Nex.Agent.Cron,
       Nex.Agent.Heartbeat

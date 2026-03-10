@@ -24,8 +24,7 @@ defmodule Nex.Agent.Tool.Registry do
     Nex.Agent.Tool.SkillInstall,
     Nex.Agent.Tool.Evolve,
     Nex.Agent.Tool.Reflect,
-    Nex.Agent.Tool.Cron,
-    Nex.Agent.Tool.MemorySearch
+    Nex.Agent.Tool.Cron
   ]
 
   # Client API
@@ -291,7 +290,7 @@ defmodule Nex.Agent.Tool.Registry do
   defp normalize_definition(%{"function" => inner}) when is_map(inner), do: inner
   defp normalize_definition(def_map), do: def_map
 
-  @cron_tools ~w(bash read message memory_search web_search web_fetch)
+  @cron_tools ~w(bash read message web_search web_fetch)
 
   defp filter_tools(tools, :all), do: tools
 

@@ -390,7 +390,6 @@ defmodule Nex.Agent.Onboarding do
     - **web_fetch** - Fetch content from URLs
     - **spawn_task** - Run tasks in parallel
     - **cron** - Schedule tasks
-    - **memory_search** - Search long-term memory
 
     ### Extended Skills (User-installed)
 

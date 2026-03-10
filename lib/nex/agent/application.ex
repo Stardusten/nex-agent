@@ -13,7 +13,6 @@ defmodule Nex.Agent.Application do
       ├── InfrastructureSupervisor (:one_for_one)
       │   ├── Bus
       │   ├── Tool.Registry
-      │   ├── Memory.Index
       │   ├── Cron
       │   └── Heartbeat
       ├── WorkerSupervisor (:one_for_one)

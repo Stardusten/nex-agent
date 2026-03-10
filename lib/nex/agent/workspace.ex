@@ -50,7 +50,6 @@ defmodule Nex.Agent.Workspace do
     - **web_fetch** - Fetch content from URLs
     - **spawn_task** - Run tasks in parallel
     - **cron** - Schedule tasks
-    - **memory_search** - Search long-term memory
     - **skill_search** - Search for skills on skills.sh
     - **skill_install** - Install skills from skills.sh
     - **skill_create** - Create new skills
@@ -157,8 +156,8 @@ defmodule Nex.Agent.Workspace do
 
     ## memory — Long-term Memory
 
-    - Use `memory_save` to store important facts
-    - Use `memory_recall` to retrieve stored information
+    - Important facts should be persisted in `memory/MEMORY.md`
+    - Conversation summaries should be written to `memory/HISTORY.md`
     """,
     "MEMORY.md" => """
     # Long-term Memory

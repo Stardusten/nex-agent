@@ -23,6 +23,11 @@ defmodule Nex.Agent.GatewayTest do
     previous = Application.get_env(:nex_agent, :config_path)
     Application.put_env(:nex_agent, :config_path, config_path)
 
+    ensure_started(Nex.Agent.Bus, fn -> Nex.Agent.Bus.start_link() end)
+    ensure_started(Nex.Agent.Cron, fn -> Nex.Agent.Cron.start_link() end)
+    ensure_started(Nex.Agent.Heartbeat, fn -> Nex.Agent.Heartbeat.start_link() end)
+    ensure_started(Nex.Agent.InboundWorker, fn -> Nex.Agent.InboundWorker.start_link() end)
+
     # Ensure Gateway is running (may have been stopped by prior test)
     ensure_started(Nex.Agent.Gateway, fn -> Gateway.start_link() end)
 

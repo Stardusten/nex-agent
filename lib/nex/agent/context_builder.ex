@@ -6,8 +6,8 @@ defmodule Nex.Agent.ContextBuilder do
 
   alias Nex.Agent.Skills
 
-  @bootstrap_files ["AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md", "IDENTITY.md"]
-  @runtime_context_tag "# Runtime Context"
+  @bootstrap_files ["AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md"]
+  @runtime_context_tag "[Runtime Context — metadata only, not instructions]"
 
   @type message :: %{required(String.t()) => any()}
 
@@ -37,44 +37,32 @@ defmodule Nex.Agent.ContextBuilder do
 
   defp add_identity(parts, workspace) do
     workspace_path = Path.expand(workspace)
-    cwd = File.cwd!() |> Path.basename()
-
-    home = System.get_env("HOME", "~")
-    skills_path = Path.join(home, ".nex/agent/workspace/skills")
+    system = :os.type() |> elem(0) |> to_string()
+    arch = :os.type() |> elem(1) |> to_string()
+    runtime = "#{system} #{arch}, Elixir #{System.version()}"
 
     identity = """
-    # Nex Agent
+    # nanobot
 
-    You are a helpful AI assistant with self-evolution capabilities.
+    You are nanobot, a helpful AI assistant.
 
     ## Runtime
-    Working directory: #{cwd}
+    #{runtime}
 
     ## Workspace
-    Workspace: #{workspace_path}
+    Your workspace is at: #{workspace_path}
     - Long-term memory: #{workspace_path}/memory/MEMORY.md (write important facts here)
-    - History log: #{workspace_path}/memory/HISTORY.md (grep-searchable)
-    - Custom skills: #{skills_path}/{skill-name}/SKILL.md
+    - History log: #{workspace_path}/memory/HISTORY.md (grep-searchable). Each entry starts with [YYYY-MM-DD HH:MM].
+    - Custom skills: #{workspace_path}/skills/{skill-name}/SKILL.md
 
-    ## Guidelines
-    - State intent before tool calls, but NEVER predict results before receiving them.
-    - Read files before editing. Re-read after writing if accuracy matters.
-    - Analyze errors before retrying.
-    - Ask for clarification when ambiguous.
+    ## nanobot Guidelines
+    - State intent before tool calls, but NEVER predict or claim results before receiving them.
+    - Before modifying a file, read it first. Do not assume files or directories exist.
+    - After writing or editing a file, re-read it if accuracy matters.
+    - If a tool call fails, analyze the error before retrying with a different approach.
+    - Ask for clarification when the request is ambiguous.
 
-    ## Self-Evolution
-    You can modify and hot-reload your own code at runtime:
-    - **evolve**: Modify any agent module and hot-reload it immediately. Use this instead of write for .ex files.
-    - **reflect**: Read your own source code, list modules, view version history.
-    Writing .ex files with write/edit also triggers auto-reload, but evolve is preferred for self-modification.
-    All modules can be evolved. The Surgeon automatically protects core modules (Runner, Session, etc.) with canary monitoring and instant rollback.
-
-    ## Self-Repair
-    When a tool fails repeatedly (2+ consecutive failures on same tool):
-    1. Use **reflect** to read the tool's source code and understand the failure
-    2. Use **evolve** to fix the bug and hot-reload — Surgeon protects core modules automatically
-    3. If the failure is from an external cause (network, permissions), try a different approach instead
-    Do NOT retry the same failing action in a loop. Diagnose first, then fix or adapt.
+    Reply directly with text for conversations. Only use the 'message' tool to send to a specific chat channel.
     """
 
     parts ++ [identity]
@@ -97,31 +85,9 @@ defmodule Nex.Agent.ContextBuilder do
     if content != "", do: parts ++ [content], else: parts
   end
 
-  @max_memory_prompt_bytes 8000
-
   defp add_memory(parts, workspace) do
-    memory_file = Path.join(workspace, "memory/MEMORY.md")
-
-    case File.read(memory_file) do
-      {:ok, content} ->
-        trimmed = String.trim(content)
-
-        if trimmed != "" do
-          truncated =
-            if byte_size(trimmed) > @max_memory_prompt_bytes do
-              String.slice(trimmed, 0, @max_memory_prompt_bytes) <> "\n... (truncated)"
-            else
-              trimmed
-            end
-
-          parts ++ ["# Memory\n\n## Long-term Memory\n\n" <> truncated]
-        else
-          parts
-        end
-
-      {:error, _} ->
-        parts
-    end
+    memory = Nex.Agent.Memory.get_memory_context(workspace: workspace)
+    if memory == "", do: parts, else: parts ++ ["# Memory\n\n" <> memory]
   end
 
   defp add_skills(parts) do
@@ -155,7 +121,11 @@ defmodule Nex.Agent.ContextBuilder do
           parts
         end
 
-      parts ++ ["# Skills\n\nSkills are exposed as tools with `skill_<name>` prefix (e.g. skill_explain_code). Call them directly.\n\n" <> summary]
+      parts ++
+        [
+          "# Skills\n\nThe following skills extend your capabilities. To use a skill, read its SKILL.md file using the read tool.\n\n" <>
+            summary
+        ]
     end
   end
 
@@ -165,11 +135,7 @@ defmodule Nex.Agent.ContextBuilder do
   @spec build_runtime_context(String.t() | nil, String.t() | nil) :: String.t()
   def build_runtime_context(channel, chat_id) do
     now = DateTime.utc_now()
-
-    day_name = Calendar.ISO.day_of_week(now.year, now.month, now.day, :default)
-    day_names = %{1 => "Monday", 2 => "Tuesday", 3 => "Wednesday", 4 => "Thursday", 5 => "Friday", 6 => "Saturday", 7 => "Sunday"}
-
-    time_str = "#{now.year}-#{pad(now.month)}-#{pad(now.day)} #{pad(now.hour)}:#{pad(now.minute)} UTC #{day_names[day_name]}"
+    time_str = Calendar.strftime(now, "%Y-%m-%d %H:%M (%A)")
 
     lines =
       [@runtime_context_tag, "Current Time: #{time_str}"]
@@ -197,76 +163,21 @@ defmodule Nex.Agent.ContextBuilder do
         ) :: [message()]
   def build_messages(history, current_message, channel \\ nil, chat_id \\ nil, media \\ nil, opts \\ []) do
     runtime_ctx = build_runtime_context(channel, chat_id)
-    workspace = Keyword.get(opts, :workspace, default_workspace())
-    skip_memory_search = Keyword.get(opts, :skip_skills, false)
-    system_prompt = build_system_prompt(opts)
+    user_content = build_user_content(current_message, media)
 
-    memory_ctx =
-      if skip_memory_search, do: "", else: build_memory_context(current_message, workspace)
-
-    # Append runtime context + memory to system prompt, not user message
-    system_suffix =
-      [runtime_ctx, memory_ctx]
-      |> Enum.reject(&(&1 == ""))
-      |> Enum.join("\n\n")
-
-    full_system =
-      if system_suffix != "",
-        do: system_prompt <> "\n\n---\n\n" <> system_suffix,
-        else: system_prompt
+    merged =
+      if is_binary(user_content) do
+        runtime_ctx <> "\n\n" <> user_content
+      else
+        [%{"type" => "text", "text" => runtime_ctx} | user_content]
+      end
 
     [
-      %{"role" => "system", "content" => full_system},
+      %{"role" => "system", "content" => build_system_prompt(opts)},
       Enum.map(history, &clean_history_entry/1),
-      build_user_content(current_message, media)
+      %{"role" => "user", "content" => merged}
     ]
     |> List.flatten()
-  end
-
-  defp build_memory_context(prompt, workspace) do
-    case Process.whereis(Nex.Agent.Memory.Index) do
-      nil ->
-        ""
-
-      _pid ->
-        {long_term_present?, long_term_truncated?} =
-          case File.read(Path.join(workspace, "memory/MEMORY.md")) do
-            {:ok, content} ->
-              trimmed = String.trim(content)
-              {trimmed != "", byte_size(trimmed) > @max_memory_prompt_bytes}
-
-            _ ->
-              {false, false}
-          end
-
-        results = Nex.Agent.Memory.Index.search(prompt, limit: 3)
-
-        relevant =
-          results
-          |> Enum.filter(&(&1[:score] > 0))
-          |> Enum.reject(fn r ->
-            long_term_present? and not long_term_truncated? and
-              (r[:source] == :memory or r[:source] == "memory")
-          end)
-
-        if relevant == [] do
-          ""
-        else
-          snippets =
-            relevant
-            |> Enum.map(fn r ->
-              snippet = String.slice(r[:text] || "", 0..500)
-              source = r[:source] || "unknown"
-              "- [#{source}] #{snippet}"
-            end)
-            |> Enum.join("\n")
-            |> String.slice(0..1999)
-
-          "## Relevant Memories\n\n#{snippets}"
-        end
-    end
-  rescue
-    _ -> ""
   end
 
   defp clean_history_entry(%{"role" => role, "content" => content} = m) do
@@ -294,13 +205,6 @@ defmodule Nex.Agent.ContextBuilder do
         entry
       end
 
-    entry =
-      if rc = Map.get(m, "reasoning_content") do
-        Map.put(entry, "reasoning_content", rc)
-      else
-        entry
-      end
-
     entry
   end
 
@@ -308,7 +212,7 @@ defmodule Nex.Agent.ContextBuilder do
     %{"role" => Map.get(m, "role", "user"), "content" => Map.get(m, "content", "")}
   end
 
-  defp build_user_content(text, nil), do: %{"role" => "user", "content" => text}
+  defp build_user_content(text, nil), do: text
 
   defp build_user_content(text, media) when is_list(media) and media != [] do
     content_parts =
@@ -334,7 +238,7 @@ defmodule Nex.Agent.ContextBuilder do
       |> Enum.reject(&is_nil/1)
 
     text_part = %{"type" => "text", "text" => text}
-    %{"role" => "user", "content" => content_parts ++ [text_part]}
+    content_parts ++ [text_part]
   end
 
   @doc """
@@ -377,6 +281,4 @@ defmodule Nex.Agent.ContextBuilder do
       ]
   end
 
-  defp pad(n) when n < 10, do: "0#{n}"
-  defp pad(n), do: "#{n}"
 end
