@@ -14,7 +14,7 @@ defmodule Nex.Agent.MemoryAuditTest do
     original_exists = File.exists?(memory_dir())
 
     if original_exists do
-      {:ok, _files} = File.cp_r(memory_dir(), backup_dir)
+      copy_dir_contents!(memory_dir(), backup_dir)
     end
 
     reset_memory_dir()
@@ -23,7 +23,7 @@ defmodule Nex.Agent.MemoryAuditTest do
       File.rm_rf(memory_dir())
 
       if original_exists do
-        {:ok, _files} = File.cp_r(backup_dir, memory_dir())
+        copy_dir_contents!(backup_dir, memory_dir())
       else
         File.mkdir_p!(memory_dir())
       end
@@ -267,6 +267,20 @@ defmodule Nex.Agent.MemoryAuditTest do
 
   defp memory_dir do
     Path.join(Memory.workspace_path(), "memory")
+  end
+
+  defp copy_dir_contents!(source, destination) do
+    if File.dir?(source) do
+      File.mkdir_p!(destination)
+
+      source
+      |> File.ls!()
+      |> Enum.each(fn name ->
+        {:ok, _files} = File.cp_r(Path.join(source, name), Path.join(destination, name))
+      end)
+    else
+      :ok
+    end
   end
 
   defp sample_messages do
