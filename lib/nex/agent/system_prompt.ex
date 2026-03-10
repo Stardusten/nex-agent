@@ -170,16 +170,15 @@ defmodule Nex.Agent.SystemPrompt do
     else
       lines =
         Enum.map(skills, fn s ->
-          type = s[:type] || s["type"] || "markdown"
           name = s[:name] || s["name"] || ""
           desc = s[:description] || s["description"] || ""
-          "- #{name} (#{type}): #{desc}"
+          "- #{name}: #{desc}"
         end)
 
       summary = """
       # Skills
 
-      The following skills extend your capabilities. Use skill_execute to run them, or read the SKILL.md file for details.
+      The following Markdown skills extend your capabilities. Call them with the `skill_<name>` tool or read the SKILL.md file for details.
 
       #{Enum.join(lines, "\n")}
       """

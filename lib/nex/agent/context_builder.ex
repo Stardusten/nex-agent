@@ -155,7 +155,7 @@ defmodule Nex.Agent.ContextBuilder do
           parts
         end
 
-      parts ++ ["# Skills\n\nSkills are exposed as tools with `skill_<name>` prefix (e.g. skill_explain_code). Call them directly.\n\n" <> summary]
+      parts ++ ["# Skills\n\nSkills are Markdown workflow instructions exposed as tools with `skill_<name>` prefix (e.g. skill_explain_code).\n\n" <> summary]
     end
   end
 
