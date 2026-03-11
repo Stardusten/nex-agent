@@ -1,11 +1,15 @@
 defmodule Nex.Agent.Tool.Edit do
   @behaviour Nex.Agent.Tool.Behaviour
-  require Logger
 
+  alias Nex.Agent.HotReload
   alias Nex.Agent.Security
 
   def name, do: "edit"
-  def description, do: "Make surgical edits to files by search and replace. Editing .ex files auto-triggers hot-reload."
+
+  def description,
+    do:
+      "Make surgical edits to files by search and replace. Editing .ex files auto-triggers hot-reload."
+
   def category, do: :base
 
   def definition do
@@ -39,13 +43,8 @@ defmodule Nex.Agent.Tool.Edit do
                 case File.write(expanded, new_content) do
                   :ok ->
                     if String.ends_with?(expanded, ".ex") do
-                      case auto_reload(expanded, new_content) do
-                        {:ok, module_name} ->
-                          {:ok, "File edited and module #{module_name} hot-reloaded: #{expanded}"}
-
-                        {:error, reason} ->
-                          {:ok, "File edited: #{expanded}, but hot-reload failed: #{reason}. Restart needed."}
-                      end
+                      hot_reload = auto_reload(expanded, new_content)
+                      {:ok, %{path: expanded, hot_reload: hot_reload}}
                     else
                       {:ok, "File edited successfully: #{expanded}"}
                     end
@@ -67,31 +66,6 @@ defmodule Nex.Agent.Tool.Edit do
   def execute(_args, _ctx), do: {:error, "path, search, and replace are required"}
 
   defp auto_reload(path, content) do
-    case Regex.run(~r/defmodule\s+([\w.]+)\s+do/, content) do
-      [_, module_str] ->
-        try do
-          quoted = Code.string_to_quoted!(content)
-          [{mod, binary}] = Code.compile_quoted(quoted)
-          :code.purge(mod)
-          {:module, _} = :code.load_binary(mod, ~c"#{path}", binary)
-
-          if Process.whereis(Nex.Agent.Tool.Registry) do
-            Code.ensure_loaded(mod)
-
-            if function_exported?(mod, :name, 0) and function_exported?(mod, :execute, 2) do
-              Nex.Agent.Tool.Registry.hot_swap(mod.name(), mod)
-              Logger.info("[Edit] Hot-swapped tool #{mod.name()} in Registry")
-            end
-          end
-
-          {:ok, module_str}
-        rescue
-          e ->
-            {:error, Exception.message(e)}
-        end
-
-      _ ->
-        {:error, "Could not detect module name in file"}
-    end
+    HotReload.reload(path, content)
   end
 end

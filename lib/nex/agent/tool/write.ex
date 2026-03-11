@@ -1,11 +1,14 @@
 defmodule Nex.Agent.Tool.Write do
   @behaviour Nex.Agent.Tool.Behaviour
-  require Logger
 
+  alias Nex.Agent.HotReload
   alias Nex.Agent.Security
 
   def name, do: "write"
-  def description, do: "Write content to a file. Writing .ex files auto-triggers compilation and hot-reload."
+
+  def description,
+    do: "Write content to a file. Writing .ex files auto-triggers compilation and hot-reload."
+
   def category, do: :base
 
   def definition do
@@ -32,13 +35,8 @@ defmodule Nex.Agent.Tool.Write do
         case File.write(expanded, content) do
           :ok ->
             if String.ends_with?(expanded, ".ex") do
-              case auto_reload(expanded, content) do
-                {:ok, module_name} ->
-                  {:ok, "File written and module #{module_name} hot-reloaded: #{expanded}"}
-
-                {:error, reason} ->
-                  {:ok, "File written to #{expanded}, but hot-reload failed: #{reason}. Restart needed."}
-              end
+              hot_reload = auto_reload(expanded, content)
+              {:ok, %{path: expanded, hot_reload: hot_reload}}
             else
               {:ok, "File written successfully: #{expanded}"}
             end
@@ -55,33 +53,6 @@ defmodule Nex.Agent.Tool.Write do
   def execute(_args, _ctx), do: {:error, "path and content are required"}
 
   defp auto_reload(path, content) do
-    # Try to extract the module name from defmodule declaration
-    case Regex.run(~r/defmodule\s+([\w.]+)\s+do/, content) do
-      [_, module_str] ->
-        try do
-          quoted = Code.string_to_quoted!(content)
-          [{mod, binary}] = Code.compile_quoted(quoted)
-          :code.purge(mod)
-          {:module, _} = :code.load_binary(mod, ~c"#{path}", binary)
-
-          # Hot-swap in Registry if it's a Tool module
-          if Process.whereis(Nex.Agent.Tool.Registry) do
-            Code.ensure_loaded(mod)
-
-            if function_exported?(mod, :name, 0) and function_exported?(mod, :execute, 2) do
-              Nex.Agent.Tool.Registry.hot_swap(mod.name(), mod)
-              Logger.info("[Write] Hot-swapped tool #{mod.name()} in Registry")
-            end
-          end
-
-          {:ok, module_str}
-        rescue
-          e ->
-            {:error, Exception.message(e)}
-        end
-
-      _ ->
-        {:error, "Could not detect module name in file"}
-    end
+    HotReload.reload(path, content)
   end
 end
