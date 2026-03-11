@@ -350,12 +350,12 @@ defmodule Nex.Agent.Channel.Discord do
          function_exported?(:websocket_client, :start_link, 4) do
       _pid =
         spawn_link(fn ->
-          case :websocket_client.start_link(
+          case :erlang.apply(:websocket_client, :start_link, [
                  String.to_charlist(@gateway_url),
                  __MODULE__.WsHandler,
                  [parent: parent],
                  []
-               ) do
+               ]) do
             {:ok, ws_pid} ->
               send(parent, {:ws_connected, ws_pid})
               ref = Process.monitor(ws_pid)

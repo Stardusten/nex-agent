@@ -23,19 +23,19 @@ defmodule Nex.Agent.Bus do
   @doc """
   Subscribe to a topic.
   """
-  @spec subscribe(term(), pid()) :: :ok
-  def subscribe(topic \\ :default, pid \\ nil) do
-    pid = pid || self()
-    GenServer.call(__MODULE__, {:subscribe, topic, pid})
+  @spec subscribe(term(), pid() | nil) :: :ok
+  def subscribe(topic \\ :default, pid \\ nil) when is_pid(pid) or is_nil(pid) do
+    target_pid = if is_pid(pid), do: pid, else: self()
+    GenServer.call(__MODULE__, {:subscribe, topic, target_pid})
   end
 
   @doc """
   Unsubscribe from a topic.
   """
-  @spec unsubscribe(term(), pid()) :: :ok
-  def unsubscribe(topic \\ :default, pid \\ nil) do
-    pid = pid || self()
-    GenServer.call(__MODULE__, {:unsubscribe, topic, pid})
+  @spec unsubscribe(term(), pid() | nil) :: :ok
+  def unsubscribe(topic \\ :default, pid \\ nil) when is_pid(pid) or is_nil(pid) do
+    target_pid = if is_pid(pid), do: pid, else: self()
+    GenServer.call(__MODULE__, {:unsubscribe, topic, target_pid})
   end
 
   @doc """

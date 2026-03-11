@@ -708,9 +708,8 @@ defmodule Nex.Agent.Runner do
     skill_name = String.replace_prefix(name, "skill_", "")
 
     case Skills.execute(skill_name, args["input"] || args[:input] || "", invoked_by: :model) do
-      {:ok, result} when is_binary(result) -> result
       {:ok, %{result: result}} -> to_string(result)
-      {:ok, result} -> inspect(result)
+      {:ok, result} -> if(is_binary(result), do: result, else: inspect(result))
       {:error, reason} -> "Error executing skill #{skill_name}: #{inspect(reason)}"
     end
   end

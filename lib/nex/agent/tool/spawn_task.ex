@@ -37,10 +37,8 @@ defmodule Nex.Agent.Tool.SpawnTask do
     ]
 
     if Process.whereis(Nex.Agent.Subagent) do
-      case Nex.Agent.Subagent.spawn_task(task_desc, spawn_opts) do
-        {:ok, task_id} -> {:ok, "Background task spawned: #{task_id} (#{label || "unlabeled"})"}
-        {:error, reason} -> {:error, "Error spawning task: #{inspect(reason)}"}
-      end
+      {:ok, task_id} = Nex.Agent.Subagent.spawn_task(task_desc, spawn_opts)
+      {:ok, "Background task spawned: #{task_id} (#{label || "unlabeled"})"}
     else
       {:error, "Subagent service is not running"}
     end

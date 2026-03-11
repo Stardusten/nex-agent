@@ -104,9 +104,9 @@ defmodule Nex.Agent.HotReload do
     }
   end
 
-  defp failure_reason(reason) when is_binary(reason) and byte_size(reason) > 0, do: reason
-  defp failure_reason(reason) when is_binary(reason), do: "Hot reload failed"
-  defp failure_reason(reason), do: inspect(reason)
+  defp failure_reason(reason) when is_binary(reason) do
+    if byte_size(reason) > 0, do: reason, else: "Hot reload failed"
+  end
 
   defp finalize_registry_swap(tool_name, module, operation) do
     swapped? = wait_for_registry_module(tool_name, module, @registry_poll_attempts)

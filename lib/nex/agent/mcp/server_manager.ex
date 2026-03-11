@@ -142,7 +142,7 @@ defmodule Nex.Agent.MCP.ServerManager do
   @doc """
   Start configured servers and register tools to registry.
   """
-  @spec start_and_register(Registry.t()) :: {:ok, [String.t()]} | {:error, String.t()}
+  @spec start_and_register(term()) :: {:ok, [String.t()]} | {:error, String.t()}
   def start_and_register(registry) do
     GenServer.call(@name, {:start_and_register, registry})
   end

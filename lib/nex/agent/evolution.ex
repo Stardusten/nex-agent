@@ -31,15 +31,15 @@ defmodule Nex.Agent.Evolution do
   """
   @spec upgrade_module(atom(), String.t(), keyword()) :: {:ok, map()} | {:error, String.t()}
   def upgrade_module(module, code, opts \\ []) do
-    validate = Keyword.get(opts, :validate, true)
+    _ = Keyword.get(opts, :validate, true)
 
     source_path = source_path(module)
 
-    with :ok <- maybe_validate_code(validate, code),
+    with :ok <- maybe_validate_code(code),
          :ok <- create_backup(module, source_path),
          :ok <- write_source(source_path, code),
          {:ok, hot_reload} <- compile_and_load(module, code),
-         :ok <- maybe_health_check(validate, module) do
+         :ok <- maybe_health_check(module) do
       version = save_version(module, code)
       Logger.info("[Evolution] Upgraded #{inspect(module)} -> version #{version.id}")
       {:ok, %{version: version, hot_reload: hot_reload}}
@@ -246,9 +246,7 @@ defmodule Nex.Agent.Evolution do
     end
   end
 
-  defp maybe_validate_code(false, _code), do: :ok
-
-  defp maybe_validate_code(true, code) do
+  defp maybe_validate_code(code) do
     case validate_code_with_timeout(code) do
       :ok -> :ok
       {:error, reason} -> {:error, "Validation failed: #{reason}"}
@@ -293,9 +291,7 @@ defmodule Nex.Agent.Evolution do
     end
   end
 
-  defp maybe_health_check(false, _module), do: :ok
-
-  defp maybe_health_check(true, module) do
+  defp maybe_health_check(module) do
     info = module.__info__(:functions)
 
     if is_list(info) do
@@ -369,7 +365,6 @@ defmodule Nex.Agent.Evolution do
     _ -> nil
   end
 
-  defp to_error({:error, reason}), do: to_error(reason)
   defp to_error(reason) when is_binary(reason), do: reason
   defp to_error(reason), do: inspect(reason)
 end

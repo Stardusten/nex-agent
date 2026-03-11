@@ -876,7 +876,7 @@ defmodule Nex.Agent.Channel.Feishu do
 
         case send_text(payload, chat_id, content, state) do
           {:ok, new_state} -> {:ok, new_state}
-          {:error, text_reason} -> {:error, text_reason, state}
+          {:error, text_reason, text_state} -> {:error, text_reason, text_state}
         end
     end
   end

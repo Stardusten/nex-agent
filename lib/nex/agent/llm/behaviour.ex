@@ -3,7 +3,9 @@ defmodule Nex.Agent.LLM.Behaviour do
   LLM provider behaviour
   """
 
-  @callback chat(messages :: [map()], options :: map()) :: {:ok, map()} | {:error, term()}
-  @callback stream(messages :: [map()], options :: map(), fun()) :: :ok | {:error, term()}
+  @callback chat(messages :: [map()], options :: map() | Keyword.t()) ::
+              {:ok, map()} | {:error, term()}
+  @callback stream(messages :: [map()], options :: map() | Keyword.t(), fun()) ::
+              :ok | {:error, term()}
   @callback tools() :: [map()]
 end

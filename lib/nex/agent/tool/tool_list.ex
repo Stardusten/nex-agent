@@ -1,5 +1,5 @@
 defmodule Nex.Agent.Tool.ToolList do
-  @moduledoc false
+  @moduledoc "List built-in and custom tools, and inspect details for one tool."
 
   @behaviour Nex.Agent.Tool.Behaviour
 

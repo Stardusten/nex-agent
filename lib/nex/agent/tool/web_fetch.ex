@@ -97,9 +97,7 @@ defmodule Nex.Agent.Tool.WebFetch do
   end
 
   defp strip_tags(html) do
-    html
-    |> Regex.replace(~r/<[\s\S]*?>/, " ")
-    |> String.replace(Regex.replace(~r/<\/[\s\S]*?>/, html, " "), " ")
+    Regex.replace(~r/<[\s\S]*?>/, html, " ")
   end
 
   defp decode_entities(html) do

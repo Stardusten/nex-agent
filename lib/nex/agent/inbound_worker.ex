@@ -198,60 +198,53 @@ defmodule Nex.Agent.InboundWorker do
   defp dispatch_async(state, key, content, payload) do
     {channel, chat_id} = parse_session_key(key)
 
-    case ensure_agent(state, key) do
-      {:ok, agent, state} ->
-        parent = self()
-        from_cron = get_in(payload, [:metadata, "_from_cron"]) == true
-        on_progress = if from_cron, do: nil, else: build_progress_callback(payload)
+    {:ok, agent, state} = ensure_agent(state, key)
+    parent = self()
+    from_cron = get_in(payload, [:metadata, "_from_cron"]) == true
+    on_progress = if from_cron, do: nil, else: build_progress_callback(payload)
 
-        cron_opts =
-          if from_cron,
-            do: [
-              history_limit: 0,
-              tools_filter: :cron,
-              skip_consolidation: true,
-              max_iterations: 3,
-              skip_skills: true
-            ],
-            else: []
+    cron_opts =
+      if from_cron,
+        do: [
+          history_limit: 0,
+          tools_filter: :cron,
+          skip_consolidation: true,
+          max_iterations: 3,
+          skip_skills: true
+        ],
+        else: []
 
-        {:ok, pid} =
-          Task.Supervisor.start_child(Nex.Agent.TaskSupervisor, fn ->
-            try do
-              result =
-                state.agent_prompt_fun.(
-                  agent,
-                  content,
-                  [channel: channel, chat_id: chat_id, on_progress: on_progress] ++ cron_opts
-                )
+    {:ok, pid} =
+      Task.Supervisor.start_child(Nex.Agent.TaskSupervisor, fn ->
+        try do
+          result =
+            state.agent_prompt_fun.(
+              agent,
+              content,
+              [channel: channel, chat_id: chat_id, on_progress: on_progress] ++ cron_opts
+            )
 
-              send(parent, {:async_result, key, result, payload})
-            rescue
-              e ->
-                send(parent, {:async_result, key, {:error, Exception.message(e)}, payload})
-            catch
-              kind, reason ->
-                send(
-                  parent,
-                  {:async_result, key, {:error, "#{kind}: #{inspect(reason)}"}, payload}
-                )
-            end
-          end)
+          send(parent, {:async_result, key, result, payload})
+        rescue
+          e ->
+            send(parent, {:async_result, key, {:error, Exception.message(e)}, payload})
+        catch
+          kind, reason ->
+            send(
+              parent,
+              {:async_result, key, {:error, "#{kind}: #{inspect(reason)}"}, payload}
+            )
+        end
+      end)
 
-        Process.monitor(pid)
-        Process.send_after(self(), {:check_timeout, key, pid}, 600_000)
+    Process.monitor(pid)
+    Process.send_after(self(), {:check_timeout, key, pid}, 600_000)
 
-        %{
-          state
-          | active_tasks: Map.put(state.active_tasks, key, pid),
-            agent_last_active: Map.put(state.agent_last_active, key, System.system_time(:second))
-        }
-
-      other ->
-        Logger.error("[InboundWorker] Failed to ensure agent for #{key}: #{inspect(other)}")
-        publish_outbound(payload, "Error: failed to initialize agent")
-        state
-    end
+    %{
+      state
+      | active_tasks: Map.put(state.active_tasks, key, pid),
+        agent_last_active: Map.put(state.agent_last_active, key, System.system_time(:second))
+    }
   end
 
   defp build_progress_callback(payload) do
@@ -296,10 +289,8 @@ defmodule Nex.Agent.InboundWorker do
 
     subagent_count =
       if Process.whereis(Nex.Agent.Subagent) do
-        case Nex.Agent.Subagent.cancel_by_session(key) do
-          {:ok, n} -> n
-          _ -> 0
-        end
+        {:ok, n} = Nex.Agent.Subagent.cancel_by_session(key)
+        n
       else
         0
       end
@@ -459,22 +450,7 @@ defmodule Nex.Agent.InboundWorker do
   end
 
   defp parse_session_key(key) do
-    # Handle various input formats - could be string, list, or other
-    key_str =
-      cond do
-        is_binary(key) ->
-          key
-
-        is_list(key) ->
-          # If it's a list, try to join or take first element
-          if length(key) == 1, do: hd(key), else: Enum.join(key, ":")
-
-        is_integer(key) ->
-          to_string(key)
-
-        true ->
-          inspect(key)
-      end
+    key_str = to_string(key)
 
     case String.split(key_str, ":", parts: 2) do
       [channel, chat_id] -> {channel, chat_id}
