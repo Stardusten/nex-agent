@@ -253,6 +253,7 @@ defmodule Nex.Agent.Security do
     [
       File.cwd!(),
       Path.join(System.get_env("HOME", "~"), ".nex/agent"),
+      Path.join(System.get_env("HOME", "~"), "github"),
       "/tmp"
     ]
   end
