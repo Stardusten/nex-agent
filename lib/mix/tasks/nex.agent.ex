@@ -107,7 +107,7 @@ defmodule Mix.Tasks.Nex.Agent do
   defp run_onboard do
     Mix.shell().info("Initializing Nex Agent...")
     Nex.Agent.Onboarding.ensure_initialized()
-    Mix.shell().info("Workspace: #{Nex.Agent.Workspace.workspace_path()}")
+    Mix.shell().info("Workspace: #{Nex.Agent.Memory.workspace_path()}")
     Mix.shell().info("Config:    #{Nex.Agent.Config.config_path()}")
     Mix.shell().info("")
     Mix.shell().info("Next steps:")
