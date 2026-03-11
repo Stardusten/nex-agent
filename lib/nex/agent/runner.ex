@@ -62,11 +62,19 @@ defmodule Nex.Agent.Runner do
       Logger.info("[Runner] Triggering async memory consolidation: #{unconsolidated} messages")
 
       Task.Supervisor.start_child(Nex.Agent.TaskSupervisor, fn ->
-        Memory.consolidate(session, provider, model,
-          api_key: api_key,
-          base_url: base_url,
-          memory_window: @memory_window
-        )
+        case Memory.consolidate(session, provider, model,
+               api_key: api_key,
+               base_url: base_url,
+               memory_window: @memory_window
+             ) do
+          {:ok, updated_session} ->
+            Logger.info(
+              "[Runner] Async memory consolidation saved last_consolidated=#{updated_session.last_consolidated}"
+            )
+
+          {:error, reason} ->
+            Logger.warning("[Runner] Async memory consolidation failed: #{inspect(reason)}")
+        end
       end)
 
       session

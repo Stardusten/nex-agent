@@ -108,11 +108,45 @@ defmodule Nex.Agent.SessionManager do
 
   @impl true
   def handle_cast({:save, session}, %{cache: cache} = state) do
-    Session.save(session)
-    {:noreply, %{state | cache: Map.put(cache, session.key, session)}}
+    merged_session =
+      cache
+      |> Map.get(session.key, Session.load(session.key))
+      |> merge_session(session)
+
+    Session.save(merged_session)
+    {:noreply, %{state | cache: Map.put(cache, merged_session.key, merged_session)}}
   end
 
   def handle_cast({:invalidate, key}, %{cache: cache} = state) do
     {:noreply, %{state | cache: Map.delete(cache, key)}}
+  end
+
+  defp merge_session(nil, %Session{} = incoming), do: incoming
+
+  defp merge_session(%Session{} = existing, %Session{} = incoming) do
+    messages =
+      cond do
+        length(incoming.messages) >= length(existing.messages) ->
+          incoming.messages
+
+        true ->
+          existing.messages
+      end
+
+    updated_at =
+      case DateTime.compare(existing.updated_at, incoming.updated_at) do
+        :gt -> existing.updated_at
+        _ -> incoming.updated_at
+      end
+
+    %Session{
+      incoming
+      | created_at: existing.created_at,
+        updated_at: updated_at,
+        metadata: Map.merge(existing.metadata || %{}, incoming.metadata || %{}),
+        messages: messages,
+        last_consolidated:
+          min(max(existing.last_consolidated, incoming.last_consolidated), length(messages))
+    }
   end
 end
