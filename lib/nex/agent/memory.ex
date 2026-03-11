@@ -281,7 +281,6 @@ defmodule Nex.Agent.Memory do
       "Memory consolidation done: #{length(session.messages)} messages, last_consolidated=#{updated_session.last_consolidated}"
     )
 
-    Nex.Agent.SessionManager.save(updated_session)
     {:ok, updated_session}
   end
 

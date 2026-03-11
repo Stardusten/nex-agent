@@ -8,6 +8,7 @@ defmodule Nex.Agent.Runner do
     ContextBuilder,
     Memory,
     Session,
+    SessionManager,
     Skills
   }
 
@@ -55,31 +56,37 @@ defmodule Nex.Agent.Runner do
   end
 
   defp maybe_consolidate_memory(session, provider, model, api_key, base_url) do
-    messages = session.messages
-    unconsolidated = length(messages) - session.last_consolidated
+    case SessionManager.start_consolidation(session.key, @memory_window) do
+      {:ok, consolidation_session, unconsolidated} ->
+        Logger.info("[Runner] Triggering async memory consolidation: #{unconsolidated} messages")
 
-    if unconsolidated >= @memory_window do
-      Logger.info("[Runner] Triggering async memory consolidation: #{unconsolidated} messages")
+        Task.Supervisor.start_child(Nex.Agent.TaskSupervisor, fn ->
+          case Memory.consolidate(consolidation_session, provider, model,
+                 api_key: api_key,
+                 base_url: base_url,
+                 memory_window: @memory_window
+               ) do
+            {:ok, updated_session} ->
+              SessionManager.finish_consolidation(updated_session)
 
-      Task.Supervisor.start_child(Nex.Agent.TaskSupervisor, fn ->
-        case Memory.consolidate(session, provider, model,
-               api_key: api_key,
-               base_url: base_url,
-               memory_window: @memory_window
-             ) do
-          {:ok, updated_session} ->
-            Logger.info(
-              "[Runner] Async memory consolidation saved last_consolidated=#{updated_session.last_consolidated}"
-            )
+              Logger.info(
+                "[Runner] Async memory consolidation saved last_consolidated=#{updated_session.last_consolidated}"
+              )
 
-          {:error, reason} ->
-            Logger.warning("[Runner] Async memory consolidation failed: #{inspect(reason)}")
-        end
-      end)
+            {:error, reason} ->
+              SessionManager.cancel_consolidation(consolidation_session.key)
+              Logger.warning("[Runner] Async memory consolidation failed: #{inspect(reason)}")
+          end
+        end)
 
-      session
-    else
-      session
+        consolidation_session
+
+      :already_running ->
+        Logger.debug("[Runner] Skipping memory consolidation: already in progress")
+        session
+
+      :below_threshold ->
+        session
     end
   end
 

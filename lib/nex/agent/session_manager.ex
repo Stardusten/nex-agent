@@ -8,6 +8,7 @@ defmodule Nex.Agent.SessionManager do
   alias Nex.Agent.Session
 
   @sessions_dir Path.join(System.get_env("HOME", "~"), ".nex/agent/workspace/sessions")
+  @consolidation_flag "consolidation_in_progress"
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, :ok, name: Keyword.get(opts, :name, __MODULE__))
@@ -52,6 +53,31 @@ defmodule Nex.Agent.SessionManager do
   end
 
   @doc """
+  Atomically mark a session as running memory consolidation.
+  """
+  @spec start_consolidation(String.t(), non_neg_integer()) ::
+          {:ok, Session.t(), non_neg_integer()} | :already_running | :below_threshold
+  def start_consolidation(key, min_unconsolidated) do
+    GenServer.call(__MODULE__, {:start_consolidation, key, min_unconsolidated})
+  end
+
+  @doc """
+  Clear the memory consolidation in-progress flag and persist the session.
+  """
+  @spec finish_consolidation(Session.t()) :: :ok
+  def finish_consolidation(%Session{} = session) do
+    GenServer.cast(__MODULE__, {:finish_consolidation, session})
+  end
+
+  @doc """
+  Clear the memory consolidation in-progress flag without changing session content.
+  """
+  @spec cancel_consolidation(String.t()) :: :ok
+  def cancel_consolidation(key) do
+    GenServer.cast(__MODULE__, {:cancel_consolidation, key})
+  end
+
+  @doc """
   List all sessions.
   """
   @spec list() :: [map()]
@@ -78,6 +104,25 @@ defmodule Nex.Agent.SessionManager do
 
   def handle_call({:get, key}, _from, %{cache: cache} = state) do
     {:reply, Map.get(cache, key), state}
+  end
+
+  def handle_call({:start_consolidation, key, min_unconsolidated}, _from, %{cache: cache} = state) do
+    session = load_session(cache, key)
+    unconsolidated = length(session.messages) - session.last_consolidated
+
+    cond do
+      consolidation_in_progress?(session) ->
+        {:reply, :already_running, %{state | cache: Map.put(cache, key, session)}}
+
+      unconsolidated < min_unconsolidated ->
+        {:reply, :below_threshold, %{state | cache: Map.put(cache, key, session)}}
+
+      true ->
+        marked_session = put_consolidation_flag(session, true)
+        Session.save(marked_session)
+        {:reply, {:ok, marked_session, unconsolidated},
+         %{state | cache: Map.put(cache, key, marked_session)}}
+    end
   end
 
   def handle_call({:list}, _from, state) do
@@ -119,6 +164,49 @@ defmodule Nex.Agent.SessionManager do
 
   def handle_cast({:invalidate, key}, %{cache: cache} = state) do
     {:noreply, %{state | cache: Map.delete(cache, key)}}
+  end
+
+  def handle_cast({:finish_consolidation, session}, %{cache: cache} = state) do
+    merged_session =
+      cache
+      |> Map.get(session.key, Session.load(session.key))
+      |> merge_session(session)
+      |> put_consolidation_flag(false)
+
+    Session.save(merged_session)
+    {:noreply, %{state | cache: Map.put(cache, merged_session.key, merged_session)}}
+  end
+
+  def handle_cast({:cancel_consolidation, key}, %{cache: cache} = state) do
+    session =
+      cache
+      |> load_session(key)
+      |> put_consolidation_flag(false)
+
+    Session.save(session)
+    {:noreply, %{state | cache: Map.put(cache, key, session)}}
+  end
+
+  defp load_session(cache, key) do
+    case Map.get(cache, key) do
+      nil -> Session.load(key) || Session.new(key)
+      session -> session
+    end
+  end
+
+  defp consolidation_in_progress?(%Session{} = session) do
+    Map.get(session.metadata || %{}, @consolidation_flag, false) == true
+  end
+
+  defp put_consolidation_flag(%Session{} = session, enabled) do
+    metadata =
+      if enabled do
+        Map.put(session.metadata || %{}, @consolidation_flag, true)
+      else
+        Map.delete(session.metadata || %{}, @consolidation_flag)
+      end
+
+    %{session | metadata: metadata}
   end
 
   defp merge_session(nil, %Session{} = incoming), do: incoming
