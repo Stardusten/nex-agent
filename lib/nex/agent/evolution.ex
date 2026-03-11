@@ -14,6 +14,7 @@ defmodule Nex.Agent.Evolution do
 
   require Logger
 
+  alias Nex.Agent.HotReload
   alias Nex.Agent.Tool.CustomTools
 
   @versions_dir Path.join(System.get_env("HOME", "~"), ".nex/agent/evolution")
@@ -37,11 +38,11 @@ defmodule Nex.Agent.Evolution do
     with :ok <- maybe_validate_code(validate, code),
          :ok <- create_backup(module, source_path),
          :ok <- write_source(source_path, code),
-         :ok <- compile_and_load(module, code),
+         {:ok, hot_reload} <- compile_and_load(module, code),
          :ok <- maybe_health_check(validate, module) do
       version = save_version(module, code)
       Logger.info("[Evolution] Upgraded #{inspect(module)} -> version #{version.id}")
-      {:ok, version}
+      {:ok, %{version: version, hot_reload: hot_reload}}
     else
       {:error, reason} ->
         Logger.warning("[Evolution] Upgrade failed for #{inspect(module)}: #{inspect(reason)}")
@@ -140,7 +141,8 @@ defmodule Nex.Agent.Evolution do
   """
   @spec can_evolve?(atom()) :: boolean()
   def can_evolve?(module) do
-    Code.ensure_loaded?(module) or (CustomTools.custom_module?(module) and File.exists?(source_path(module)))
+    Code.ensure_loaded?(module) or
+      (CustomTools.custom_module?(module) and File.exists?(source_path(module)))
   end
 
   @doc """
@@ -181,8 +183,14 @@ defmodule Nex.Agent.Evolution do
         added = new_lines -- old_lines
 
         parts = []
-        parts = if removed != [], do: parts ++ ["--- Removed:\n" <> Enum.join(removed, "\n")], else: parts
-        parts = if added != [], do: parts ++ ["+++ Added:\n" <> Enum.join(added, "\n")], else: parts
+
+        parts =
+          if removed != [],
+            do: parts ++ ["--- Removed:\n" <> Enum.join(removed, "\n")],
+            else: parts
+
+        parts =
+          if added != [], do: parts ++ ["+++ Added:\n" <> Enum.join(added, "\n")], else: parts
 
         if parts == [], do: "No changes", else: Enum.join(parts, "\n\n")
 
@@ -210,33 +218,33 @@ defmodule Nex.Agent.Evolution do
       |> CustomTools.name_for_module()
       |> CustomTools.source_path()
     else
-    beam_path = :code.where_is_file(~c"#{module}.beam") |> to_string()
+      beam_path = :code.where_is_file(~c"#{module}.beam") |> to_string()
 
-    cond do
-      beam_path == "" or String.contains?(beam_path, "non_existing") or
-          not File.exists?(beam_path) ->
-        module_path =
-          module
-          |> to_string()
-          |> String.replace_prefix("Elixir.", "")
-          |> Macro.underscore()
+      cond do
+        beam_path == "" or String.contains?(beam_path, "non_existing") or
+            not File.exists?(beam_path) ->
+          module_path =
+            module
+            |> to_string()
+            |> String.replace_prefix("Elixir.", "")
+            |> Macro.underscore()
 
-        possible_paths = [
-          Path.join([File.cwd!(), "lib", module_path <> ".ex"]),
-          Path.join([File.cwd!(), "nex_agent", "lib", module_path <> ".ex"]),
-          Path.join([File.cwd!(), "..", "nex_agent", "lib", module_path <> ".ex"])
-        ]
+          possible_paths = [
+            Path.join([File.cwd!(), "lib", module_path <> ".ex"]),
+            Path.join([File.cwd!(), "nex_agent", "lib", module_path <> ".ex"]),
+            Path.join([File.cwd!(), "..", "nex_agent", "lib", module_path <> ".ex"])
+          ]
 
-        Enum.find(possible_paths, &File.exists?/1) || hd(possible_paths)
+          Enum.find(possible_paths, &File.exists?/1) || hd(possible_paths)
 
-      true ->
-        beam_path
-        |> Path.rootname(".beam")
-        |> Path.rootname(".ez")
-        |> String.replace("_build/", "lib/")
-        |> String.replace("/ebin/", "/lib/")
-        |> String.replace_suffix("", ".ex")
-    end
+        true ->
+          beam_path
+          |> Path.rootname(".beam")
+          |> Path.rootname(".ez")
+          |> String.replace("_build/", "lib/")
+          |> String.replace("/ebin/", "/lib/")
+          |> String.replace_suffix("", ".ex")
+      end
     end
   end
 
@@ -254,32 +262,36 @@ defmodule Nex.Agent.Evolution do
     # This catches infinite loops or hangs during parsing
     parent = self()
     timeout_ms = 3000
-    
-    pid = spawn(fn ->
-      result = 
-        try do
-          Code.string_to_quoted!(code)
-          :ok
-        rescue
-          e -> {:error, Exception.message(e)}
-        end
-      
-      send(parent, {:validation_result, result})
-    end)
-    
+
+    pid =
+      spawn(fn ->
+        result =
+          try do
+            Code.string_to_quoted!(code)
+            :ok
+          rescue
+            e -> {:error, Exception.message(e)}
+          end
+
+        send(parent, {:validation_result, result})
+      end)
+
     # Monitor the spawned process
     ref = Process.monitor(pid)
-    
+
     receive do
-      {:validation_result, result} -> 
+      {:validation_result, result} ->
         Process.demonitor(ref, [:flush])
         result
+
       {:DOWN, ^ref, :process, ^pid, reason} ->
         {:error, "Validation process crashed: #{inspect(reason)}"}
     after
-      timeout_ms -> 
+      timeout_ms ->
         Process.exit(pid, :kill)
-        {:error, "Validation timeout (#{timeout_ms}ms) - possible infinite loop in code structure"}
+
+        {:error,
+         "Validation timeout (#{timeout_ms}ms) - possible infinite loop in code structure"}
     end
   end
 
@@ -300,11 +312,13 @@ defmodule Nex.Agent.Evolution do
   end
 
   defp compile_and_load(module, code) do
-    quoted = Code.string_to_quoted!(code)
-    {module_bin, _} = Code.compile_quoted(quoted, [])
-    :code.purge(module)
-    {:module, _module} = :code.load_binary(module, ~c"", module_bin)
-    :ok
+    hot_reload = HotReload.reload_expected(source_path(module), code, module)
+
+    if hot_reload.reload_succeeded do
+      {:ok, hot_reload}
+    else
+      {:error, hot_reload.reason}
+    end
   rescue
     e ->
       {:error, Exception.message(e)}

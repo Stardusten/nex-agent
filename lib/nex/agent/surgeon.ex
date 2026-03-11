@@ -10,7 +10,7 @@ defmodule Nex.Agent.Surgeon do
   use GenServer
   require Logger
 
-  alias Nex.Agent.{Evolution, Tool.Registry}
+  alias Nex.Agent.Evolution
 
   @core_modules [
     Nex.Agent.Runner,
@@ -32,7 +32,7 @@ defmodule Nex.Agent.Surgeon do
   @doc """
   Upgrade a module with new code.
 
-  Returns `{:ok, version}` or `{:error, reason}`.
+  Returns `{:ok, %{version: version, hot_reload: hot_reload}}` or `{:error, reason}`.
   """
   @spec upgrade(atom(), String.t(), keyword()) :: {:ok, map()} | {:error, String.t()}
   def upgrade(module, code, opts \\ []) do
@@ -64,11 +64,10 @@ defmodule Nex.Agent.Surgeon do
     reason = Keyword.get(opts, :reason, "upgrade")
 
     case Evolution.upgrade_module(module, code, validate: true) do
-      {:ok, version} ->
-        maybe_hot_swap_registry(module)
+      {:ok, result} ->
         source_path = get_source_path(module)
         persist_evolution(module, source_path, reason)
-        {:ok, version}
+        {:ok, result}
 
       {:error, error} ->
         {:error, error}
@@ -106,22 +105,5 @@ defmodule Nex.Agent.Surgeon do
 
   defp get_source_path(module) do
     Evolution.source_path(module)
-  end
-
-  defp maybe_hot_swap_registry(module) do
-    if Process.whereis(Registry) do
-      Code.ensure_loaded(module)
-
-      if function_exported?(module, :name, 0) do
-        tool_name = module.name()
-
-        if Registry.get(tool_name) do
-          Registry.hot_swap(tool_name, module)
-        else
-          Logger.info("[Surgeon] Registering new tool: #{tool_name}")
-          Registry.register(module)
-        end
-      end
-    end
   end
 end
