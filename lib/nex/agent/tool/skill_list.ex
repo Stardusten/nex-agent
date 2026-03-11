@@ -34,7 +34,8 @@ defmodule Nex.Agent.Tool.SkillList do
           },
           detail: %{
             type: "string",
-            description: "Skill name to read full content (e.g. 'code-review'). Returns the complete SKILL.md file."
+            description:
+              "Skill name to read full content (e.g. 'code-review'). Returns the complete SKILL.md file."
           }
         }
       }

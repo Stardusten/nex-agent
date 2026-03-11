@@ -386,7 +386,13 @@ defmodule Nex.Agent.Config do
   end
 
   def set(%__MODULE__{} = config, :discord_allow_from, value) when is_list(value) do
-    allow_from = value |> Enum.map(&to_string/1) |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == "")) |> Enum.uniq()
+    allow_from =
+      value
+      |> Enum.map(&to_string/1)
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.uniq()
+
     %{config | discord: Map.put(discord(config), "allow_from", allow_from)}
   end
 
@@ -405,7 +411,13 @@ defmodule Nex.Agent.Config do
   end
 
   def set(%__MODULE__{} = config, :slack_allow_from, value) when is_list(value) do
-    allow_from = value |> Enum.map(&to_string/1) |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == "")) |> Enum.uniq()
+    allow_from =
+      value
+      |> Enum.map(&to_string/1)
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.uniq()
+
     %{config | slack: Map.put(slack(config), "allow_from", allow_from)}
   end
 
@@ -428,7 +440,13 @@ defmodule Nex.Agent.Config do
   end
 
   def set(%__MODULE__{} = config, :dingtalk_allow_from, value) when is_list(value) do
-    allow_from = value |> Enum.map(&to_string/1) |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == "")) |> Enum.uniq()
+    allow_from =
+      value
+      |> Enum.map(&to_string/1)
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.uniq()
+
     %{config | dingtalk: Map.put(dingtalk(config), "allow_from", allow_from)}
   end
 

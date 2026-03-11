@@ -92,7 +92,11 @@ defmodule Nex.Agent.Tool.Registry do
   @impl true
   def init(_opts) do
     tools = build_tools()
-    Logger.info("[Registry] Started with #{map_size(tools)} tools: #{inspect(Map.keys(tools) |> Enum.sort())}")
+
+    Logger.info(
+      "[Registry] Started with #{map_size(tools)} tools: #{inspect(Map.keys(tools) |> Enum.sort())}"
+    )
+
     {:ok, %{tools: tools}}
   end
 
@@ -105,7 +109,10 @@ defmodule Nex.Agent.Tool.Registry do
             {:noreply, %{state | tools: updated_tools}}
 
           {:error, reason} ->
-            Logger.warning("[Registry] Failed to register runtime tool #{inspect(module)}: #{reason}")
+            Logger.warning(
+              "[Registry] Failed to register runtime tool #{inspect(module)}: #{reason}"
+            )
+
             {:noreply, state}
         end
 
@@ -135,7 +142,10 @@ defmodule Nex.Agent.Tool.Registry do
         end
 
       :error ->
-        Logger.warning("[Registry] Hot-swap failed for #{name}: module doesn't implement callbacks")
+        Logger.warning(
+          "[Registry] Hot-swap failed for #{name}: module doesn't implement callbacks"
+        )
+
         {:noreply, state}
     end
   end
@@ -162,7 +172,9 @@ defmodule Nex.Agent.Tool.Registry do
   def handle_call({:execute, name, args, ctx}, from, %{tools: tools} = state) do
     case Map.get(tools, name) do
       nil ->
-        {:reply, {:error, "Unknown tool: #{name}. [Analyze the error and try a different approach.]"}, state}
+        {:reply,
+         {:error, "Unknown tool: #{name}. [Analyze the error and try a different approach.]"},
+         state}
 
       module ->
         Task.Supervisor.start_child(Nex.Agent.TaskSupervisor, fn ->
@@ -171,12 +183,16 @@ defmodule Nex.Agent.Tool.Registry do
               module.execute(args, ctx)
             rescue
               e ->
-                {:error, "Tool #{name} crashed: #{Exception.message(e)}. [Analyze the error and try a different approach.]"}
+                {:error,
+                 "Tool #{name} crashed: #{Exception.message(e)}. [Analyze the error and try a different approach.]"}
             catch
               :exit, {:timeout, _} ->
-                {:error, "Tool #{name} timed out. [Analyze the error and try a different approach.]"}
+                {:error,
+                 "Tool #{name} timed out. [Analyze the error and try a different approach.]"}
+
               kind, reason ->
-                {:error, "Tool #{name} failed: #{kind} #{inspect(reason)}. [Analyze the error and try a different approach.]"}
+                {:error,
+                 "Tool #{name} failed: #{kind} #{inspect(reason)}. [Analyze the error and try a different approach.]"}
             end
 
           GenServer.reply(from, result)
@@ -237,12 +253,17 @@ defmodule Nex.Agent.Tool.Registry do
           {:ok, module} when module not in @default_tools ->
             # Try loading compiled beam first; if missing, compile the source file
             case Code.ensure_loaded(module) do
-              {:module, _} -> :ok
+              {:module, _} ->
+                :ok
+
               {:error, _} ->
                 try do
                   Code.compile_file(filepath)
                 rescue
-                  e -> Logger.warning("[Registry] Failed to compile #{filepath}: #{Exception.message(e)}")
+                  e ->
+                    Logger.warning(
+                      "[Registry] Failed to compile #{filepath}: #{Exception.message(e)}"
+                    )
                 end
             end
 
@@ -286,7 +307,10 @@ defmodule Nex.Agent.Tool.Registry do
       case safe_tool_name(module) do
         {:ok, name} ->
           if Map.has_key?(tools, name) do
-            Logger.warning("[Registry] Skipping #{source} tool with conflicting name #{name}: #{inspect(module)}")
+            Logger.warning(
+              "[Registry] Skipping #{source} tool with conflicting name #{name}: #{inspect(module)}"
+            )
+
             tools
           else
             Map.put(tools, name, module)

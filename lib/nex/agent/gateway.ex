@@ -171,8 +171,12 @@ defmodule Nex.Agent.Gateway do
       channel_specs(config)
       |> Enum.each(fn spec ->
         case DynamicSupervisor.start_child(Nex.Agent.ChannelSupervisor, spec) do
-          {:ok, _pid} -> :ok
-          {:error, {:already_started, _pid}} -> :ok
+          {:ok, _pid} ->
+            :ok
+
+          {:error, {:already_started, _pid}} ->
+            :ok
+
           {:error, reason} ->
             Logger.warning("[Gateway] Failed to start channel: #{inspect(reason)}")
         end

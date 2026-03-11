@@ -10,13 +10,20 @@ defmodule Nex.Agent.Tool.Read do
   def definition do
     %{
       name: "read",
-      description: "Read a file from the filesystem. Paths are validated against allowed roots. Supports line range selection with offset and limit.",
+      description:
+        "Read a file from the filesystem. Paths are validated against allowed roots. Supports line range selection with offset and limit.",
       parameters: %{
         type: "object",
         properties: %{
           path: %{type: "string", description: "Path to file"},
-          offset: %{type: "integer", description: "Line offset (0-based, optional). Skip first N lines."},
-          limit: %{type: "integer", description: "Max lines to read (optional). Like head -n or tail -n."}
+          offset: %{
+            type: "integer",
+            description: "Line offset (0-based, optional). Skip first N lines."
+          },
+          limit: %{
+            type: "integer",
+            description: "Max lines to read (optional). Like head -n or tail -n."
+          }
         },
         required: ["path"]
       }
@@ -30,7 +37,7 @@ defmodule Nex.Agent.Tool.Read do
           {:ok, content} ->
             # Apply line range selection if specified
             content = apply_line_range(content, args["offset"], args["limit"])
-            
+
             # Truncate if still too large
             truncated =
               if byte_size(content) > 100_000 do
@@ -54,24 +61,24 @@ defmodule Nex.Agent.Tool.Read do
 
   # Private helper for line range selection
   defp apply_line_range(content, nil, nil), do: content
-  
+
   defp apply_line_range(content, offset, limit) do
     lines = String.split(content, "\n")
     offset = offset || 0
     total_lines = length(lines)
-    
+
     # Default limit to remaining lines if not specified
-    limit = 
+    limit =
       case limit do
         nil -> total_lines - offset
         n when n > 0 -> n
         _ -> total_lines - offset
       end
-    
+
     # Safety: do not exceed available lines
     limit = min(limit, total_lines - offset)
     limit = max(limit, 0)
-    
+
     lines
     |> Enum.drop(offset)
     |> Enum.take(limit)

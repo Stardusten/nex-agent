@@ -83,6 +83,7 @@ defmodule Nex.Agent.Session do
       case Enum.find_index(sliced, fn m -> Map.get(m, "role") == "user" end) do
         nil ->
           sliced
+
         idx ->
           Enum.drop(sliced, idx)
       end

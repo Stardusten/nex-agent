@@ -62,14 +62,30 @@ defmodule Nex.Agent.Tool.Cron do
     action = Map.get(args, "action")
 
     case action do
-      "add" -> do_add(args, ctx)
-      "list" -> do_list()
-      "remove" -> do_remove(args)
-      "enable" -> do_enable(args, true)
-      "disable" -> do_enable(args, false)
-      "run" -> do_run(args)
-      "status" -> do_status()
-      _ -> {:error, "Unknown action: #{action}. Use: add, list, remove, enable, disable, run, status."}
+      "add" ->
+        do_add(args, ctx)
+
+      "list" ->
+        do_list()
+
+      "remove" ->
+        do_remove(args)
+
+      "enable" ->
+        do_enable(args, true)
+
+      "disable" ->
+        do_enable(args, false)
+
+      "run" ->
+        do_run(args)
+
+      "status" ->
+        do_status()
+
+      _ ->
+        {:error,
+         "Unknown action: #{action}. Use: add, list, remove, enable, disable, run, status."}
     end
   end
 
@@ -102,16 +118,17 @@ defmodule Nex.Agent.Tool.Cron do
 
             case Cron.add_job(attrs) do
               {:ok, job} ->
-                {:ok, %{
-                  created: true,
-                  job_id: job.id,
-                  name: job.name,
-                  schedule: format_schedule(job.schedule),
-                  next_run: format_timestamp(job.next_run),
-                  channel: job.channel,
-                  chat_id: job.chat_id,
-                  delete_after_run: job.delete_after_run
-                }}
+                {:ok,
+                 %{
+                   created: true,
+                   job_id: job.id,
+                   name: job.name,
+                   schedule: format_schedule(job.schedule),
+                   next_run: format_timestamp(job.next_run),
+                   channel: job.channel,
+                   chat_id: job.chat_id,
+                   delete_after_run: job.delete_after_run
+                 }}
 
               {:error, reason} ->
                 {:error, "Failed to add job: #{inspect(reason)}"}
@@ -146,7 +163,9 @@ defmodule Nex.Agent.Tool.Cron do
 
   defp do_remove(args) do
     case Map.get(args, "job_id") do
-      nil -> {:error, "job_id is required for remove"}
+      nil ->
+        {:error, "job_id is required for remove"}
+
       job_id ->
         case Cron.remove_job(job_id) do
           :ok -> {:ok, %{removed: true, job_id: job_id}}
@@ -157,7 +176,9 @@ defmodule Nex.Agent.Tool.Cron do
 
   defp do_enable(args, enabled) do
     case Map.get(args, "job_id") do
-      nil -> {:error, "job_id is required"}
+      nil ->
+        {:error, "job_id is required"}
+
       job_id ->
         case Cron.enable_job(job_id, enabled) do
           {:ok, job} -> {:ok, %{job_id: job.id, enabled: job.enabled}}
@@ -168,7 +189,9 @@ defmodule Nex.Agent.Tool.Cron do
 
   defp do_run(args) do
     case Map.get(args, "job_id") do
-      nil -> {:error, "job_id is required for run"}
+      nil ->
+        {:error, "job_id is required for run"}
+
       job_id ->
         case Cron.run_job(job_id) do
           {:ok, job} -> {:ok, %{triggered: true, job_id: job.id, name: job.name}}
@@ -217,12 +240,14 @@ defmodule Nex.Agent.Tool.Cron do
   end
 
   defp to_int(v) when is_integer(v), do: v
+
   defp to_int(v) when is_binary(v) do
     case Integer.parse(v) do
       {n, ""} -> n
       _ -> v
     end
   end
+
   defp to_int(v) when is_float(v), do: trunc(v)
   defp to_int(v), do: v
 
@@ -230,7 +255,8 @@ defmodule Nex.Agent.Tool.Cron do
     parts = String.split(expr, ~r/\s+/, trim: true)
 
     if length(parts) != 5 do
-      {:error, "Cron expression must have 5 fields (minute hour dom month dow), got #{length(parts)}"}
+      {:error,
+       "Cron expression must have 5 fields (minute hour dom month dow), got #{length(parts)}"}
     else
       :ok
     end

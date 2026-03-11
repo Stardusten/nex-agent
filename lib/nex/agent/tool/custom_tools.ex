@@ -115,7 +115,8 @@ defmodule Nex.Agent.Tool.CustomTools do
     end
   end
 
-  @spec create(String.t(), String.t(), String.t(), keyword()) :: {:ok, map()} | {:error, String.t()}
+  @spec create(String.t(), String.t(), String.t(), keyword()) ::
+          {:ok, map()} | {:error, String.t()}
   def create(name, description, content, opts \\ []) do
     created_by = Keyword.get(opts, :created_by, "user")
 
@@ -188,7 +189,9 @@ defmodule Nex.Agent.Tool.CustomTools do
 
   defp validate_tool_source(name, content, expected_module) do
     with {:ok, module} <- extract_module_name_from_source(content),
-         true <- module == expected_module || {:error, "Module name must be #{inspect(expected_module)}"} do
+         true <-
+           module == expected_module ||
+             {:error, "Module name must be #{inspect(expected_module)}"} do
       case Code.string_to_quoted(content) do
         {:ok, _quoted} -> :ok
         {:error, {_line, error, token}} -> {:error, "Invalid Elixir code: #{error} #{token}"}
@@ -285,7 +288,7 @@ defmodule Nex.Agent.Tool.CustomTools do
         module ->
           if is_atom(module) and function_exported?(module, :definition, 0) do
             module.definition()
-        end
+          end
       end
     end
   end

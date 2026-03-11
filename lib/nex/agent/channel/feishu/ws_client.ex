@@ -22,6 +22,7 @@ defmodule Nex.Agent.Channel.Feishu.WSClient do
   defp parse_service_id(url) do
     uri = URI.parse(url)
     params = URI.decode_query(uri.query || "")
+
     case Integer.parse(Map.get(params, "service_id", "0")) do
       {n, _} -> n
       _ -> 0

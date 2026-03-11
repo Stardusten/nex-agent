@@ -8,24 +8,24 @@ defmodule Nex.Agent.SubAgent.Evolution do
   alias Nex.Agent.Memory
 
   @type performance_metric :: %{
-    module: String.t(),
-    task_type: String.t(),
-    success: boolean(),
-    duration_ms: integer(),
-    tool_calls: [String.t()],
-    user_feedback: String.t() | nil,
-    timestamp: String.t()
-  }
+          module: String.t(),
+          task_type: String.t(),
+          success: boolean(),
+          duration_ms: integer(),
+          tool_calls: [String.t()],
+          user_feedback: String.t() | nil,
+          timestamp: String.t()
+        }
 
   @type evolution_suggestion :: %{
-    module: atom(),
-    current_version: String.t(),
-    suggested_version: String.t(),
-    reason: String.t(),
-    changes: [String.t()],
-    risk_level: :low | :medium | :high,
-    proposed_code: String.t()
-  }
+          module: atom(),
+          current_version: String.t(),
+          suggested_version: String.t(),
+          reason: String.t(),
+          changes: [String.t()],
+          risk_level: :low | :medium | :high,
+          proposed_code: String.t()
+        }
 
   @doc """
   Record performance metrics for a SubAgent task execution.
@@ -42,14 +42,18 @@ defmodule Nex.Agent.SubAgent.Evolution do
       timestamp: DateTime.utc_now() |> DateTime.to_iso8601()
     }
 
-    Memory.append_history("[#{String.slice(metric.timestamp, 0, 16)}] SUBAGENT_PERFORMANCE #{Jason.encode!(metric)}")
+    Memory.append_history(
+      "[#{String.slice(metric.timestamp, 0, 16)}] SUBAGENT_PERFORMANCE #{Jason.encode!(metric)}"
+    )
+
     :ok
   end
 
   @doc """
   Analyze recent performance and generate evolution suggestions.
   """
-  @spec self_reflect(atom(), keyword()) :: {:ok, evolution_suggestion()} | {:ok, nil} | {:error, String.t()}
+  @spec self_reflect(atom(), keyword()) ::
+          {:ok, evolution_suggestion()} | {:ok, nil} | {:error, String.t()}
   def self_reflect(subagent_module, opts \\ []) do
     window = Keyword.get(opts, :window, "7d")
     min_tasks = Keyword.get(opts, :min_tasks, 10)
@@ -58,7 +62,8 @@ defmodule Nex.Agent.SubAgent.Evolution do
     metrics = query_recent_metrics(subagent_module, window)
 
     if length(metrics) < min_tasks do
-      {:ok, nil}  # Not enough data
+      # Not enough data
+      {:ok, nil}
     else
       analysis = analyze_metrics(metrics)
 
@@ -70,7 +75,7 @@ defmodule Nex.Agent.SubAgent.Evolution do
       end
     end
   end
-  
+
   @doc """
   Generate a human-readable evolution report.
   """
@@ -79,23 +84,23 @@ defmodule Nex.Agent.SubAgent.Evolution do
     """
     🤖 SubAgent Evolution Report
     ============================
-    
+
     Module: #{suggestion.module}
     Current: #{suggestion.current_version} → Proposed: #{suggestion.suggested_version}
-    
+
     📊 Reason:
     #{suggestion.reason}
-    
+
     🔧 Suggested Changes:
     #{Enum.map_join(suggestion.changes, "\n", fn c -> "  - #{c}" end)}
-    
+
     ⚠️  Risk Level: #{String.upcase(to_string(suggestion.risk_level))}
-    
+
     💡 Proposed Code Preview:
     ```elixir
     #{String.slice(suggestion.proposed_code, 0, 500)}...
     ```
-    
+
     To apply this evolution:
       mix nex.agent evolve #{suggestion.module} --suggestion #{suggestion.suggested_version}
     """
@@ -149,7 +154,7 @@ defmodule Nex.Agent.SubAgent.Evolution do
       |> Enum.flat_map(& &1.tool_calls)
       |> Enum.frequencies()
       |> Enum.sort_by(fn {_, count} -> count end, :desc)
-    
+
     %{
       total_tasks: total,
       success_rate: success_rate,
@@ -207,11 +212,12 @@ defmodule Nex.Agent.SubAgent.Evolution do
       else
         changes
       end
-    
+
     changes =
       case analysis.failure_patterns do
         [{type, count} | _] when count > 2 ->
           ["Add specialized handling for '#{type}' tasks" | changes]
+
         _ ->
           changes
       end
@@ -249,6 +255,7 @@ defmodule Nex.Agent.SubAgent.Evolution do
     case Regex.run(~r/v(\d+)\.(\d+)\.(\d+)/, current) do
       [_, major, minor, patch] ->
         "v#{major}.#{minor}.#{String.to_integer(patch) + 1}"
+
       _ ->
         "v1.0.1"
     end

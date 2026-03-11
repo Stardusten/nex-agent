@@ -329,8 +329,11 @@ defmodule Nex.Agent.Heartbeat do
         props =
           Enum.reduce(rest, %{}, fn line, acc ->
             case String.split(line, ":", parts: 2) do
-              [key, value] -> Map.put(acc, String.trim(key) |> String.downcase(), String.trim(value))
-              _ -> acc
+              [key, value] ->
+                Map.put(acc, String.trim(key) |> String.downcase(), String.trim(value))
+
+              _ ->
+                acc
             end
           end)
 
@@ -342,7 +345,10 @@ defmodule Nex.Agent.Heartbeat do
 
           Map.has_key?(props, "every") ->
             seconds = parse_duration(props["every"])
-            if seconds > 0, do: %{name: String.trim(name), type: :every, seconds: seconds, message: message}, else: nil
+
+            if seconds > 0,
+              do: %{name: String.trim(name), type: :every, seconds: seconds, message: message},
+              else: nil
 
           Map.has_key?(props, "cron") ->
             %{name: String.trim(name), type: :cron, expr: props["cron"], message: message}
@@ -486,7 +492,7 @@ defmodule Nex.Agent.Heartbeat do
     %{
       state
       | last_executions: Map.put(state.last_executions, task.name, now),
-        execution_history: ([entry | state.execution_history]) |> Enum.take(@max_history)
+        execution_history: [entry | state.execution_history] |> Enum.take(@max_history)
     }
   end
 

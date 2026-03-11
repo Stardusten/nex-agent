@@ -133,7 +133,8 @@ defmodule Nex.Agent.Security do
   # number of target-aware delete guards to protect obviously destructive paths.
   @dangerous_patterns [
     # Target-aware deletion guards: allow workspace cleanup, block catastrophic targets.
-    {~r/\brm\s+(-[^\s]*\s+)*\/(bin|sbin|usr|etc|var|boot|lib|sys|proc)\b/, "Deleting system directories not allowed"},
+    {~r/\brm\s+(-[^\s]*\s+)*\/(bin|sbin|usr|etc|var|boot|lib|sys|proc)\b/,
+     "Deleting system directories not allowed"},
     {~r/\brm\s+(-[^\s]*\s+)*\/\s*$/, "Deleting from root not allowed"},
     {~r/\brm\s+(-[^\s]*\s+)*~\/?\s*$/, "Deleting entire home directory not allowed"},
     # Destructive shell commands

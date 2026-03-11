@@ -118,7 +118,10 @@ defmodule Nex.Agent.Channel.Telegram do
 
       Enum.each(inbounds, fn inbound ->
         if allowed?(inbound.sender_id, state.allow_from) do
-          Logger.info("Telegram inbound accepted sender=#{inbound.sender_id} chat_id=#{inbound.chat_id}")
+          Logger.info(
+            "Telegram inbound accepted sender=#{inbound.sender_id} chat_id=#{inbound.chat_id}"
+          )
+
           Bus.publish(:inbound, inbound)
         end
       end)
@@ -134,7 +137,10 @@ defmodule Nex.Agent.Channel.Telegram do
 
     Enum.each(inbounds, fn inbound ->
       if allowed?(inbound.sender_id, state.allow_from) do
-        Logger.info("Telegram inbound accepted sender=#{inbound.sender_id} chat_id=#{inbound.chat_id}")
+        Logger.info(
+          "Telegram inbound accepted sender=#{inbound.sender_id} chat_id=#{inbound.chat_id}"
+        )
+
         Bus.publish(:inbound, inbound)
       else
         Logger.warning("Telegram inbound denied by allow_from sender=#{inbound.sender_id}")
@@ -154,7 +160,9 @@ defmodule Nex.Agent.Channel.Telegram do
         Logger.info("Telegram send ok chat_id=#{payload[:chat_id]} resp=#{inspect(body)}")
 
       {:error, reason} ->
-        Logger.error("Telegram send failed chat_id=#{payload[:chat_id]} reason=#{inspect(reason)}")
+        Logger.error(
+          "Telegram send failed chat_id=#{payload[:chat_id]} reason=#{inspect(reason)}"
+        )
 
       other ->
         Logger.warning("Telegram send unexpected result: #{inspect(other)}")
@@ -313,12 +321,12 @@ defmodule Nex.Agent.Channel.Telegram do
   end
 
   defp telegram_get(state, method, params) do
-    state.http_get_fun.(build_url(state, method), params, [finch: state.finch_name])
+    state.http_get_fun.(build_url(state, method), params, finch: state.finch_name)
     |> normalize_req_response()
   end
 
   defp telegram_post(state, method, body) do
-    state.http_post_fun.(build_url(state, method), body, [finch: state.finch_name])
+    state.http_post_fun.(build_url(state, method), body, finch: state.finch_name)
     |> normalize_req_response()
   end
 
@@ -376,7 +384,10 @@ defmodule Nex.Agent.Channel.Telegram do
             name
 
           {:error, reason} ->
-            Logger.warning("[Telegram] Failed to start proxy Finch pool: #{inspect(reason)}, falling back to direct")
+            Logger.warning(
+              "[Telegram] Failed to start proxy Finch pool: #{inspect(reason)}, falling back to direct"
+            )
+
             Req.Finch
         end
 

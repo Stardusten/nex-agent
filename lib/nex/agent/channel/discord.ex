@@ -212,11 +212,12 @@ defmodule Nex.Agent.Channel.Discord do
 
     Logger.info("[Discord] Connected as #{get_in(data, ["user", "username"])} (#{user_id})")
 
-    %{state |
-      bot_user_id: user_id,
-      session_id: session_id,
-      resume_gateway_url: resume_url,
-      sequence: seq
+    %{
+      state
+      | bot_user_id: user_id,
+        session_id: session_id,
+        resume_gateway_url: resume_url,
+        sequence: seq
     }
   end
 
@@ -264,13 +265,16 @@ defmodule Nex.Agent.Channel.Discord do
     else
       # Check bot mention or DM
       is_dm = is_nil(guild_id)
-      mentions_bot = data
+
+      mentions_bot =
+        data
         |> Map.get("mentions", [])
         |> Enum.any?(fn m -> Map.get(m, "id") == state.bot_user_id end)
 
       if is_dm or mentions_bot do
         # Strip bot mention from content
-        clean_content = Regex.replace(~r/<@!?#{state.bot_user_id}>/, content, "")
+        clean_content =
+          Regex.replace(~r/<@!?#{state.bot_user_id}>/, content, "")
           |> String.trim()
 
         if clean_content != "" and allowed?(channel_id, state.allow_from) do
@@ -342,7 +346,8 @@ defmodule Nex.Agent.Channel.Discord do
   defp connect_gateway(_state) do
     parent = self()
 
-    if Code.ensure_loaded?(:websocket_client) and function_exported?(:websocket_client, :start_link, 4) do
+    if Code.ensure_loaded?(:websocket_client) and
+         function_exported?(:websocket_client, :start_link, 4) do
       _pid =
         spawn_link(fn ->
           case apply(:websocket_client, :start_link, [

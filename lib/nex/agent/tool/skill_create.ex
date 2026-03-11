@@ -24,7 +24,8 @@ defmodule Nex.Agent.Tool.SkillCreate do
 
   def execute(%{"name" => name, "description" => description, "content" => content} = args, _ctx) do
     if Map.has_key?(args, "type") do
-      {:error, "skill_create only supports Markdown skills. Implement code-based capabilities as tools."}
+      {:error,
+       "skill_create only supports Markdown skills. Implement code-based capabilities as tools."}
     else
       case Skills.create(%{name: name, description: description, content: content}) do
         {:ok, _} -> {:ok, "Skill '#{name}' created."}

@@ -125,10 +125,14 @@ defmodule Nex.Agent.Tool.ToolList do
   end
 
   defp description_for(module) do
-    if is_atom(module) and function_exported?(module, :description, 0), do: module.description(), else: ""
+    if is_atom(module) and function_exported?(module, :description, 0),
+      do: module.description(),
+      else: ""
   end
 
   defp definition_for(module) do
-    if is_atom(module) and function_exported?(module, :definition, 0), do: module.definition(), else: nil
+    if is_atom(module) and function_exported?(module, :definition, 0),
+      do: module.definition(),
+      else: nil
   end
 end

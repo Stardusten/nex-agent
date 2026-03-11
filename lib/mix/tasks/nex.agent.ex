@@ -125,7 +125,8 @@ defmodule Mix.Tasks.Nex.Agent do
     Mix.shell().info("Starting Gateway...")
 
     case stop_existing_gateway_if_present() do
-      :ok -> :ok
+      :ok ->
+        :ok
 
       {:error, reason} ->
         Mix.shell().error("Failed to stop existing gateway: #{inspect(reason)}")

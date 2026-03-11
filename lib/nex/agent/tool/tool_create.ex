@@ -16,7 +16,10 @@ defmodule Nex.Agent.Tool.ToolCreate do
         properties: %{
           name: %{type: "string", description: "Tool name in snake_case"},
           description: %{type: "string", description: "What this tool does"},
-          content: %{type: "string", description: "Complete Elixir module source code implementing the tool"},
+          content: %{
+            type: "string",
+            description: "Complete Elixir module source code implementing the tool"
+          },
           parameters: %{type: "object", description: "Reserved for future tool generators"}
         },
         required: ["name", "description", "content"]

@@ -104,8 +104,19 @@ defmodule Nex.Agent.Channel.Feishu.Frame do
 
   defp decode_header(binary) do
     {fields, _} = decode_fields(binary, [])
-    key = Enum.find_value(fields, "", fn {1, :bytes, v} -> v; _ -> nil end)
-    value = Enum.find_value(fields, "", fn {2, :bytes, v} -> v; _ -> nil end)
+
+    key =
+      Enum.find_value(fields, "", fn
+        {1, :bytes, v} -> v
+        _ -> nil
+      end)
+
+    value =
+      Enum.find_value(fields, "", fn
+        {2, :bytes, v} -> v
+        _ -> nil
+      end)
+
     {key, value}
   end
 

@@ -10,12 +10,17 @@ defmodule Nex.Agent.Tool.ListDir do
   def definition do
     %{
       name: "list_dir",
-      description: "List directory contents with file type, size, and modification time. Paths are validated against allowed roots.",
+      description:
+        "List directory contents with file type, size, and modification time. Paths are validated against allowed roots.",
       parameters: %{
         type: "object",
         properties: %{
           path: %{type: "string", description: "Directory path to list"},
-          recursive: %{type: "boolean", description: "List recursively (default: false)", default: false}
+          recursive: %{
+            type: "boolean",
+            description: "List recursively (default: false)",
+            default: false
+          }
         },
         required: ["path"]
       }
@@ -141,6 +146,9 @@ defmodule Nex.Agent.Tool.ListDir do
 
   defp format_size(size) when size < 1024, do: "#{size}B"
   defp format_size(size) when size < 1024 * 1024, do: "#{Float.round(size / 1024, 1)}K"
-  defp format_size(size) when size < 1024 * 1024 * 1024, do: "#{Float.round(size / (1024 * 1024), 1)}M"
+
+  defp format_size(size) when size < 1024 * 1024 * 1024,
+    do: "#{Float.round(size / (1024 * 1024), 1)}M"
+
   defp format_size(size), do: "#{Float.round(size / (1024 * 1024 * 1024), 1)}G"
 end

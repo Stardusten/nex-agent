@@ -228,7 +228,8 @@ defmodule Nex.Agent.Channel.Feishu do
   def handle_info(:feishu_ws_send_initial_ping, state), do: {:noreply, state}
 
   @impl true
-  def handle_info(:ws_ping, %{ws_pid: ws_pid, ws_service_id: svc_id} = state) when is_pid(ws_pid) do
+  def handle_info(:ws_ping, %{ws_pid: ws_pid, ws_service_id: svc_id} = state)
+      when is_pid(ws_pid) do
     ping = %Frame{
       seq_id: 0,
       log_id: 0,
@@ -365,6 +366,7 @@ defmodule Nex.Agent.Channel.Feishu do
   defp extract_service_id(url) do
     uri = URI.parse(url)
     params = URI.decode_query(uri.query || "")
+
     case Integer.parse(Map.get(params, "service_id", "0")) do
       {n, _} -> n
       _ -> 0
@@ -389,10 +391,18 @@ defmodule Nex.Agent.Channel.Feishu do
           |> Enum.map(&Map.get(fragments, &1, <<>>))
           |> Enum.join()
 
-        state = %{state | ws_pending_fragments: Map.delete(state.ws_pending_fragments, message_id)}
+        state = %{
+          state
+          | ws_pending_fragments: Map.delete(state.ws_pending_fragments, message_id)
+        }
+
         {state, merged}
       else
-        state = %{state | ws_pending_fragments: Map.put(state.ws_pending_fragments, message_id, fragments)}
+        state = %{
+          state
+          | ws_pending_fragments: Map.put(state.ws_pending_fragments, message_id, fragments)
+        }
+
         {state, nil}
       end
     end
@@ -430,7 +440,10 @@ defmodule Nex.Agent.Channel.Feishu do
 
     case normalize_event(payload) do
       {:ok, inbound} ->
-        Logger.info("[Feishu] Inbound sender=#{inbound[:sender_id]} chat=#{inbound[:chat_id]} content=#{inspect(inbound[:content])}")
+        Logger.info(
+          "[Feishu] Inbound sender=#{inbound[:sender_id]} chat=#{inbound[:chat_id]} content=#{inspect(inbound[:content])}"
+        )
+
         process_inbound_message(inbound, state)
 
       :ignore ->
@@ -493,7 +506,11 @@ defmodule Nex.Agent.Channel.Feishu do
 
       if allowed?(Map.get(inbound, :sender_id), state.allow_from) do
         add_reaction(message_id, state)
-        Logger.info("[Feishu] Publishing inbound to bus content=#{inspect(Map.get(inbound, :content))}")
+
+        Logger.info(
+          "[Feishu] Publishing inbound to bus content=#{inspect(Map.get(inbound, :content))}"
+        )
+
         Bus.publish(:inbound, inbound)
       else
         Logger.warning(
@@ -521,7 +538,10 @@ defmodule Nex.Agent.Channel.Feishu do
 
     cond do
       not is_map(event) or not is_map(message) or not is_map(sender) ->
-        Logger.debug("[Feishu] normalize_event -> :ignore (event/message/sender missing) event=#{inspect(event)}")
+        Logger.debug(
+          "[Feishu] normalize_event -> :ignore (event/message/sender missing) event=#{inspect(event)}"
+        )
+
         :ignore
 
       true ->
@@ -563,7 +583,10 @@ defmodule Nex.Agent.Channel.Feishu do
         :ignore
 
       is_nil(content) or content == "" ->
-        Logger.debug("[Feishu] ignored: content nil/empty, msg_type=#{inspect(msg_type)} content_json=#{inspect(content_json)}")
+        Logger.debug(
+          "[Feishu] ignored: content nil/empty, msg_type=#{inspect(msg_type)} content_json=#{inspect(content_json)}"
+        )
+
         :ignore
 
       true ->
@@ -853,6 +876,7 @@ defmodule Nex.Agent.Channel.Feishu do
     else
       {:error, reason} ->
         Logger.warning("[Feishu] Card send failed, falling back to text: #{inspect(reason)}")
+
         case send_text(payload, chat_id, content, state) do
           {:ok, new_state} -> {:ok, new_state}
           {:error, text_reason} -> {:error, text_reason, state}
@@ -897,7 +921,9 @@ defmodule Nex.Agent.Channel.Feishu do
 
           Regex.match?(~r/^[-*]\s/, line) ->
             case current do
-              {:list, items} -> {chunks, {:list, items ++ [line]}}
+              {:list, items} ->
+                {chunks, {:list, items ++ [line]}}
+
               _ ->
                 chunks = if current, do: chunks ++ [current], else: chunks
                 {chunks, {:list, [line]}}
@@ -905,7 +931,9 @@ defmodule Nex.Agent.Channel.Feishu do
 
           Regex.match?(~r/^\d+\.\s/, line) ->
             case current do
-              {:list, items} -> {chunks, {:list, items ++ [line]}}
+              {:list, items} ->
+                {chunks, {:list, items ++ [line]}}
+
               _ ->
                 chunks = if current, do: chunks ++ [current], else: chunks
                 {chunks, {:list, [line]}}
@@ -920,7 +948,9 @@ defmodule Nex.Agent.Channel.Feishu do
 
           true ->
             case current do
-              {:text, text_lines} -> {chunks, {:text, text_lines ++ [line]}}
+              {:text, text_lines} ->
+                {chunks, {:text, text_lines ++ [line]}}
+
               _ ->
                 chunks = if current, do: chunks ++ [current], else: chunks
                 {chunks, {:text, [line]}}

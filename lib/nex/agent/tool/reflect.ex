@@ -9,7 +9,10 @@ defmodule Nex.Agent.Tool.Reflect do
   alias Nex.Agent.Tool.CustomTools
 
   def name, do: "reflect"
-  def description, do: "Read the source code of any agent module for understanding and improvement."
+
+  def description,
+    do: "Read the source code of any agent module for understanding and improvement."
+
   def category, do: :evolution
 
   def definition do
@@ -23,7 +26,8 @@ defmodule Nex.Agent.Tool.Reflect do
           action: %{
             type: "string",
             enum: ["source", "versions", "diff", "list_modules"],
-            description: "source: view current code, versions: list history, diff: compare versions, list_modules: list all evolvable modules"
+            description:
+              "source: view current code, versions: list history, diff: compare versions, list_modules: list all evolvable modules"
           }
         },
         required: ["action"]
@@ -84,8 +88,12 @@ defmodule Nex.Agent.Tool.Reflect do
     ArgumentError -> {:error, "Unknown module: #{module_str}"}
   end
 
-  def execute(%{"action" => "diff"}, _ctx), do: {:error, "diff requires module and code parameters"}
+  def execute(%{"action" => "diff"}, _ctx),
+    do: {:error, "diff requires module and code parameters"}
+
   def execute(%{"action" => "source"}, _ctx), do: {:error, "source requires module parameter"}
   def execute(%{"action" => "versions"}, _ctx), do: {:error, "versions requires module parameter"}
-  def execute(_args, _ctx), do: {:error, "action is required (source, versions, diff, list_modules)"}
+
+  def execute(_args, _ctx),
+    do: {:error, "action is required (source, versions, diff, list_modules)"}
 end

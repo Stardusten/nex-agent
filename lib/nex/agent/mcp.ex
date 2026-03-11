@@ -292,7 +292,9 @@ defmodule Nex.Agent.MCP do
 
   defp split_lines(buffer) do
     case String.split(buffer, "\n", parts: :infinity) do
-      [] -> {[], ""}
+      [] ->
+        {[], ""}
+
       parts ->
         {complete, [remaining]} = Enum.split(parts, -1)
         {complete, remaining}

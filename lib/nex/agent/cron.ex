@@ -299,24 +299,26 @@ defmodule Nex.Agent.Cron do
 
       # at type + not delete → disable
       job.schedule[:type] == :at ->
-        {%{job |
-          last_run: now,
-          next_run: nil,
-          last_status: status_str,
-          last_error: error,
-          enabled: false,
-          updated_at: now
-        }, false}
+        {%{
+           job
+           | last_run: now,
+             next_run: nil,
+             last_status: status_str,
+             last_error: error,
+             enabled: false,
+             updated_at: now
+         }, false}
 
       # recurring → compute next
       true ->
-        {%{job |
-          last_run: now,
-          next_run: calculate_next_run(job.schedule, now),
-          last_status: status_str,
-          last_error: error,
-          updated_at: now
-        }, false}
+        {%{
+           job
+           | last_run: now,
+             next_run: calculate_next_run(job.schedule, now),
+             last_status: status_str,
+             last_error: error,
+             updated_at: now
+         }, false}
     end
   end
 

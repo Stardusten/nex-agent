@@ -115,7 +115,9 @@ defmodule Nex.Agent.Memory do
     if old_messages == [] do
       {:ok, session}
     else
-      Logger.info("Memory consolidation: #{length(old_messages)} to consolidate, #{keep_count} keep")
+      Logger.info(
+        "Memory consolidation: #{length(old_messages)} to consolidate, #{keep_count} keep"
+      )
 
       lines =
         old_messages
@@ -168,13 +170,21 @@ defmodule Nex.Agent.Memory do
         tool_choice: tool_choice_for(provider, "save_memory")
       ]
 
-      llm_call_fun = Keyword.get(opts, :llm_call_fun, &Nex.Agent.Runner.call_llm_for_consolidation/2)
+      llm_call_fun =
+        Keyword.get(opts, :llm_call_fun, &Nex.Agent.Runner.call_llm_for_consolidation/2)
 
       case llm_call_fun.(messages, llm_opts) do
         {:ok, result} ->
           case normalize_consolidation_args(result) do
             {:ok, args} ->
-              apply_consolidation_result(args, session, current_memory, keep_count, archive_all, memory_opts)
+              apply_consolidation_result(
+                args,
+                session,
+                current_memory,
+                keep_count,
+                archive_all,
+                memory_opts
+              )
 
             {:error, reason} ->
               Logger.warning("Memory consolidation: #{reason}")
@@ -237,10 +247,20 @@ defmodule Nex.Agent.Memory do
   end
 
   defp normalize_consolidation_args([first | _rest]) when is_map(first), do: {:ok, first}
-  defp normalize_consolidation_args([]), do: {:error, "unexpected arguments as empty or non-dict list"}
+
+  defp normalize_consolidation_args([]),
+    do: {:error, "unexpected arguments as empty or non-dict list"}
+
   defp normalize_consolidation_args(_), do: {:error, "unexpected arguments type"}
 
-  defp apply_consolidation_result(args, session, current_memory, keep_count, archive_all, memory_opts) do
+  defp apply_consolidation_result(
+         args,
+         session,
+         current_memory,
+         keep_count,
+         archive_all,
+         memory_opts
+       ) do
     entry = stringify_result(Map.get(args, "history_entry"))
     update = stringify_result(Map.get(args, "memory_update"))
 
@@ -254,8 +274,7 @@ defmodule Nex.Agent.Memory do
 
     updated_session = %{
       session
-      | last_consolidated:
-          if(archive_all, do: 0, else: length(session.messages) - keep_count)
+      | last_consolidated: if(archive_all, do: 0, else: length(session.messages) - keep_count)
     }
 
     Logger.info(
@@ -287,5 +306,7 @@ defmodule Nex.Agent.Memory do
   defp workspace_opts(workspace), do: [workspace: workspace]
 
   defp tool_choice_for(:anthropic, name), do: %{"type" => "tool", "name" => name}
-  defp tool_choice_for(_provider, name), do: %{"type" => "function", "function" => %{"name" => name}}
+
+  defp tool_choice_for(_provider, name),
+    do: %{"type" => "function", "function" => %{"name" => name}}
 end

@@ -64,7 +64,8 @@ defmodule Nex.Agent.Skills do
         {:error, "Skill name is required"}
 
       type in ["elixir", "script", "mcp"] ->
-        {:error, "Unsupported skill type. Skills are Markdown-only; implement code-based capabilities as tools."}
+        {:error,
+         "Unsupported skill type. Skills are Markdown-only; implement code-based capabilities as tools."}
 
       true ->
         save_markdown_skill(name, description, content, parameters, allowed_tools)
@@ -237,5 +238,6 @@ defmodule Nex.Agent.Skills do
     Path.join(System.get_env("HOME", "~"), ".nex/agent/workspace/skills")
   end
 
-  defp escape_yaml_string(value), do: inspect(value, binaries: :as_strings, printable_limit: :infinity)
+  defp escape_yaml_string(value),
+    do: inspect(value, binaries: :as_strings, printable_limit: :infinity)
 end
