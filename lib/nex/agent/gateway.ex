@@ -139,9 +139,7 @@ defmodule Nex.Agent.Gateway do
     config = Nex.Agent.Config.load()
     state = %{state | config: config}
 
-    if not Nex.Agent.Config.valid?(config) do
-      {:error, :invalid_config}
-    else
+    if Nex.Agent.Config.valid?(config) do
       # Start heartbeat tick (may not be running if started outside OTP app)
       if Process.whereis(Nex.Agent.Heartbeat) do
         _ = Nex.Agent.Heartbeat.start()
@@ -151,6 +149,8 @@ defmodule Nex.Agent.Gateway do
       start_channels(config)
 
       {:ok, %{state | status: :running, started_at: System.system_time(:second)}}
+    else
+      {:error, :invalid_config}
     end
   end
 

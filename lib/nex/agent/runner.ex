@@ -1,4 +1,6 @@
 defmodule Nex.Agent.Runner do
+  @moduledoc false
+
   require Logger
 
   alias Nex.Agent.{

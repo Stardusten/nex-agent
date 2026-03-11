@@ -1,4 +1,6 @@
 defmodule Nex.Agent do
+  @moduledoc false
+
   alias Nex.Agent.{
     Onboarding,
     Runner,

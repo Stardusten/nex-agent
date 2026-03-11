@@ -1,4 +1,6 @@
 defmodule Nex.Agent.Tool.SoulUpdate do
+  @moduledoc false
+
   @behaviour Nex.Agent.Tool.Behaviour
 
   def name, do: "soul_update"

@@ -50,10 +50,10 @@ defmodule Nex.Agent.LLM.JsonRepair do
   defp wrap_bare_object(json) do
     trimmed = String.trim(json)
 
-    if not String.starts_with?(trimmed, "{") do
-      "{#{trimmed}}"
-    else
+    if String.starts_with?(trimmed, "{") do
       trimmed
+    else
+      "{#{trimmed}}"
     end
   end
 end

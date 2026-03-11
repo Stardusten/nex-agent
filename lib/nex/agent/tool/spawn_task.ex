@@ -1,4 +1,6 @@
 defmodule Nex.Agent.Tool.SpawnTask do
+  @moduledoc false
+
   @behaviour Nex.Agent.Tool.Behaviour
 
   def name, do: "spawn_task"

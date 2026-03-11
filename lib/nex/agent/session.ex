@@ -162,10 +162,10 @@ defmodule Nex.Agent.Session do
     dir = Path.join([@sessions_dir, safe_filename(key)])
     path = Path.join(dir, "messages.jsonl")
 
-    unless File.exists?(path) do
-      nil
-    else
+    if File.exists?(path) do
       load_from_path(path, key)
+    else
+      nil
     end
   end
 

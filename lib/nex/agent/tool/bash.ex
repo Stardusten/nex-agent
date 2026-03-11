@@ -1,4 +1,6 @@
 defmodule Nex.Agent.Tool.Bash do
+  @moduledoc false
+
   @behaviour Nex.Agent.Tool.Behaviour
 
   alias Nex.Agent.Security

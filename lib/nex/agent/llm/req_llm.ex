@@ -1,4 +1,6 @@
 defmodule Nex.Agent.LLM.ReqLLM do
+  @moduledoc false
+
   @behaviour Nex.Agent.LLM.Behaviour
 
   alias ReqLLM.Context

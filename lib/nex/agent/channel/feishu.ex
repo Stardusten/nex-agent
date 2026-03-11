@@ -535,16 +535,14 @@ defmodule Nex.Agent.Channel.Feishu do
       "[Feishu] normalize_event keys=#{inspect(Map.keys(payload))} event_nil=#{is_nil(event)} message_nil=#{is_nil(message)} sender_nil=#{is_nil(sender)}"
     )
 
-    cond do
-      not is_map(event) or not is_map(message) or not is_map(sender) ->
-        Logger.debug(
-          "[Feishu] normalize_event -> :ignore (event/message/sender missing) event=#{inspect(event)}"
-        )
+    if is_map(event) and is_map(message) and is_map(sender) do
+      normalize_message(message, sender, payload)
+    else
+      Logger.debug(
+        "[Feishu] normalize_event -> :ignore (event/message/sender missing) event=#{inspect(event)}"
+      )
 
-        :ignore
-
-      true ->
-        normalize_message(message, sender, payload)
+      :ignore
     end
   end
 

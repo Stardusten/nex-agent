@@ -220,30 +220,28 @@ defmodule Nex.Agent.Evolution do
     else
       beam_path = :code.where_is_file(~c"#{module}.beam") |> to_string()
 
-      cond do
-        beam_path == "" or String.contains?(beam_path, "non_existing") or
-            not File.exists?(beam_path) ->
-          module_path =
-            module
-            |> to_string()
-            |> String.replace_prefix("Elixir.", "")
-            |> Macro.underscore()
+      if beam_path == "" or String.contains?(beam_path, "non_existing") or
+           not File.exists?(beam_path) do
+        module_path =
+          module
+          |> to_string()
+          |> String.replace_prefix("Elixir.", "")
+          |> Macro.underscore()
 
-          possible_paths = [
-            Path.join([File.cwd!(), "lib", module_path <> ".ex"]),
-            Path.join([File.cwd!(), "nex_agent", "lib", module_path <> ".ex"]),
-            Path.join([File.cwd!(), "..", "nex_agent", "lib", module_path <> ".ex"])
-          ]
+        possible_paths = [
+          Path.join([File.cwd!(), "lib", module_path <> ".ex"]),
+          Path.join([File.cwd!(), "nex_agent", "lib", module_path <> ".ex"]),
+          Path.join([File.cwd!(), "..", "nex_agent", "lib", module_path <> ".ex"])
+        ]
 
-          Enum.find(possible_paths, &File.exists?/1) || hd(possible_paths)
-
-        true ->
-          beam_path
-          |> Path.rootname(".beam")
-          |> Path.rootname(".ez")
-          |> String.replace("_build/", "lib/")
-          |> String.replace("/ebin/", "/lib/")
-          |> String.replace_suffix("", ".ex")
+        Enum.find(possible_paths, &File.exists?/1) || hd(possible_paths)
+      else
+        beam_path
+        |> Path.rootname(".beam")
+        |> Path.rootname(".ez")
+        |> String.replace("_build/", "lib/")
+        |> String.replace("/ebin/", "/lib/")
+        |> String.replace_suffix("", ".ex")
       end
     end
   end

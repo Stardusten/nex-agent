@@ -1,4 +1,6 @@
 defmodule Nex.Agent.Tool.Write do
+  @moduledoc false
+
   @behaviour Nex.Agent.Tool.Behaviour
 
   alias Nex.Agent.HotReload

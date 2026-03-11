@@ -289,18 +289,16 @@ defmodule Nex.Agent.Skills.Loader do
   defp parse_scalar("null"), do: nil
 
   defp parse_scalar(value) do
-    cond do
-      String.starts_with?(value, "\"") and String.ends_with?(value, "\"") ->
-        case Jason.decode(value) do
-          {:ok, decoded} -> decoded
-          _ -> value
-        end
-
-      true ->
-        case Integer.parse(value) do
-          {int, ""} -> int
-          _ -> value
-        end
+    if String.starts_with?(value, "\"") and String.ends_with?(value, "\"") do
+      case Jason.decode(value) do
+        {:ok, decoded} -> decoded
+        _ -> value
+      end
+    else
+      case Integer.parse(value) do
+        {int, ""} -> int
+        _ -> value
+      end
     end
   end
 

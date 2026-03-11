@@ -155,9 +155,7 @@ defmodule Nex.Agent.MCP do
 
   @impl true
   def handle_call(:list_tools, from, state) do
-    if not state.initialized do
-      {:reply, {:error, :not_initialized}, state}
-    else
+    if state.initialized do
       request = %{
         jsonrpc: "2.0",
         id: state.request_id + 1,
@@ -166,14 +164,14 @@ defmodule Nex.Agent.MCP do
       }
 
       send_request(state, request, from)
+    else
+      {:reply, {:error, :not_initialized}, state}
     end
   end
 
   @impl true
   def handle_call({:call_tool, name, arguments}, from, state) do
-    if not state.initialized do
-      {:reply, {:error, :not_initialized}, state}
-    else
+    if state.initialized do
       request = %{
         jsonrpc: "2.0",
         id: state.request_id + 1,
@@ -185,6 +183,8 @@ defmodule Nex.Agent.MCP do
       }
 
       send_request(state, request, from)
+    else
+      {:reply, {:error, :not_initialized}, state}
     end
   end
 

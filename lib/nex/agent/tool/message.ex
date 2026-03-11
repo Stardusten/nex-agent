@@ -1,4 +1,6 @@
 defmodule Nex.Agent.Tool.Message do
+  @moduledoc false
+
   @behaviour Nex.Agent.Tool.Behaviour
 
   def name, do: "message"
@@ -37,9 +39,7 @@ defmodule Nex.Agent.Tool.Message do
     channel = Map.get(args, "channel") || Map.get(ctx, :channel, "telegram")
     chat_id = Map.get(args, "chat_id") || Map.get(ctx, :chat_id, "")
 
-    unless content do
-      {:error, "content is required"}
-    else
+    if content do
       topic =
         case channel do
           "telegram" -> :telegram_outbound
@@ -62,6 +62,8 @@ defmodule Nex.Agent.Tool.Message do
       Nex.Agent.Bus.publish(topic, payload)
 
       {:ok, %{sent: true, channel: channel, chat_id: chat_id}}
+    else
+      {:error, "content is required"}
     end
   end
 end
