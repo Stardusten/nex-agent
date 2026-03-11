@@ -2,135 +2,26 @@ defmodule Nex.Agent.Security do
   @moduledoc """
   Security utilities for the agent.
 
-  Provides path validation, command whitelisting, and other security checks.
+  Provides path validation, command blacklist validation, and other security checks.
   """
 
-  # Base commands allowed in production
-  @allowed_commands_prod [
-    # Version control
-    "git",
-    "hg",
-    # Build tools
-    "mix",
-    "elixir",
-    "erlc",
-    "rebar3",
-    "make",
-    "cmake",
-    # File operations
-    "ls",
-    "dir",
-    "cat",
-    "head",
-    "tail",
-    "grep",
-    "find",
-    "wc",
-    "sort",
-    "uniq",
-    "mkdir",
-    "rmdir",
-    "cp",
-    "mv",
-    "rm",
-    "touch",
-    "ln",
-    "stat",
-    "file",
-    "chmod",
-    "chown",
-    "pwd",
-    "basename",
-    "dirname",
-    "realpath",
-    # Text processing
-    "awk",
-    "sed",
-    "sort",
-    "cut",
-    "tr",
-    "tee",
-    "diff",
-    "patch",
-    "xargs",
-    # Process
-    "ps",
-    "kill",
-    "killall",
-    "top",
-    "htop",
-    # Network (read-only)
-    "curl",
-    "wget",
-    "ssh",
-    "scp",
-    "rsync",
-    "ping",
-    "dig",
-    "nslookup",
-    "host",
-    # Development
-    "npm",
-    "npx",
-    "node",
-    "yarn",
-    "pnpm",
-    "bun",
-    "deno",
-    "python",
-    "python3",
-    "pip",
-    "pip3",
-    "cargo",
-    "rustc",
-    "go",
-    "ruby",
-    "gem",
-    "java",
-    "javac",
-    "gradle",
-    "mvn",
-    # Docker (read-only)
-    "docker",
-    "podman",
-    # Package managers
-    "brew",
-    "apt",
-    "apt-get",
-    "yum",
-    "dnf",
-    "pacman",
-    # Misc
-    "date",
-    "echo",
-    "printf",
-    "true",
-    "false",
-    "which",
-    "whoami",
-    "id",
-    "env",
-    "printenv",
-    "uname",
-    "hostname",
-    "tar",
-    "zip",
-    "unzip",
-    "gzip",
-    "gunzip",
-    "jq",
-    "yq",
-    "bc",
-    "md5sum",
-    "sha256sum",
-    "base64"
+  # Dangerous commands that are explicitly blocked
+  @blocked_commands [
+    # System destruction
+    "mkfs", "fdisk", "parted", "diskpart",
+    # Raw disk operations
+    "dd",
+    # System power
+    "shutdown", "reboot", "poweroff", "halt",
+    # Network attacks
+    "nc", "netcat", "ncat",
+    # Privilege escalation
+    "sudo", "su",
+    # Shell escapes (these spawn interactive shells)
+    "bash", "sh", "zsh", "fish", "csh", "tcsh"
   ]
 
-  # Commands allowed in test environment (includes extra testing utilities)
-  @allowed_commands_test @allowed_commands_prod ++ ["seq", "exit", "test", "sleep"]
-
-  # Core shell deny patterns for shell safety, plus a small
-  # number of target-aware delete guards to protect obviously destructive paths.
+  # Core shell deny patterns for shell safety
   @dangerous_patterns [
     # Target-aware deletion guards: allow workspace cleanup, block catastrophic targets.
     {~r/\brm\s+(-[^\s]*\s+)*\/(bin|sbin|usr|etc|var|boot|lib|sys|proc)\b/,
@@ -145,7 +36,11 @@ defmodule Nex.Agent.Security do
     {~r/\bdd\s+if=/, "Raw disk copy not allowed"},
     {~r/>\s*\/dev\/sd/, "Writing to block devices not allowed"},
     {~r/\b(shutdown|reboot|poweroff)\b/, "System power control not allowed"},
-    {~r/:\(\)\s*\{.*\};\s*:/, "Fork bomb not allowed"}
+    {~r/:\(\)\s*\{.*\};\s*:/, "Fork bomb not allowed"},
+    # Shell injection attempts
+    {~r/[;&|]\s*(?:bash|sh|zsh)\s+-[ic]/, "Shell injection not allowed"},
+    {~r/`.*`/, "Command substitution not allowed"},
+    {~r/\$\(.*\)/, "Command substitution not allowed"}
   ]
 
   @doc """
@@ -153,7 +48,6 @@ defmodule Nex.Agent.Security do
   """
   @spec allowed_roots() :: [String.t()]
   def allowed_roots do
-    # Can be configured via environment variable
     case System.get_env("NEX_ALLOWED_ROOTS") do
       nil -> default_allowed_roots()
       paths -> String.split(paths, ":") |> Enum.map(&Path.expand/1)
@@ -169,11 +63,9 @@ defmodule Nex.Agent.Security do
   def validate_path(path) do
     expanded = Path.expand(path)
 
-    # Check for path traversal attempts
     if String.contains?(path, "..") and not safe_traversal?(path) do
       {:error, "Path traversal not allowed: #{path}"}
     else
-      # Check if within allowed roots
       roots = allowed_roots()
 
       if Enum.any?(roots, fn root -> String.starts_with?(expanded, root) end) do
@@ -184,7 +76,6 @@ defmodule Nex.Agent.Security do
     end
   end
 
-  # Check if traversal is safe (doesn't escape allowed roots)
   defp safe_traversal?(path) do
     expanded = Path.expand(path)
     roots = allowed_roots()
@@ -195,25 +86,12 @@ defmodule Nex.Agent.Security do
   end
 
   @doc """
-  Get the list of allowed commands.
-  """
-  @spec allowed_commands() :: [String.t()]
-  def allowed_commands do
-    if Application.get_env(:nex_agent, :env) == :test do
-      @allowed_commands_test
-    else
-      @allowed_commands_prod
-    end
-  end
-
-  @doc """
-  Validate a command against the whitelist.
+  Validate a command against the blacklist.
 
   Returns :ok if allowed, {:error, reason} if not.
   """
   @spec validate_command(String.t()) :: :ok | {:error, String.t()}
   def validate_command("") do
-    # Empty command is allowed (will fail at execution)
     :ok
   end
 
@@ -224,23 +102,26 @@ defmodule Nex.Agent.Security do
     # Extract the base command
     base_cmd = normalized_command |> String.split() |> hd()
 
-    # Check dangerous patterns first
-    case Enum.find_value(@dangerous_patterns, fn {pattern, reason} ->
-           if Regex.match?(pattern, sanitized_command), do: reason
-         end) do
-      nil ->
-        # No dangerous pattern found, check whitelist
-        allowed = allowed_commands()
-
-        if base_cmd in allowed do
-          :ok
-        else
-          {:error, "Command not allowed: #{base_cmd}. Allowed: #{Enum.join(allowed, ", ")}"}
-        end
-
-      reason ->
-        {:error, reason}
+    # Check blocked commands first
+    if base_cmd in @blocked_commands do
+      {:error, "Command blocked: #{base_cmd}"}
+    else
+      # Check dangerous patterns
+      case Enum.find_value(@dangerous_patterns, fn {pattern, reason} ->
+             if Regex.match?(pattern, sanitized_command), do: reason
+           end) do
+        nil -> :ok
+        reason -> {:error, reason}
+      end
     end
+  end
+
+  @doc """
+  Get the list of blocked commands.
+  """
+  @spec blocked_commands() :: [String.t()]
+  def blocked_commands do
+    @blocked_commands
   end
 
   defp strip_quoted_segments(command) do
