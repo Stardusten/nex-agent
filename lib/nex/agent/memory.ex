@@ -187,35 +187,35 @@ defmodule Nex.Agent.Memory do
     end
   end
 
-  @deprecated "Memory.append/3 is not part of nanobot parity"
-  def append(_task, _result, _metadata \\ %{}), do: raise("Memory.append/3 is disabled under nanobot parity mode")
+  @deprecated "Memory.append/3 is unavailable in this implementation"
+  def append(_task, _result, _metadata \\ %{}), do: raise("Memory.append/3 is disabled in this implementation")
 
-  @deprecated "Memory.today/0 is not part of nanobot parity"
-  def today, do: raise("Memory.today/0 is disabled under nanobot parity mode")
+  @deprecated "Memory.today/0 is unavailable in this implementation"
+  def today, do: raise("Memory.today/0 is disabled in this implementation")
 
-  @deprecated "Memory.get/1 is not part of nanobot parity"
-  def get(_date), do: raise("Memory.get/1 is disabled under nanobot parity mode")
+  @deprecated "Memory.get/1 is unavailable in this implementation"
+  def get(_date), do: raise("Memory.get/1 is disabled in this implementation")
 
-  @deprecated "Memory.get_range/2 is not part of nanobot parity"
-  def get_range(_from_date, _to_date), do: raise("Memory.get_range/2 is disabled under nanobot parity mode")
+  @deprecated "Memory.get_range/2 is unavailable in this implementation"
+  def get_range(_from_date, _to_date), do: raise("Memory.get_range/2 is disabled in this implementation")
 
-  @deprecated "Memory.search/2 is not part of nanobot parity"
-  def search(_query, _opts \\ []), do: raise("Memory.search/2 is disabled under nanobot parity mode")
+  @deprecated "Memory.search/2 is unavailable in this implementation"
+  def search(_query, _opts \\ []), do: raise("Memory.search/2 is disabled in this implementation")
 
-  @deprecated "Memory.reindex/0 is not part of nanobot parity"
-  def reindex, do: raise("Memory.reindex/0 is disabled under nanobot parity mode")
+  @deprecated "Memory.reindex/0 is unavailable in this implementation"
+  def reindex, do: raise("Memory.reindex/0 is disabled in this implementation")
 
-  @deprecated "Memory.read_all_entries/0 is not part of nanobot parity"
-  def read_all_entries, do: raise("Memory.read_all_entries/0 is disabled under nanobot parity mode")
+  @deprecated "Memory.read_all_entries/0 is unavailable in this implementation"
+  def read_all_entries, do: raise("Memory.read_all_entries/0 is disabled in this implementation")
 
-  @deprecated "Memory.read_history/0 is not part of nanobot parity"
-  def read_history, do: raise("Memory.read_history/0 is disabled under nanobot parity mode")
+  @deprecated "Memory.read_history/0 is unavailable in this implementation"
+  def read_history, do: raise("Memory.read_history/0 is disabled in this implementation")
 
-  @deprecated "Memory.read_memory_sections/0 is not part of nanobot parity"
-  def read_memory_sections, do: raise("Memory.read_memory_sections/0 is disabled under nanobot parity mode")
+  @deprecated "Memory.read_memory_sections/0 is unavailable in this implementation"
+  def read_memory_sections, do: raise("Memory.read_memory_sections/0 is disabled in this implementation")
 
-  @deprecated "Memory.store/1 is not part of nanobot parity"
-  def store(_data), do: raise("Memory.store/1 is disabled under nanobot parity mode")
+  @deprecated "Memory.store/1 is unavailable in this implementation"
+  def store(_data), do: raise("Memory.store/1 is disabled in this implementation")
 
   defp save_memory_tool do
     [

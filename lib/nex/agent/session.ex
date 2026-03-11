@@ -1,7 +1,6 @@
 defmodule Nex.Agent.Session do
   @moduledoc """
   Simple session management - stores messages as list, persists to JSONL.
-  Mirrors nanobot's session/manager.py Session class.
   """
 
   defstruct [

@@ -129,14 +129,14 @@ defmodule Nex.Agent.Security do
   # Commands allowed in test environment (includes extra testing utilities)
   @allowed_commands_test @allowed_commands_prod ++ ["seq", "exit", "test", "sleep"]
 
-  # Core shell deny patterns aligned with nanobot's ExecTool, plus a small
+  # Core shell deny patterns for shell safety, plus a small
   # number of target-aware delete guards to protect obviously destructive paths.
   @dangerous_patterns [
     # Target-aware deletion guards: allow workspace cleanup, block catastrophic targets.
     {~r/\brm\s+(-[^\s]*\s+)*\/(bin|sbin|usr|etc|var|boot|lib|sys|proc)\b/, "Deleting system directories not allowed"},
     {~r/\brm\s+(-[^\s]*\s+)*\/\s*$/, "Deleting from root not allowed"},
     {~r/\brm\s+(-[^\s]*\s+)*~\/?\s*$/, "Deleting entire home directory not allowed"},
-    # nanobot parity: destructive shell commands
+    # Destructive shell commands
     {~r/\bdel\s+\/[fq]\b/, "Forced file deletion not allowed"},
     {~r/\brmdir\s+\/s\b/, "Recursive directory deletion not allowed"},
     {~r/(?:^|[;&|]\s*)format\b/, "Disk formatting not allowed"},

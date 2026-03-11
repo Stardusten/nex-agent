@@ -4,7 +4,7 @@ defmodule Nex.Agent.SecurityTest do
   alias Nex.Agent.Security
   alias Nex.Agent.Tool.Bash
 
-  describe "validate_command/1 nanobot parity deny patterns" do
+  describe "validate_command/1 deny patterns" do
     test "blocks destructive deletion of root" do
       assert {:error, reason} = Security.validate_command("rm -rf /")
       assert reason =~ "Deleting from root not allowed"

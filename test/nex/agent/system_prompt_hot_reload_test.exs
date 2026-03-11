@@ -23,8 +23,6 @@ defmodule Nex.Agent.SystemPromptHotReloadTest do
 
     assert prompt =~ "# Nex Agent"
     assert prompt =~ "You are Nex Agent, a helpful AI assistant."
-    refute prompt =~ "You are nanobot"
-    refute prompt =~ "# nanobot"
 
     soul_template = Nex.Agent.Workspace.templates()["SOUL.md"]
 

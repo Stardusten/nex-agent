@@ -1,7 +1,6 @@
 defmodule Nex.Agent.ContextBuilder do
   @moduledoc """
   Builds context for LLM calls - system prompt + messages.
-  Mirrors nanobot's ContextBuilder.
   """
 
   alias Nex.Agent.Skills

@@ -1,7 +1,6 @@
 defmodule Nex.Agent.SessionManager do
   @moduledoc """
   Session manager - get/create/load/save sessions.
-  Mirrors nanobot's session/manager.py SessionManager class.
   """
 
   use GenServer

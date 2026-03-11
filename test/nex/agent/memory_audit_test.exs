@@ -167,8 +167,8 @@ defmodule Nex.Agent.MemoryAuditTest do
     end
   end
 
-  describe "memory consolidation parity" do
-    test "runner parses list-wrapped tool arguments like nanobot" do
+  describe "memory consolidation" do
+    test "runner parses list-wrapped tool arguments" do
       assert %{"history_entry" => "ok"} =
                Runner.parse_tool_arguments([%{"history_entry" => "ok"}])
     end

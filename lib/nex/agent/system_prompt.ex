@@ -3,7 +3,7 @@ defmodule Nex.Agent.SystemPrompt do
   Thin wrapper over `ContextBuilder.build_system_prompt/1`.
 
   Kept only so existing supervised startup and cache invalidation call sites
-  continue to work after the nanobot parity rewrite.
+  continue to work with the current prompt builder implementation.
   """
 
   use Agent
