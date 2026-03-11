@@ -6,6 +6,7 @@ defmodule NexAgent.MixProject do
       app: :nex_agent,
       version: "0.1.0",
       elixir: "~> 1.18",
+      elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       test_coverage: [summary: [threshold: 0]]
@@ -29,4 +30,6 @@ defmodule NexAgent.MixProject do
       {:dialyxir, "~> 1.4", only: [:dev], runtime: false}
     ]
   end
+
+  defp elixirc_paths(_env), do: ["lib/nex", "lib/mix"]
 end

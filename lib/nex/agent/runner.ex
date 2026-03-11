@@ -13,7 +13,7 @@ defmodule Nex.Agent.Runner do
 
   @default_max_iterations 10
   @max_iterations_hard_limit 50
-  @memory_window 100
+  @memory_window 50
   @max_tool_result_length 8000
   @tool_hint_preview_length 220
 
