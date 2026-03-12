@@ -63,7 +63,7 @@ defmodule Nex.Agent.Tool.ToolList do
       %{
         "name" => name,
         "scope" => "builtin",
-        "layer" => layer_for(module),
+        "layers" => layers_for(module),
         "module" => inspect(module),
         "description" => description_for(module),
         "source_path" => if(module, do: CodeUpgrade.source_path(module), else: nil)
@@ -77,7 +77,7 @@ defmodule Nex.Agent.Tool.ToolList do
       %{
         "name" => tool["name"],
         "scope" => tool["scope"],
-        "layer" => "tool",
+        "layers" => ["tool"],
         "module" => tool["module"],
         "description" => tool["description"],
         "source_path" => tool.source_path,
@@ -100,7 +100,7 @@ defmodule Nex.Agent.Tool.ToolList do
           %{
             "name" => name,
             "scope" => "builtin",
-            "layer" => layer_for(module),
+            "layers" => layers_for(module),
             "module" => inspect(module),
             "description" => description_for(module),
             "source_path" => CodeUpgrade.source_path(module),
@@ -119,7 +119,7 @@ defmodule Nex.Agent.Tool.ToolList do
         %{
           "name" => tool["name"],
           "scope" => tool["scope"],
-          "layer" => "tool",
+          "layers" => ["tool"],
           "module" => tool["module"],
           "description" => tool["description"],
           "source_path" => tool.source_path,
@@ -145,24 +145,24 @@ defmodule Nex.Agent.Tool.ToolList do
       else: nil
   end
 
-  defp layer_for(module) when is_atom(module) do
+  defp layers_for(module) when is_atom(module) do
     if function_exported?(module, :name, 0) do
       case module.name() do
-        "soul_update" -> "soul"
-        "memory_write" -> "user_memory"
-        "skill_create" -> "skill"
-        "skill_list" -> "skill"
-        "tool_create" -> "tool"
-        "tool_list" -> "tool"
-        "tool_delete" -> "tool"
-        "reflect" -> "code"
-        "upgrade_code" -> "code"
-        _ -> "tool"
+        "soul_update" -> ["soul"]
+        "memory_write" -> ["user", "memory"]
+        "skill_create" -> ["skill"]
+        "skill_list" -> ["skill"]
+        "tool_create" -> ["tool"]
+        "tool_list" -> ["tool"]
+        "tool_delete" -> ["tool"]
+        "reflect" -> ["code"]
+        "upgrade_code" -> ["code"]
+        _ -> ["tool"]
       end
     else
-      "tool"
+      ["tool"]
     end
   end
 
-  defp layer_for(_module), do: "tool"
+  defp layers_for(_module), do: ["tool"]
 end

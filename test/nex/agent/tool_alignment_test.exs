@@ -32,16 +32,18 @@ defmodule Nex.Agent.ToolAlignmentTest do
     assert File.read!(Path.join(workspace, "SOUL.md")) =~ "Stay precise."
   end
 
-  test "tool_list exposes code layer for reflect and upgrade_code" do
+  test "tool_list exposes evolution layers without merging user and memory" do
     assert {:ok, result} = ToolList.execute(%{"scope" => "builtin"}, %{})
 
     builtins = result[:builtin]
+    memory_write = Enum.find(builtins, &(&1["name"] == "memory_write"))
     reflect = Enum.find(builtins, &(&1["name"] == "reflect"))
     upgrade = Enum.find(builtins, &(&1["name"] == "upgrade_code"))
     tool_create = Enum.find(builtins, &(&1["name"] == "tool_create"))
 
-    assert reflect["layer"] == "code"
-    assert upgrade["layer"] == "code"
-    assert tool_create["layer"] == "tool"
+    assert memory_write["layers"] == ["user", "memory"]
+    assert reflect["layers"] == ["code"]
+    assert upgrade["layers"] == ["code"]
+    assert tool_create["layers"] == ["tool"]
   end
 end

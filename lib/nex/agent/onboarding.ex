@@ -334,7 +334,8 @@ defmodule Nex.Agent.Onboarding do
     - Web and retrieval: `web_search`, `web_fetch`
     - Scheduling and background work: `cron`, `spawn_task`
     - SOUL layer: `soul_update`
-    - USER/MEMORY layer: `memory_write`
+    - USER layer: `memory_write` with `target=user`
+    - MEMORY layer: `memory_write` with `target=memory`
     - SKILL layer: `skill_list`, `skill_create`
     - TOOL layer: `tool_list`, `tool_create`, `tool_delete`
     - CODE layer: `reflect`, `upgrade_code`
