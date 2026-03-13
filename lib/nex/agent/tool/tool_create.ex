@@ -23,7 +23,8 @@ defmodule Nex.Agent.Tool.ToolCreate do
           description: %{type: "string", description: "What this tool does"},
           content: %{
             type: "string",
-            description: "Complete Elixir module source code implementing the tool"
+            description:
+              "Complete Elixir module source with @behaviour Nex.Agent.Tool.Behaviour and callbacks name/0, description/0, category/0, definition/0, execute/2"
           },
           parameters: %{type: "object", description: "Reserved for future tool generators"}
         },

@@ -83,24 +83,75 @@ defmodule Nex.Agent.UpgradeManager do
 
       msg = "upgrade_code(#{module_short}): #{reason}"
 
-      case System.cmd("git", ["add", source_path], stderr_to_stdout: true) do
-        {_, 0} ->
-          case System.cmd("git", ["commit", "-m", msg], stderr_to_stdout: true) do
-            {_, 0} ->
-              Task.start(fn ->
-                System.cmd("git", ["push"], stderr_to_stdout: true)
-              end)
+      with {:ok, repo_root} <- git_repo_root(),
+           {:ok, repo_relative_source_path} <- git_trackable_source_path(source_path, repo_root) do
+        case System.cmd("git", ["add", repo_relative_source_path],
+               stderr_to_stdout: true,
+               cd: repo_root
+             ) do
+          {_, 0} ->
+            case System.cmd("git", ["commit", "-m", msg], stderr_to_stdout: true, cd: repo_root) do
+              {_, 0} ->
+                Task.start(fn ->
+                  System.cmd("git", ["push"], stderr_to_stdout: true, cd: repo_root)
+                end)
 
-              Logger.info("[UpgradeManager] Committed code upgrade: #{msg}")
+                Logger.info("[UpgradeManager] Committed code upgrade: #{msg}")
 
-            {output, _} ->
-              Logger.debug("[UpgradeManager] Git commit skipped: #{String.trim(output)}")
-          end
+              {output, _} ->
+                Logger.debug("[UpgradeManager] Git commit skipped: #{String.trim(output)}")
+            end
 
-        {output, _} ->
-          Logger.warning("[UpgradeManager] Git add failed: #{String.trim(output)}")
+          {output, _} ->
+            Logger.warning("[UpgradeManager] Git add failed: #{String.trim(output)}")
+        end
+      else
+        {:skip, reason} ->
+          Logger.debug("[UpgradeManager] Git persist skipped: #{reason}")
+
+        {:error, reason} ->
+          Logger.debug("[UpgradeManager] Git persist skipped: #{reason}")
       end
     end)
+  end
+
+  @doc false
+  @spec git_trackable_source_path(String.t(), String.t()) ::
+          {:ok, String.t()} | {:skip, String.t()}
+  def git_trackable_source_path(source_path, repo_root)
+
+  def git_trackable_source_path(source_path, repo_root)
+      when is_binary(source_path) and is_binary(repo_root) do
+    source_abs = Path.expand(source_path)
+    repo_abs = Path.expand(repo_root)
+
+    cond do
+      not File.exists?(source_abs) ->
+        {:skip, "source file does not exist: #{source_abs}"}
+
+      not path_within_repo?(source_abs, repo_abs) ->
+        {:skip, "source outside git repo: #{source_abs}"}
+
+      true ->
+        {:ok, Path.relative_to(source_abs, repo_abs)}
+    end
+  end
+
+  def git_trackable_source_path(_source_path, _repo_root), do: {:skip, "invalid source path"}
+
+  defp git_repo_root do
+    case System.cmd("git", ["rev-parse", "--show-toplevel"], stderr_to_stdout: true) do
+      {output, 0} -> {:ok, String.trim(output)}
+      {output, _} -> {:error, "not in git repo: #{String.trim(output)}"}
+    end
+  end
+
+  defp path_within_repo?(source_abs, repo_abs) do
+    relative = Path.relative_to(source_abs, repo_abs)
+
+    relative == "." or
+      (Path.type(relative) != :absolute and relative != ".." and
+         not String.starts_with?(relative, "../"))
   end
 
   defp get_source_path(module) do

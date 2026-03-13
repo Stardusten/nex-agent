@@ -59,11 +59,13 @@ defmodule Nex.Agent.Tool.Bash do
             {:error, "Command timed out after #{div(timeout, 1000)} seconds"}
 
           {output, exit_code} ->
+            safe_output = sanitize_shell_output(output)
+
             truncated =
-              if byte_size(output) > 50_000 do
-                String.slice(output, 0, 50_000) <> "\n\n[Output truncated]"
+              if byte_size(safe_output) > 50_000 do
+                String.slice(safe_output, 0, 50_000) <> "\n\n[Output truncated]"
               else
-                output
+                safe_output
               end
 
             if exit_code == 0 do
@@ -77,4 +79,19 @@ defmodule Nex.Agent.Tool.Bash do
         {:error, "Security: #{reason}"}
     end
   end
+
+  defp sanitize_shell_output(output) when is_binary(output) do
+    if String.valid?(output) do
+      output
+    else
+      preview =
+        output
+        |> binary_part(0, min(byte_size(output), 256))
+        |> Base.encode64()
+
+      "Binary output (#{byte_size(output)} bytes, base64 preview): #{preview}"
+    end
+  end
+
+  defp sanitize_shell_output(other), do: inspect(other)
 end

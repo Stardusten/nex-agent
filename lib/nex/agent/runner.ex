@@ -303,7 +303,7 @@ defmodule Nex.Agent.Runner do
       |> Enum.map(fn tc ->
         name = get_in(tc, ["function", "name"])
         args = get_in(tc, ["function", "arguments"]) || ""
-        {name, args}
+        {name, tool_loop_signature(name, args)}
       end)
       |> Enum.sort()
 
@@ -799,6 +799,13 @@ defmodule Nex.Agent.Runner do
   defp parse_args([]), do: %{}
   defp parse_args(args) when is_map(args), do: args
   defp parse_args(_), do: %{}
+
+  defp tool_loop_signature("tool_create", args) do
+    parsed = parse_args(args)
+    Map.get(parsed, "name") || Map.get(parsed, :name) || args
+  end
+
+  defp tool_loop_signature(_name, args), do: args
 
   @doc false
   def parse_tool_arguments(args), do: parse_args(args)

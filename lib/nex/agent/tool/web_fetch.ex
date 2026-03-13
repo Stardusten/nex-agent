@@ -65,9 +65,15 @@ defmodule Nex.Agent.Tool.WebFetch do
     ]
 
     case Req.get(url, headers: headers, max_redirects: 5, receive_timeout: 30_000) do
-      {:ok, %{status: 200, body: body}} ->
-        content = extract_content(body, url)
-        {:ok, content}
+      {:ok, %{status: 200, body: body} = response} ->
+        case ensure_text_body(response, body) do
+          {:ok, text_body} ->
+            content = extract_content(text_body, url)
+            {:ok, content}
+
+          {:error, reason} ->
+            {:ok, %{error: reason}}
+        end
 
       {:ok, %{status: status}} ->
         {:ok, %{error: "Failed to fetch: HTTP #{status}"}}
@@ -75,6 +81,44 @@ defmodule Nex.Agent.Tool.WebFetch do
       {:error, reason} ->
         {:ok, %{error: "Failed to fetch: #{inspect(reason)}"}}
     end
+  end
+
+  defp ensure_text_body(response, body) when is_binary(body) do
+    content_type = response_content_type(response)
+
+    cond do
+      content_type != nil and not text_like_content_type?(content_type) ->
+        {:error, "Unsupported non-text response content-type: #{content_type}"}
+
+      not String.valid?(body) ->
+        {:error, "Response body is not valid UTF-8 text"}
+
+      true ->
+        {:ok, body}
+    end
+  end
+
+  defp ensure_text_body(_response, _body), do: {:error, "Response body is not text"}
+
+  defp response_content_type(%{headers: headers}) when is_list(headers) do
+    Enum.find_value(headers, fn
+      {key, value} when is_binary(key) and is_binary(value) ->
+        if String.downcase(key) == "content-type", do: value
+
+      _ ->
+        nil
+    end)
+  end
+
+  defp response_content_type(_), do: nil
+
+  defp text_like_content_type?(content_type) when is_binary(content_type) do
+    down = String.downcase(content_type)
+
+    String.starts_with?(down, "text/") or
+      String.contains?(down, "json") or
+      String.contains?(down, "xml") or
+      String.contains?(down, "javascript")
   end
 
   defp extract_content(html, url) when is_binary(html) do

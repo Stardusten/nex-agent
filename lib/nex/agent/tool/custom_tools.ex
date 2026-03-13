@@ -244,6 +244,9 @@ defmodule Nex.Agent.Tool.CustomTools do
     Code.ensure_loaded(module)
 
     cond do
+      not declares_tool_behaviour?(module) ->
+        {:error, "Tool module must declare @behaviour Nex.Agent.Tool.Behaviour"}
+
       not function_exported?(module, :name, 0) ->
         {:error, "Tool module must export name/0"}
 
@@ -259,6 +262,17 @@ defmodule Nex.Agent.Tool.CustomTools do
       true ->
         :ok
     end
+  end
+
+  defp declares_tool_behaviour?(module) do
+    attributes = module.module_info(:attributes)
+
+    behaviours =
+      attributes
+      |> Keyword.get(:behaviour, [])
+      |> List.wrap()
+
+    Nex.Agent.Tool.Behaviour in behaviours
   end
 
   defp register_module(module) do

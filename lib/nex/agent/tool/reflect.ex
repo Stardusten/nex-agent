@@ -6,7 +6,6 @@ defmodule Nex.Agent.Tool.Reflect do
   @behaviour Nex.Agent.Tool.Behaviour
 
   alias Nex.Agent.CodeUpgrade
-  alias Nex.Agent.Tool.CustomTools
 
   def name, do: "reflect"
 
@@ -36,52 +35,60 @@ defmodule Nex.Agent.Tool.Reflect do
   end
 
   def execute(%{"action" => "list_modules"}, _ctx) do
-    modules = CodeUpgrade.list_upgradable_modules()
+    modules =
+      CodeUpgrade.list_upgradable_modules()
+      |> Enum.reject(&custom_tool_module?/1)
 
     formatted =
       modules
       |> Enum.map_join("\n", fn m ->
         name = m |> to_string() |> String.replace_prefix("Elixir.", "")
-        if CustomTools.custom_module?(m), do: "- #{name} (custom tool)", else: "- #{name}"
+        "- #{name}"
       end)
 
     {:ok, "Upgradable modules (#{length(modules)}):\n#{formatted}"}
   end
 
   def execute(%{"action" => "source", "module" => module_str}, _ctx) do
-    module = String.to_existing_atom("Elixir.#{module_str}")
+    with :ok <- reject_custom_module(module_str) do
+      module = String.to_existing_atom("Elixir.#{module_str}")
 
-    case CodeUpgrade.get_source(module) do
-      {:ok, source} -> {:ok, "# #{module_str}\n\n```elixir\n#{source}\n```"}
-      {:error, reason} -> {:error, reason}
+      case CodeUpgrade.get_source(module) do
+        {:ok, source} -> {:ok, "# #{module_str}\n\n```elixir\n#{source}\n```"}
+        {:error, reason} -> {:error, reason}
+      end
     end
   rescue
     ArgumentError -> {:error, "Unknown module: #{module_str}"}
   end
 
   def execute(%{"action" => "versions", "module" => module_str}, _ctx) do
-    module = String.to_existing_atom("Elixir.#{module_str}")
+    with :ok <- reject_custom_module(module_str) do
+      module = String.to_existing_atom("Elixir.#{module_str}")
 
-    versions = CodeUpgrade.list_versions(module)
+      versions = CodeUpgrade.list_versions(module)
 
-    if versions == [] do
-      {:ok, "No evolution history for #{module_str}"}
-    else
-      formatted =
-        Enum.map_join(versions, "\n", fn v ->
-          "- #{v.id} (#{v.timestamp})"
-        end)
+      if versions == [] do
+        {:ok, "No evolution history for #{module_str}"}
+      else
+        formatted =
+          Enum.map_join(versions, "\n", fn v ->
+            "- #{v.id} (#{v.timestamp})"
+          end)
 
-      {:ok, "Versions for #{module_str}:\n#{formatted}"}
+        {:ok, "Versions for #{module_str}:\n#{formatted}"}
+      end
     end
   rescue
     ArgumentError -> {:error, "Unknown module: #{module_str}"}
   end
 
   def execute(%{"action" => "diff", "module" => module_str, "code" => new_code}, _ctx) do
-    module = String.to_existing_atom("Elixir.#{module_str}")
-    diff = CodeUpgrade.diff(module, new_code)
-    {:ok, diff}
+    with :ok <- reject_custom_module(module_str) do
+      module = String.to_existing_atom("Elixir.#{module_str}")
+      diff = CodeUpgrade.diff(module, new_code)
+      {:ok, diff}
+    end
   rescue
     ArgumentError -> {:error, "Unknown module: #{module_str}"}
   end
@@ -94,4 +101,25 @@ defmodule Nex.Agent.Tool.Reflect do
 
   def execute(_args, _ctx),
     do: {:error, "action is required (source, versions, diff, list_modules)"}
+
+  defp reject_custom_module(module_str) do
+    if custom_tool_module?(module_str) do
+      {:error,
+       "reflect is for CODE-layer framework modules. For workspace custom tools, inspect/edit files in workspace/tools."}
+    else
+      :ok
+    end
+  end
+
+  defp custom_tool_module?(module) when is_atom(module) do
+    module
+    |> Atom.to_string()
+    |> String.starts_with?("Elixir.Nex.Agent.Tool.Custom.")
+  end
+
+  defp custom_tool_module?(module_str) when is_binary(module_str) do
+    String.starts_with?(module_str, "Nex.Agent.Tool.Custom.")
+  end
+
+  defp custom_tool_module?(_), do: false
 end

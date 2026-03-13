@@ -60,7 +60,7 @@ defmodule Nex.Agent.Session do
       msg =
         %{
           "role" => role,
-          "content" => content,
+          "content" => sanitize_message_content(content),
           "timestamp" => DateTime.utc_now() |> DateTime.to_iso8601()
         }
         |> Map.merge(extra)
@@ -95,7 +95,7 @@ defmodule Nex.Agent.Session do
   defp sanitize_history_entry(m) do
     entry = %{
       "role" => Map.get(m, "role"),
-      "content" => Map.get(m, "content", "") || ""
+      "content" => sanitize_message_content(Map.get(m, "content", "") || "")
     }
 
     entry =
@@ -229,4 +229,21 @@ defmodule Nex.Agent.Session do
       _ -> DateTime.utc_now()
     end
   end
+
+  defp sanitize_message_content(nil), do: ""
+
+  defp sanitize_message_content(content) when is_binary(content) do
+    if String.valid?(content) do
+      content
+    else
+      preview =
+        content
+        |> binary_part(0, min(byte_size(content), 256))
+        |> Base.encode64()
+
+      "Binary output (#{byte_size(content)} bytes, base64 preview): #{preview}"
+    end
+  end
+
+  defp sanitize_message_content(content), do: inspect(content, printable_limit: 500, limit: 50)
 end
