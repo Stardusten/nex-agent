@@ -15,7 +15,7 @@ defmodule Nex.Agent.ContextBuilder do
   """
   @spec build_system_prompt(keyword()) :: String.t()
   def build_system_prompt(opts \\ []) do
-    workspace = Keyword.get(opts, :workspace, default_workspace())
+    workspace = Keyword.get(opts, :workspace) || default_workspace()
     skip_skills = Keyword.get(opts, :skip_skills, false)
 
     parts =

@@ -370,6 +370,8 @@ defmodule Mix.Tasks.Nex.Agent do
       System.halt(1)
     end
 
+    ensure_app_started()
+
     Nex.Agent.Onboarding.ensure_initialized()
 
     {:ok, agent} =
@@ -391,6 +393,8 @@ defmodule Mix.Tasks.Nex.Agent do
       Mix.shell().error("No API key. Run: mix nex.agent onboard")
       System.halt(1)
     end
+
+    ensure_app_started()
 
     Nex.Agent.Onboarding.ensure_initialized()
 
