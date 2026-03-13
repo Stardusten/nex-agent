@@ -17,6 +17,7 @@ defmodule Nex.Agent.Tool.UserUpdate do
     - Role and work context
     - Any specific instructions for how you should behave
 
+    Use `action=append` for incremental profile updates and `action=set` for full profile regeneration.
     This file is loaded into every session to personalize interactions.
     """
   end
@@ -32,16 +33,12 @@ defmodule Nex.Agent.Tool.UserUpdate do
         properties: %{
           action: %{
             type: "string",
-            enum: ["add", "replace", "remove"],
+            enum: ["append", "set"],
             description: "How to update the profile"
           },
           content: %{
             type: "string",
-            description: "New content for add/replace operations"
-          },
-          old_text: %{
-            type: "string",
-            description: "Exact text to replace or remove (required for replace/remove)"
+            description: "New profile content for append/set operations"
           }
         },
         required: ["action"]
@@ -56,14 +53,11 @@ defmodule Nex.Agent.Tool.UserUpdate do
     current = Memory.read_user_profile(workspace: workspace)
 
     case action do
-      "add" ->
-        do_add(current, Map.get(args, "content"), workspace)
+      "append" ->
+        do_append(current, Map.get(args, "content"), workspace)
 
-      "replace" ->
-        do_replace(current, Map.get(args, "old_text"), Map.get(args, "content"), workspace)
-
-      "remove" ->
-        do_remove(current, Map.get(args, "old_text"), workspace)
+      "set" ->
+        do_set(Map.get(args, "content"), workspace)
 
       _ ->
         {:error, "Unknown action: #{action}"}
@@ -74,68 +68,62 @@ defmodule Nex.Agent.Tool.UserUpdate do
 
   # Private functions for user profile operations
 
-  defp do_add(_current, nil, _workspace), do: {:error, "content is required for add"}
-  defp do_add(_current, "", _workspace), do: {:error, "content is required for add"}
+  defp do_append(_current, nil, _workspace), do: {:error, "content is required for append"}
+  defp do_append(_current, "", _workspace), do: {:error, "content is required for append"}
 
-  defp do_add(current, content, workspace) do
+  defp do_append(current, content, workspace) do
     trimmed = String.trim(content)
 
     if trimmed == "" do
-      {:error, "content is required for add"}
+      {:error, "content is required for append"}
     else
       updated =
-        if String.trim(current) == "" do
-          "# User Profile\n\n#{trimmed}\n"
-        else
-          String.trim_trailing(current) <> "\n\n" <> trimmed <> "\n"
+        cond do
+          String.trim(current) == "" ->
+            "# User Profile\n\n#{trimmed}\n"
+
+          true ->
+            upsert_or_append_profile_line(current, trimmed)
         end
 
       Memory.write_user_profile(updated, workspace: workspace)
-      {:ok, "User profile updated (added)."}
+      {:ok, "User profile updated (appended)."}
     end
   end
 
-  defp do_replace(_current, nil, _content, _workspace),
-    do: {:error, "old_text is required for replace"}
+  defp upsert_or_append_profile_line(current, new_line) do
+    case profile_field_key(new_line) do
+      {:ok, key} ->
+        pattern = ~r/^- \*\*#{Regex.escape(key)}\*\*:\s?.*$/m
 
-  defp do_replace(_current, "", _content, _workspace),
-    do: {:error, "old_text is required for replace"}
+        if Regex.match?(pattern, current) do
+          Regex.replace(pattern, current, new_line, global: false)
+        else
+          String.trim_trailing(current) <> "\n\n" <> new_line <> "\n"
+        end
 
-  defp do_replace(_current, _old_text, nil, _workspace),
-    do: {:error, "content is required for replace"}
-
-  defp do_replace(_current, _old_text, "", _workspace),
-    do: {:error, "content is required for replace"}
-
-  defp do_replace(current, old_text, new_content, workspace) do
-    case String.split(current, old_text, parts: 2) do
-      [prefix, suffix] when suffix != current ->
-        updated = prefix <> new_content <> suffix
-        Memory.write_user_profile(updated, workspace: workspace)
-        {:ok, "User profile updated (replaced)."}
-
-      _ ->
-        {:error, "old_text not found in user profile"}
+      :error ->
+        if String.contains?(current, new_line) do
+          current
+        else
+          String.trim_trailing(current) <> "\n\n" <> new_line <> "\n"
+        end
     end
   end
 
-  defp do_remove(_current, nil, _workspace), do: {:error, "old_text is required for remove"}
-  defp do_remove(_current, "", _workspace), do: {:error, "old_text is required for remove"}
-
-  defp do_remove(current, old_text, workspace) do
-    case String.split(current, old_text, parts: 2) do
-      [prefix, suffix] when suffix != current ->
-        updated =
-          (prefix <> suffix)
-          |> String.replace(~r/\n{3,}/, "\n\n")
-          |> String.trim_trailing()
-          |> Kernel.<>("\n")
-
-        Memory.write_user_profile(updated, workspace: workspace)
-        {:ok, "User profile updated (removed)."}
-
-      _ ->
-        {:error, "old_text not found in user profile"}
+  defp profile_field_key(line) do
+    case Regex.named_captures(~r/^- \*\*(?<key>[^*]+)\*\*:\s?.*$/, line) do
+      %{"key" => key} when is_binary(key) and key != "" -> {:ok, key}
+      _ -> :error
     end
+  end
+
+  defp do_set(nil, _workspace), do: {:error, "content is required for set"}
+  defp do_set("", _workspace), do: {:error, "content is required for set"}
+
+  defp do_set(new_content, workspace) do
+    updated = String.trim_trailing(new_content) <> "\n"
+    Memory.write_user_profile(updated, workspace: workspace)
+    {:ok, "User profile updated (set)."}
   end
 end

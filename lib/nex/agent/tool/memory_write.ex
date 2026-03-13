@@ -20,6 +20,7 @@ defmodule Nex.Agent.Tool.MemoryWrite do
     For user preferences and profile information, use user_update instead.
     For identity and behavioral guidelines, use soul_update instead.
 
+    Use `action=append` for incremental facts and `action=set` for full document regeneration.
     Skip one-off outputs and temporary data.
     """
   end
@@ -35,16 +36,12 @@ defmodule Nex.Agent.Tool.MemoryWrite do
         properties: %{
           action: %{
             type: "string",
-            enum: ["add", "replace", "remove"],
+            enum: ["append", "set"],
             description: "How to update memory"
           },
           content: %{
             type: "string",
-            description: "Memory content for add/replace operations"
-          },
-          old_text: %{
-            type: "string",
-            description: "Exact text to replace or remove (required for replace/remove)"
+            description: "Memory content for append/set operations"
           }
         },
         required: ["action"]
@@ -60,7 +57,6 @@ defmodule Nex.Agent.Tool.MemoryWrite do
            action,
            "memory",
            Map.get(args, "content"),
-           Map.get(args, "old_text"),
            workspace: workspace
          ) do
       {:ok, %{action: saved_action}} ->

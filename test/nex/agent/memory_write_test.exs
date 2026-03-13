@@ -24,7 +24,7 @@ defmodule Nex.Agent.MemoryWriteTest do
     assert {:ok, _} =
              MemoryWrite.execute(
                %{
-                 "action" => "add",
+                 "action" => "append",
                  "content" => "Project uses OTP supervision."
                },
                %{workspace: workspace}
@@ -33,7 +33,7 @@ defmodule Nex.Agent.MemoryWriteTest do
     assert Memory.read_long_term(workspace: workspace) =~ "Project uses OTP supervision."
   end
 
-  test "memory_write replace and remove work", %{workspace: workspace} do
+  test "memory_write set replaces full memory and append adds content", %{workspace: workspace} do
     :ok =
       Memory.write_long_term("# Long-term Memory\n\nTech stack: Elixir/OTP\n",
         workspace: workspace
@@ -42,9 +42,8 @@ defmodule Nex.Agent.MemoryWriteTest do
     assert {:ok, _} =
              MemoryWrite.execute(
                %{
-                 "action" => "replace",
-                 "old_text" => "Elixir/OTP",
-                 "content" => "Elixir/OTP with Phoenix"
+                 "action" => "set",
+                 "content" => "# Long-term Memory\n\nTech stack: Elixir/OTP with Phoenix\n"
                },
                %{workspace: workspace}
              )
@@ -54,12 +53,12 @@ defmodule Nex.Agent.MemoryWriteTest do
     assert {:ok, _} =
              MemoryWrite.execute(
                %{
-                 "action" => "remove",
-                 "old_text" => "Tech stack: Elixir/OTP with Phoenix\n"
+                 "action" => "append",
+                 "content" => "Deployment: fly.io"
                },
                %{workspace: workspace}
              )
 
-    refute Memory.read_long_term(workspace: workspace) =~ "Tech stack"
+    assert Memory.read_long_term(workspace: workspace) =~ "Deployment: fly.io"
   end
 end

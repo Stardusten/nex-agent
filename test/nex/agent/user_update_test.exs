@@ -24,7 +24,7 @@ defmodule Nex.Agent.UserUpdateTest do
     assert {:ok, _} =
              UserUpdate.execute(
                %{
-                 "action" => "add",
+                 "action" => "append",
                  "content" => "Prefers concise Chinese responses."
                },
                %{workspace: workspace}
@@ -33,31 +33,46 @@ defmodule Nex.Agent.UserUpdateTest do
     assert Memory.read_user_profile(workspace: workspace) =~ "Prefers concise Chinese responses."
   end
 
-  test "user_update replace and remove work", %{workspace: workspace} do
+  test "user_update add upserts an existing profile field instead of duplicating", %{
+    workspace: workspace
+  } do
+    :ok =
+      Memory.write_user_profile(
+        "# User Profile\n\n## Basic Information\n\n- **Name**: (user's name)\n",
+        workspace: workspace
+      )
+
+    assert {:ok, _} =
+             UserUpdate.execute(
+               %{
+                 "action" => "append",
+                 "content" => "- **Name**: fenix"
+               },
+               %{workspace: workspace}
+             )
+
+    profile = Memory.read_user_profile(workspace: workspace)
+    assert profile =~ "- **Name**: fenix"
+    refute profile =~ "(user's name)"
+    assert length(Regex.scan(~r/^- \*\*Name\*\*:/m, profile)) == 1
+  end
+
+  test "user_update set replaces profile", %{workspace: workspace} do
     :ok =
       Memory.write_user_profile("Name: fenix\nTimezone: Asia/Shanghai\n", workspace: workspace)
 
     assert {:ok, _} =
              UserUpdate.execute(
                %{
-                 "action" => "replace",
-                 "old_text" => "Asia/Shanghai",
-                 "content" => "UTC+8"
+                 "action" => "set",
+                 "content" =>
+                   "# User Profile\n\n## Basic Information\n\n- **Name**: fenix\n- **Timezone**: UTC+8\n"
                },
                %{workspace: workspace}
              )
 
-    assert Memory.read_user_profile(workspace: workspace) =~ "UTC+8"
-
-    assert {:ok, _} =
-             UserUpdate.execute(
-               %{
-                 "action" => "remove",
-                 "old_text" => "Name: fenix"
-               },
-               %{workspace: workspace}
-             )
-
-    refute Memory.read_user_profile(workspace: workspace) =~ "Name: fenix"
+    profile = Memory.read_user_profile(workspace: workspace)
+    assert profile =~ "- **Name**: fenix"
+    assert profile =~ "- **Timezone**: UTC+8"
   end
 end

@@ -55,8 +55,7 @@ defmodule Nex.Agent.RunnerEvolutionTest do
               function: %{
                 name: "memory_write",
                 arguments: %{
-                  "action" => "add",
-                  "target" => "memory",
+                  "action" => "append",
                   "content" => "Project uses runtime nudges."
                 }
               }

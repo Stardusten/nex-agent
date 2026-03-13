@@ -1021,8 +1021,8 @@ defmodule Nex.Agent.Runner do
       else
         prompt = """
         Review this conversation excerpt before archival. If it contains one durable fact worth saving,
-        call memory_write exactly once. Choose target=user for stable user profile details, or target=memory
-        for durable project/environment/workflow knowledge. If nothing is worth saving, do not call any tool.
+        call memory_write exactly once with action=append or action=set for durable project/environment/workflow knowledge.
+        Do not write user profile facts here. If nothing is worth saving, do not call any tool.
 
         ## USER.md
         #{Memory.read_user_profile(workspace: Keyword.get(opts, :workspace))}
@@ -1061,9 +1061,8 @@ defmodule Nex.Agent.Runner do
             _ =
               Memory.apply_memory_write(
                 Map.get(args, "action"),
-                Map.get(args, "target"),
+                "memory",
                 Map.get(args, "content"),
-                Map.get(args, "old_text"),
                 workspace: Keyword.get(opts, :workspace)
               )
 

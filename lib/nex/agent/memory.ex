@@ -100,21 +100,18 @@ defmodule Nex.Agent.Memory do
   @doc """
   Apply a direct memory write operation to MEMORY.md or USER.md.
   """
-  @spec apply_memory_write(String.t(), String.t(), String.t() | nil, String.t() | nil, keyword()) ::
+  @spec apply_memory_write(String.t(), String.t(), String.t() | nil, keyword()) ::
           {:ok, map()} | {:error, String.t()}
-  def apply_memory_write(action, target, content, old_text, opts \\ []) do
+  def apply_memory_write(action, target, content, opts \\ []) do
     target = normalize_target(target)
     current = read_target(target, opts)
 
     case action do
-      "add" ->
-        do_add_memory(target, current, content, opts)
+      "append" ->
+        do_append_memory(target, current, content, opts)
 
-      "replace" ->
-        do_replace_memory(target, current, old_text, content, opts)
-
-      "remove" ->
-        do_remove_memory(target, current, old_text, opts)
+      "set" ->
+        do_set_memory(target, content, opts)
 
       other ->
         {:error, "Unsupported memory action: #{inspect(other)}"}
@@ -348,7 +345,10 @@ defmodule Nex.Agent.Memory do
   end
 
   defp workspace_path(opts) do
-    Keyword.get(opts, :workspace, workspace_path())
+    case Keyword.get(opts, :workspace) do
+      nil -> workspace_path()
+      workspace -> workspace
+    end
   end
 
   defp workspace_opts(nil), do: []
@@ -379,14 +379,17 @@ defmodule Nex.Agent.Memory do
     :ok
   end
 
-  defp do_add_memory(_target, _current, nil, _opts), do: {:error, "content is required for add"}
-  defp do_add_memory(_target, _current, "", _opts), do: {:error, "content is required for add"}
+  defp do_append_memory(_target, _current, nil, _opts),
+    do: {:error, "content is required for append"}
 
-  defp do_add_memory(target, current, content, opts) do
+  defp do_append_memory(_target, _current, "", _opts),
+    do: {:error, "content is required for append"}
+
+  defp do_append_memory(target, current, content, opts) do
     trimmed = String.trim(content)
 
     if trimmed == "" do
-      {:error, "content is required for add"}
+      {:error, "content is required for append"}
     else
       updated =
         cond do
@@ -401,51 +404,17 @@ defmodule Nex.Agent.Memory do
         end
 
       :ok = write_target(target, updated, opts)
-      {:ok, %{target: target, action: "add", content: trimmed}}
+      {:ok, %{target: target, action: "append", content: trimmed}}
     end
   end
 
-  defp do_replace_memory(_target, _current, old_text, _content, _opts)
-       when old_text in [nil, ""] do
-    {:error, "old_text is required for replace"}
-  end
+  defp do_set_memory(_target, nil, _opts), do: {:error, "content is required for set"}
+  defp do_set_memory(_target, "", _opts), do: {:error, "content is required for set"}
 
-  defp do_replace_memory(_target, _current, _old_text, new_content, _opts)
-       when new_content in [nil, ""] do
-    {:error, "content is required for replace"}
-  end
-
-  defp do_replace_memory(target, current, old_text, new_content, opts) do
-    case String.split(current, old_text, parts: 2) do
-      [prefix, suffix] when suffix != current ->
-        updated = prefix <> new_content <> suffix
-        :ok = write_target(target, updated, opts)
-        {:ok, %{target: target, action: "replace", old_text: old_text}}
-
-      _ ->
-        {:error, "old_text not found in #{target}"}
-    end
-  end
-
-  defp do_remove_memory(_target, _current, old_text, _opts) when old_text in [nil, ""] do
-    {:error, "old_text is required for remove"}
-  end
-
-  defp do_remove_memory(target, current, old_text, opts) do
-    case String.split(current, old_text, parts: 2) do
-      [prefix, suffix] when suffix != current ->
-        updated =
-          (prefix <> suffix)
-          |> String.replace(~r/\n{3,}/, "\n\n")
-          |> String.trim_trailing()
-          |> Kernel.<>("\n")
-
-        :ok = write_target(target, updated, opts)
-        {:ok, %{target: target, action: "remove", old_text: old_text}}
-
-      _ ->
-        {:error, "old_text not found in #{target}"}
-    end
+  defp do_set_memory(target, content, opts) do
+    updated = String.trim_trailing(content) <> "\n"
+    :ok = write_target(target, updated, opts)
+    {:ok, %{target: target, action: "set"}}
   end
 
   defp tool_choice_for(:anthropic, name), do: %{type: "tool", name: name}

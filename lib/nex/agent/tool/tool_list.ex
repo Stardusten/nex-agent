@@ -149,7 +149,8 @@ defmodule Nex.Agent.Tool.ToolList do
     if function_exported?(module, :name, 0) do
       case module.name() do
         "soul_update" -> ["soul"]
-        "memory_write" -> ["user", "memory"]
+        "user_update" -> ["user"]
+        "memory_write" -> ["memory"]
         "skill_create" -> ["skill"]
         "skill_list" -> ["skill"]
         "tool_create" -> ["tool"]

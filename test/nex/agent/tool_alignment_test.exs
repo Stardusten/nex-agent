@@ -63,7 +63,7 @@ defmodule Nex.Agent.ToolAlignmentTest do
     assert File.read!(Path.join(workspace, "SOUL.md")) =~ "Stay precise."
   end
 
-  test "tool_list exposes evolution layers without merging user and memory" do
+  test "tool_list exposes split user and memory layers" do
     assert {:ok, result} = ToolList.execute(%{"scope" => "builtin"}, %{})
 
     builtins = result[:builtin]
@@ -72,7 +72,7 @@ defmodule Nex.Agent.ToolAlignmentTest do
     upgrade = Enum.find(builtins, &(&1["name"] == "upgrade_code"))
     tool_create = Enum.find(builtins, &(&1["name"] == "tool_create"))
 
-    assert memory_write["layers"] == ["user", "memory"]
+    assert memory_write["layers"] == ["memory"]
     assert reflect["layers"] == ["code"]
     assert upgrade["layers"] == ["code"]
     assert tool_create["layers"] == ["tool"]
