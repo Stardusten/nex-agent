@@ -10,7 +10,6 @@ defmodule Nex.Agent.MemoryWriteTest do
 
     File.mkdir_p!(Path.join(workspace, "memory"))
     File.write!(Path.join(workspace, "memory/MEMORY.md"), "# Long-term Memory\n")
-    File.write!(Path.join(workspace, "USER.md"), "# User Profile\n")
     Application.put_env(:nex_agent, :workspace_path, workspace)
 
     on_exit(fn ->
@@ -21,12 +20,11 @@ defmodule Nex.Agent.MemoryWriteTest do
     {:ok, workspace: workspace}
   end
 
-  test "memory_write writes MEMORY.md for target=memory", %{workspace: workspace} do
+  test "memory_write writes MEMORY.md", %{workspace: workspace} do
     assert {:ok, _} =
              MemoryWrite.execute(
                %{
                  "action" => "add",
-                 "target" => "memory",
                  "content" => "Project uses OTP supervision."
                },
                %{workspace: workspace}
@@ -35,43 +33,33 @@ defmodule Nex.Agent.MemoryWriteTest do
     assert Memory.read_long_term(workspace: workspace) =~ "Project uses OTP supervision."
   end
 
-  test "memory_write writes USER.md for target=user", %{workspace: workspace} do
-    assert {:ok, _} =
-             MemoryWrite.execute(
-               %{
-                 "action" => "add",
-                 "target" => "user",
-                 "content" => "Prefers concise Chinese responses."
-               },
-               %{workspace: workspace}
-             )
-
-    assert Memory.read_user_profile(workspace: workspace) =~ "Prefers concise Chinese responses."
-  end
-
-  test "replace and remove are stable", %{workspace: workspace} do
+  test "memory_write replace and remove work", %{workspace: workspace} do
     :ok =
-      Memory.write_user_profile("Name: fenix\nTimezone: Asia/Shanghai\n", workspace: workspace)
+      Memory.write_long_term("# Long-term Memory\n\nTech stack: Elixir/OTP\n",
+        workspace: workspace
+      )
 
     assert {:ok, _} =
              MemoryWrite.execute(
                %{
                  "action" => "replace",
-                 "target" => "user",
-                 "old_text" => "Asia/Shanghai",
-                 "content" => "UTC+8"
+                 "old_text" => "Elixir/OTP",
+                 "content" => "Elixir/OTP with Phoenix"
                },
                %{workspace: workspace}
              )
 
-    assert Memory.read_user_profile(workspace: workspace) =~ "UTC+8"
+    assert Memory.read_long_term(workspace: workspace) =~ "Phoenix"
 
     assert {:ok, _} =
              MemoryWrite.execute(
-               %{"action" => "remove", "target" => "user", "old_text" => "Name: fenix"},
+               %{
+                 "action" => "remove",
+                 "old_text" => "Tech stack: Elixir/OTP with Phoenix\n"
+               },
                %{workspace: workspace}
              )
 
-    refute Memory.read_user_profile(workspace: workspace) =~ "Name: fenix"
+    refute Memory.read_long_term(workspace: workspace) =~ "Tech stack"
   end
 end

@@ -9,16 +9,18 @@ defmodule Nex.Agent.Tool.MemoryWrite do
 
   def description do
     """
-    Persist important long-term information to either the USER layer or the MEMORY layer, depending on target.
+    Persist important long-term information to MEMORY.md.
 
-    Use this when you learn something that should survive future sessions.
+    Use this for durable facts that should survive future sessions:
+    - Environment setup and project conventions
+    - Workflow lessons and discovered patterns
+    - Important context about ongoing work
+    - Lessons learned from mistakes
 
-    Save to:
-    - target=user: stable information about the user, preferences, communication style, timezone, role
-    - target=memory: environment facts, project conventions, workflow lessons, important context
+    For user preferences and profile information, use user_update instead.
+    For identity and behavioral guidelines, use soul_update instead.
 
-    Prefer this after meaningful user corrections, durable discoveries, or complex tasks.
-    Skip one-off outputs, temporary data, and facts that can be trivially rediscovered.
+    Skip one-off outputs and temporary data.
     """
   end
 
@@ -36,42 +38,38 @@ defmodule Nex.Agent.Tool.MemoryWrite do
             enum: ["add", "replace", "remove"],
             description: "How to update memory"
           },
-          target: %{
-            type: "string",
-            enum: ["memory", "user"],
-            description: "Which persistent store to update"
-          },
           content: %{
             type: "string",
-            description: "Memory content for add/replace"
+            description: "Memory content for add/replace operations"
           },
           old_text: %{
             type: "string",
-            description: "Stable substring to replace or remove"
+            description: "Exact text to replace or remove (required for replace/remove)"
           }
         },
-        required: ["action", "target"]
+        required: ["action"]
       }
     }
   end
 
-  def execute(%{"action" => action, "target" => target} = args, ctx) do
+  def execute(%{"action" => action} = args, ctx) do
     workspace = Map.get(ctx, :workspace) || Map.get(ctx, "workspace")
 
+    # Always use "memory" target
     case Memory.apply_memory_write(
            action,
-           target,
+           "memory",
            Map.get(args, "content"),
            Map.get(args, "old_text"),
            workspace: workspace
          ) do
-      {:ok, %{target: saved_target, action: saved_action}} ->
-        {:ok, "Memory #{saved_action} saved to #{saved_target}."}
+      {:ok, %{action: saved_action}} ->
+        {:ok, "Memory #{saved_action} saved."}
 
       {:error, reason} ->
         {:error, reason}
     end
   end
 
-  def execute(_args, _ctx), do: {:error, "action and target are required"}
+  def execute(_args, _ctx), do: {:error, "action is required"}
 end
