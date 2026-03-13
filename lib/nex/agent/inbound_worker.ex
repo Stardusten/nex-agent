@@ -169,6 +169,7 @@ defmodule Nex.Agent.InboundWorker do
     channel = Map.get(payload, :channel) || Map.get(payload, "channel") || "unknown"
     chat_id = payload_chat_id(payload)
     content = Map.get(payload, :content) || Map.get(payload, "content") || ""
+    content = normalize_inbound_content(content)
     cmd = String.trim(content)
     key = session_key(channel, chat_id)
 
@@ -443,6 +444,10 @@ defmodule Nex.Agent.InboundWorker do
   end
 
   defp suppress_outbound?(_), do: false
+
+  defp normalize_inbound_content(content) when is_binary(content), do: content
+  defp normalize_inbound_content(nil), do: ""
+  defp normalize_inbound_content(content), do: inspect(content, printable_limit: 500, limit: 50)
 
   defp payload_chat_id(payload) do
     (Map.get(payload, :chat_id) || Map.get(payload, "chat_id") || "")
