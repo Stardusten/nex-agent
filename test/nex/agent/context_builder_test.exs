@@ -30,7 +30,7 @@ defmodule Nex.Agent.ContextBuilderTest do
     assert prompt =~ "- SKILL: reusable multi-step workflows and procedural knowledge"
   end
 
-  test "runtime system messages are injected without becoming user content", %{
+  test "runtime system messages are merged into system prompt", %{
     workspace: workspace
   } do
     messages =
@@ -39,11 +39,16 @@ defmodule Nex.Agent.ContextBuilderTest do
         runtime_system_messages: ["[Runtime Evolution Nudge] Save durable knowledge if needed."]
       )
 
-    assert Enum.at(messages, 1) == %{
-             "role" => "system",
-             "content" => "[Runtime Evolution Nudge] Save durable knowledge if needed."
-           }
+    # Should have only one system message (merged with runtime nudges)
+    system_messages = Enum.filter(messages, fn m -> m["role"] == "system" end)
+    assert length(system_messages) == 1
 
+    # The system message should contain both the base prompt and the nudge
+    system_content = hd(system_messages)["content"]
+    assert system_content =~ "Nex Agent"
+    assert system_content =~ "[Runtime Evolution Nudge]"
+
+    # User message should not contain the nudge
     assert List.last(messages)["role"] == "user"
     refute List.last(messages)["content"] =~ "[Runtime Evolution Nudge]"
   end

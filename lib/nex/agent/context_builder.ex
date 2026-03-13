@@ -220,9 +220,19 @@ defmodule Nex.Agent.ContextBuilder do
         [%{"type" => "text", "text" => runtime_ctx} | user_content]
       end
 
+    # Merge runtime system messages into main system prompt to ensure only one system message
+    system_content =
+      case runtime_system_messages do
+        [] ->
+          build_system_prompt(opts)
+
+        messages when is_list(messages) ->
+          nudge_content = Enum.join(messages, "\n\n")
+          build_system_prompt(opts) <> "\n\n---\n\n" <> nudge_content
+      end
+
     [
-      %{"role" => "system", "content" => build_system_prompt(opts)},
-      Enum.map(runtime_system_messages, &%{"role" => "system", "content" => &1}),
+      %{"role" => "system", "content" => system_content},
       Enum.map(history, &clean_history_entry/1),
       %{"role" => "user", "content" => merged}
     ]
