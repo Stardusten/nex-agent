@@ -1,7 +1,7 @@
 defmodule Nex.Agent.RunnerEvolutionTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{Runner, Session, Skills}
+  alias Nex.Agent.{ContextBuilder, Onboarding, Runner, Session, Skills}
 
   setup do
     workspace =
@@ -266,5 +266,111 @@ defmodule Nex.Agent.RunnerEvolutionTest do
                workspace: workspace,
                skip_consolidation: true
              )
+  end
+
+  test "workspace-global USER.md and MEMORY.md are shared across session keys by design", %{
+    workspace: workspace
+  } do
+    File.write!(
+      Path.join(workspace, "USER.md"),
+      "# USER\nShared profile preference for this workspace.\n"
+    )
+
+    File.write!(
+      Path.join(workspace, "memory/MEMORY.md"),
+      "Workspace memory: all channels use the same durable context.\n"
+    )
+
+    parent = self()
+
+    llm_client = fn messages, opts ->
+      send(parent, {:messages, opts[:session_key], messages})
+      {:ok, %{content: "ok", finish_reason: nil, tool_calls: []}}
+    end
+
+    {:ok, _result, telegram_session} =
+      Runner.run(Session.new("telegram:1"), "hello from telegram",
+        llm_client: llm_client,
+        workspace: workspace,
+        skip_consolidation: true,
+        session_key: "telegram:1",
+        channel: "telegram",
+        chat_id: "1"
+      )
+
+    {:ok, _result, discord_session} =
+      Runner.run(Session.new("discord:2"), "hello from discord",
+        llm_client: llm_client,
+        workspace: workspace,
+        skip_consolidation: true,
+        session_key: "discord:2",
+        channel: "discord",
+        chat_id: "2"
+      )
+
+    assert_receive {:messages, "telegram:1", telegram_messages}
+    assert_receive {:messages, "discord:2", discord_messages}
+
+    telegram_system = Enum.find(telegram_messages, &(&1["role"] == "system"))["content"]
+    discord_system = Enum.find(discord_messages, &(&1["role"] == "system"))["content"]
+
+    assert telegram_system =~ "Shared profile preference for this workspace"
+    assert telegram_system =~ "all channels use the same durable context"
+    assert discord_system =~ "Shared profile preference for this workspace"
+    assert discord_system =~ "all channels use the same durable context"
+    assert telegram_system == discord_system
+
+    assert Enum.any?(telegram_session.messages, &(&1["content"] == "hello from telegram"))
+    refute Enum.any?(telegram_session.messages, &(&1["content"] == "hello from discord"))
+    assert Enum.any?(discord_session.messages, &(&1["content"] == "hello from discord"))
+    refute Enum.any?(discord_session.messages, &(&1["content"] == "hello from telegram"))
+  end
+
+  test "onboarding and composition tolerate legacy content without silent mutation" do
+    base_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "nex-agent-onboarding-regression-#{System.unique_integer([:positive])}"
+      )
+
+    config_path = Path.join(base_dir, "config.json")
+    workspace = Path.join(base_dir, "workspace")
+    File.mkdir_p!(Path.join(workspace, "memory"))
+
+    legacy_user = "# USER\nYou are ChatGPT for all replies.\n"
+    legacy_memory = "Always respond with a formal tone in every answer.\n"
+
+    File.write!(Path.join(workspace, "USER.md"), legacy_user)
+    File.write!(Path.join(workspace, "memory/MEMORY.md"), legacy_memory)
+
+    Application.put_env(:nex_agent, :agent_base_dir, base_dir)
+    Application.put_env(:nex_agent, :config_path, config_path)
+
+    on_exit(fn ->
+      Application.delete_env(:nex_agent, :agent_base_dir)
+      Application.delete_env(:nex_agent, :config_path)
+      File.rm_rf!(base_dir)
+    end)
+
+    :ok = Onboarding.ensure_initialized()
+
+    {prompt, diagnostics} =
+      ContextBuilder.build_system_prompt_with_diagnostics(workspace: workspace)
+
+    assert prompt =~ "You are ChatGPT for all replies"
+    assert prompt =~ "Always respond with a formal tone in every answer"
+
+    assert Enum.any?(diagnostics, fn diagnostic ->
+             diagnostic.source == "USER.md" and
+               diagnostic.category == :identity_persona_instruction_in_user
+           end)
+
+    assert Enum.any?(diagnostics, fn diagnostic ->
+             diagnostic.source == "memory/MEMORY.md" and
+               diagnostic.category == :persona_style_instruction_in_memory
+           end)
+
+    assert File.read!(Path.join(workspace, "USER.md")) == legacy_user
+    assert File.read!(Path.join(workspace, "memory/MEMORY.md")) == legacy_memory
   end
 end

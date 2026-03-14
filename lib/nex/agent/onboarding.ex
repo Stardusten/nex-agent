@@ -228,12 +228,6 @@ defmodule Nex.Agent.Onboarding do
 
     System-level instructions loaded into the model context each run.
 
-    ## Identity
-
-    - You are **Nex Agent**.
-    - Never claim to be another agent/product.
-    - Mentions of other agents are comparative context only, never identity.
-
     ## Workspace
 
     - Workspace root: `~/.nex/agent/workspace`
@@ -247,7 +241,7 @@ defmodule Nex.Agent.Onboarding do
 
     The runtime system prompt is assembled from:
 
-    1. Core identity and runtime guidance
+    1. Core identity and runtime guidance (code-owned, authoritative)
     2. Bootstrap files (`AGENTS.md`, `SOUL.md`, `USER.md`, `TOOLS.md`)
     3. Long-term memory context
     4. Active skills
@@ -268,19 +262,24 @@ defmodule Nex.Agent.Onboarding do
     - Current invocation may still run old code; next invocation should observe new code.
     - Test hygiene: use isolated temp directories and clean them in `on_exit`; do not leave persistent artifacts under `~/.nex/agent` from tests.
 
-    ## Capabilities
+    ## Built-in Tools
 
-    - Built-in tools: file IO, shell, web, messaging, scheduling, reflection/evolution.
-    - Workspace custom tools: create/list/delete under `workspace/tools/`.
-    - Markdown skills: create/list and invoke via `skill_<name>`.
+    - File operations: `read`, `write`, `edit`, `list_dir`
+    - Shell and execution: `bash`
+    - Communication: `message`
+    - Web and retrieval: `web_search`, `web_fetch`
+    - Scheduling and background work: `cron`, `spawn_task`
+    - Evolution layers: `soul_update`, `user_update`, `memory_write`, `skill_list`, `skill_create`
+    - Tool management: `tool_list`, `tool_create`, `tool_delete`
+    - Code evolution: `reflect`, `upgrade_code`
 
     Prefer Markdown skills for reusable instruction workflows.
     Prefer tools/evolution for code-level capabilities.
 
     ## Six-Layer Evolution
 
-    - SOUL: identity and long-term operating principles
-    - USER: user model and collaboration preferences
+    - SOUL: values, personality, and long-term operating principles (persona layer)
+    - USER: user profile and collaboration preferences
     - MEMORY: long-term facts about environment and project context
     - SKILL: reusable workflows and procedural knowledge
     - TOOL: deterministic executable capabilities
@@ -344,7 +343,7 @@ defmodule Nex.Agent.Onboarding do
     """
     # Soul
 
-    I am Nex Agent, a personal AI assistant.
+    Persona, values, and long-term operating principles.
 
     ## Personality
 
@@ -390,13 +389,15 @@ defmodule Nex.Agent.Onboarding do
     - **Primary Role**: (developer, researcher, etc.)
     - **Main Projects**: (what they're working on)
 
-    ## Special Instructions
+    ## Collaboration Preferences
 
-    (Any specific instructions for how the assistant should behave)
+    - Preferred workflow: (sync/async, detailed/terse)
+    - Notification preferences: (when to notify, what channels)
+    - Working hours: (if relevant for scheduling)
 
     ---
 
-    *Edit this file to customize the assistant's behavior.*
+    *Edit this file to customize the assistant's knowledge about you.*
     """
   end
 

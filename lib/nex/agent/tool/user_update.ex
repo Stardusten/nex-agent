@@ -3,6 +3,7 @@ defmodule Nex.Agent.Tool.UserUpdate do
 
   @behaviour Nex.Agent.Tool.Behaviour
 
+  alias Nex.Agent.ContextDiagnostics
   alias Nex.Agent.Memory
 
   def name, do: "user_update"
@@ -15,7 +16,9 @@ defmodule Nex.Agent.Tool.UserUpdate do
     - Name, timezone, preferred language
     - Communication style preferences
     - Role and work context
-    - Any specific instructions for how you should behave
+    - Collaboration preferences for working with the user
+
+    Do not use this to set agent identity or persona instructions.
 
     Use `action=append` for incremental profile updates and `action=set` for full profile regeneration.
     This file is loaded into every session to personalize interactions.
@@ -74,20 +77,28 @@ defmodule Nex.Agent.Tool.UserUpdate do
   defp do_append(current, content, workspace) do
     trimmed = String.trim(content)
 
-    if trimmed == "" do
-      {:error, "content is required for append"}
-    else
-      updated =
-        cond do
-          String.trim(current) == "" ->
-            "# User Profile\n\n#{trimmed}\n"
+    cond do
+      trimmed == "" ->
+        {:error, "content is required for append"}
 
-          true ->
-            upsert_or_append_profile_line(current, trimmed)
+      true ->
+        case ContextDiagnostics.validate_write(:user, trimmed, source: "USER.md") do
+          :ok ->
+            updated =
+              cond do
+                String.trim(current) == "" ->
+                  "# User Profile\n\n#{trimmed}\n"
+
+                true ->
+                  upsert_or_append_profile_line(current, trimmed)
+              end
+
+            Memory.write_user_profile(updated, workspace: workspace)
+            {:ok, "User profile updated (appended)."}
+
+          {:error, diagnostics} ->
+            {:error, ContextDiagnostics.write_error_message(diagnostics)}
         end
-
-      Memory.write_user_profile(updated, workspace: workspace)
-      {:ok, "User profile updated (appended)."}
     end
   end
 
@@ -122,8 +133,22 @@ defmodule Nex.Agent.Tool.UserUpdate do
   defp do_set("", _workspace), do: {:error, "content is required for set"}
 
   defp do_set(new_content, workspace) do
-    updated = String.trim_trailing(new_content) <> "\n"
-    Memory.write_user_profile(updated, workspace: workspace)
-    {:ok, "User profile updated (set)."}
+    trimmed = String.trim(new_content)
+
+    cond do
+      trimmed == "" ->
+        {:error, "content is required for set"}
+
+      true ->
+        case ContextDiagnostics.validate_write(:user, trimmed, source: "USER.md") do
+          :ok ->
+            updated = String.trim_trailing(new_content) <> "\n"
+            Memory.write_user_profile(updated, workspace: workspace)
+            {:ok, "User profile updated (set)."}
+
+          {:error, diagnostics} ->
+            {:error, ContextDiagnostics.write_error_message(diagnostics)}
+        end
+    end
   end
 end

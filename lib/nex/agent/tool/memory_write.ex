@@ -17,8 +17,9 @@ defmodule Nex.Agent.Tool.MemoryWrite do
     - Important context about ongoing work
     - Lessons learned from mistakes
 
-    For user preferences and profile information, use user_update instead.
-    For identity and behavioral guidelines, use soul_update instead.
+    For user profile preferences, use user_update instead.
+    For persona tone/values/style guidance, use soul_update instead.
+    Identity declarations or replacements do not belong in memory.
 
     Use `action=append` for incremental facts and `action=set` for full document regeneration.
     Skip one-off outputs and temporary data.

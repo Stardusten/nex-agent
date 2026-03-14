@@ -70,4 +70,117 @@ defmodule Nex.Agent.OnboardingMigrationTest do
     assert memory_template =~ "## Workflow Lessons"
     refute memory_template =~ "## User Information"
   end
+
+  test "new workspace templates do not encode identity replacement", %{workspace: workspace} do
+    :ok = Onboarding.ensure_initialized()
+
+    soul_content = File.read!(Path.join(workspace, "SOUL.md"))
+
+    refute soul_content =~ "I am Nex Agent"
+    refute soul_content =~ "I am"
+    refute soul_content =~ "personal AI assistant"
+
+    assert soul_content =~ "Persona, values, and long-term operating principles"
+    assert soul_content =~ "## Personality"
+    assert soul_content =~ "## Values"
+    assert soul_content =~ "## Communication Style"
+  end
+
+  test "new workspace templates align with runtime contract", %{workspace: workspace} do
+    :ok = Onboarding.ensure_initialized()
+
+    agents_content = File.read!(Path.join(workspace, "AGENTS.md"))
+    soul_content = File.read!(Path.join(workspace, "SOUL.md"))
+    user_content = File.read!(Path.join(workspace, "USER.md"))
+    tools_content = File.read!(Path.join(workspace, "TOOLS.md"))
+
+    refute agents_content =~ "## Identity"
+    refute agents_content =~ "You are **Nex Agent**"
+
+    assert agents_content =~ "Six-Layer Evolution"
+    assert agents_content =~ "SOUL: values, personality"
+
+    refute soul_content =~ "all capabilities are skills"
+    refute soul_content =~ "capabilities"
+
+    assert user_content =~ "User Profile"
+    assert user_content =~ "## Collaboration Preferences"
+    refute user_content =~ "Special Instructions"
+
+    assert tools_content =~ "Tool reference"
+    assert tools_content =~ "Built-in Tool Families"
+  end
+
+  test "existing customized user files are preserved during initialization", %{
+    workspace: workspace
+  } do
+    custom_soul = """
+    # My Custom Soul
+
+    This is my personalized SOUL content.
+    I prefer a very formal tone.
+    """
+
+    custom_user = """
+    # My Profile
+
+    **Name**: Alex
+    **Role**: Senior Engineer
+    """
+
+    File.mkdir_p!(workspace)
+    File.write!(Path.join(workspace, "SOUL.md"), custom_soul)
+    File.write!(Path.join(workspace, "USER.md"), custom_user)
+
+    :ok = Onboarding.ensure_initialized()
+
+    assert File.read!(Path.join(workspace, "SOUL.md")) == custom_soul
+    assert File.read!(Path.join(workspace, "USER.md")) == custom_user
+  end
+
+  test "managed templates merge with existing content without overwriting customizations", %{
+    workspace: workspace
+  } do
+    existing_agents = """
+    # AGENTS
+
+    My custom section above the managed block.
+
+    <!-- BEGIN NEX:AGENTS_MANAGED_V1 -->
+    Old managed content
+    <!-- END NEX:AGENTS_MANAGED_V1 -->
+
+    My custom section below the managed block.
+    """
+
+    File.mkdir_p!(workspace)
+    File.write!(Path.join(workspace, "AGENTS.md"), existing_agents)
+
+    :ok = Onboarding.ensure_initialized()
+
+    result = File.read!(Path.join(workspace, "AGENTS.md"))
+    assert result =~ "My custom section above the managed block"
+    assert result =~ "My custom section below the managed block"
+    refute result =~ "Old managed content"
+    assert result =~ "<!-- BEGIN NEX:AGENTS_MANAGED_V1 -->"
+    assert result =~ "<!-- END NEX:AGENTS_MANAGED_V1 -->"
+    assert result =~ "System-level instructions"
+  end
+
+  test "forward-created workspaces receive aligned templates", %{workspace: workspace} do
+    :ok = Onboarding.ensure_initialized()
+
+    assert File.exists?(Path.join(workspace, "AGENTS.md"))
+    assert File.exists?(Path.join(workspace, "SOUL.md"))
+    assert File.exists?(Path.join(workspace, "USER.md"))
+    assert File.exists?(Path.join(workspace, "TOOLS.md"))
+    assert File.exists?(Path.join(workspace, "memory/MEMORY.md"))
+    assert File.exists?(Path.join(workspace, "memory/HISTORY.md"))
+
+    agents = File.read!(Path.join(workspace, "AGENTS.md"))
+    soul = File.read!(Path.join(workspace, "SOUL.md"))
+
+    refute agents =~ "Identity"
+    refute soul =~ "I am Nex Agent"
+  end
 end
