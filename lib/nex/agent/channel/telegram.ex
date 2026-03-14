@@ -12,6 +12,7 @@ defmodule Nex.Agent.Channel.Telegram do
   @default_poll_interval_ms 500
   @default_poll_timeout_seconds 30
   @default_send_timeout_ms 15_000
+  @telegram_max_message_len 4096
 
   defstruct [
     :token,
@@ -20,6 +21,7 @@ defmodule Nex.Agent.Channel.Telegram do
     :proxy,
     :finch_name,
     :http_get_fun,
+    :http_get_binary_fun,
     :http_post_fun,
     :offset,
     :poll_interval_ms,
@@ -33,6 +35,7 @@ defmodule Nex.Agent.Channel.Telegram do
           proxy: String.t() | nil,
           finch_name: atom(),
           http_get_fun: (String.t(), map() -> {:ok, map()} | {:error, term()}),
+          http_get_binary_fun: (String.t(), keyword() -> {:ok, term()} | {:error, term()}),
           http_post_fun: (String.t(), map() -> {:ok, map()} | {:error, term()}),
           offset: integer() | nil,
           poll_interval_ms: pos_integer(),
@@ -70,6 +73,7 @@ defmodule Nex.Agent.Channel.Telegram do
       proxy: proxy,
       finch_name: finch_name,
       http_get_fun: Keyword.get(opts, :http_get_fun, &default_http_get/3),
+      http_get_binary_fun: Keyword.get(opts, :http_get_binary_fun, &default_http_get_binary/2),
       http_post_fun: Keyword.get(opts, :http_post_fun, &default_http_post/3),
       offset: nil,
       poll_interval_ms: Keyword.get(opts, :poll_interval_ms, @default_poll_interval_ms),
@@ -156,6 +160,9 @@ defmodule Nex.Agent.Channel.Telegram do
     Logger.debug("Telegram outbound message: #{inspect(payload)}")
 
     case do_send(payload, state) do
+      :ok ->
+        Logger.info("Telegram send ok chat_id=#{payload[:chat_id]}")
+
       {:ok, body} ->
         Logger.info("Telegram send ok chat_id=#{payload[:chat_id]} resp=#{inspect(body)}")
 
@@ -180,7 +187,7 @@ defmodule Nex.Agent.Channel.Telegram do
     case telegram_get(state, "getUpdates", update_params(state.offset)) do
       {:ok, %{"ok" => true, "result" => updates}} when is_list(updates) and updates != [] ->
         Logger.debug("Telegram poll updates_count=#{length(updates)}")
-        extract_updates(updates, state.offset)
+        extract_updates(updates, state.offset, state)
 
       {:ok, %{"ok" => true, "result" => []}} ->
         {nil, []}
@@ -198,13 +205,13 @@ defmodule Nex.Agent.Channel.Telegram do
     end
   end
 
-  defp extract_updates(updates, current_offset) do
+  defp extract_updates(updates, current_offset, state) do
     {max_offset, inbounds} =
       Enum.reduce(updates, {current_offset || 0, []}, fn update, {max_off, acc} ->
         update_id = Map.get(update, "update_id", 0)
         new_max = max(max_off, update_id + 1)
 
-        case normalize_update(update) do
+        case normalize_update(update, state) do
           {:ok, inbound} -> {new_max, [inbound | acc]}
           :ignore -> {new_max, acc}
         end
@@ -229,15 +236,17 @@ defmodule Nex.Agent.Channel.Telegram do
     end
   end
 
-  defp normalize_update(%{"message" => message}) when is_map(message) do
+  defp normalize_update(%{"message" => message}, state) when is_map(message) do
     text = Map.get(message, "text") || Map.get(message, "caption")
     chat_id = get_in(message, ["chat", "id"])
     user_id = get_in(message, ["from", "id"])
     username = get_in(message, ["from", "username"])
     message_id = Map.get(message, "message_id")
+    media = extract_telegram_media(message, state)
+    content = build_inbound_content(text, media)
 
     cond do
-      is_nil(text) or String.trim(text) == "" ->
+      is_nil(content) or String.trim(content) == "" ->
         :ignore
 
       is_nil(chat_id) or is_nil(user_id) ->
@@ -258,26 +267,162 @@ defmodule Nex.Agent.Channel.Telegram do
            sender_id: sender_id,
            user_id: to_string(user_id),
            message_id: message_id,
-           content: text,
+           content: content,
            raw: %{"message" => message},
-           metadata: %{"message_id" => message_id, "user_id" => to_string(user_id)}
+           metadata:
+             %{"message_id" => message_id, "user_id" => to_string(user_id)}
+             |> maybe_put("media", media)
          }}
     end
   end
 
-  defp normalize_update(_), do: :ignore
+  defp normalize_update(_, _state), do: :ignore
+
+  defp extract_telegram_media(message, state) do
+    []
+    |> maybe_add_photo_media(message, state)
+    |> maybe_add_document_media(message, state)
+    |> case do
+      [] -> nil
+      media -> media
+    end
+  end
+
+  defp maybe_add_photo_media(media_acc, message, state) do
+    case Map.get(message, "photo") do
+      photos when is_list(photos) and photos != [] ->
+        photo =
+          Enum.max_by(photos, fn photo ->
+            Map.get(photo, "file_size", 0) * 10 +
+              Map.get(photo, "width", 0) * Map.get(photo, "height", 0)
+          end)
+
+        case file_media_from_telegram(photo, "image/jpeg", state) do
+          nil -> media_acc
+          media -> media_acc ++ [media]
+        end
+
+      _ ->
+        media_acc
+    end
+  end
+
+  defp maybe_add_document_media(media_acc, message, state) do
+    case Map.get(message, "document") do
+      %{"mime_type" => <<"image/", _::binary>>} = document ->
+        case file_media_from_telegram(document, Map.get(document, "mime_type"), state) do
+          nil -> media_acc
+          media -> media_acc ++ [media]
+        end
+
+      _ ->
+        media_acc
+    end
+  end
+
+  defp file_media_from_telegram(file_obj, mime_type, state) do
+    file_id = Map.get(file_obj, "file_id")
+
+    with file_id when is_binary(file_id) and file_id != "" <- file_id,
+         {:ok, file_path} <- telegram_file_path(state, file_id),
+         {:ok, data_url} <- telegram_file_data_url(state, file_path, mime_type || "image/jpeg") do
+      %{
+        "type" => "image",
+        "url" => data_url,
+        "mime_type" => mime_type || "image/jpeg",
+        "file_id" => file_id
+      }
+    else
+      _ -> nil
+    end
+  end
+
+  defp telegram_file_path(state, file_id) do
+    case telegram_get(state, "getFile", %{file_id: file_id}) do
+      {:ok, %{"ok" => true, "result" => %{"file_path" => file_path}}}
+      when is_binary(file_path) and file_path != "" ->
+        {:ok, file_path}
+
+      {:ok, body} ->
+        Logger.warning("Telegram getFile failed: #{inspect(body)}")
+        {:error, body}
+
+      {:error, reason} ->
+        Logger.warning("Telegram getFile request failed: #{inspect(reason)}")
+        {:error, reason}
+    end
+  end
+
+  defp telegram_file_url(state, file_path) do
+    "#{@telegram_api}/file/bot#{state.token}/#{file_path}"
+  end
+
+  defp telegram_file_data_url(state, file_path, mime_type) do
+    url = telegram_file_url(state, file_path)
+
+    case state.http_get_binary_fun.(url, finch: state.finch_name) do
+      {:ok, %{body: body}} when is_binary(body) and body != "" ->
+        {:ok, "data:#{mime_type};base64," <> Base.encode64(body)}
+
+      {:ok, body} when is_binary(body) and body != "" ->
+        {:ok, "data:#{mime_type};base64," <> Base.encode64(body)}
+
+      {:ok, other} ->
+        Logger.warning("Telegram file download returned unexpected body: #{inspect(other)}")
+        {:error, other}
+
+      {:error, reason} ->
+        Logger.warning("Telegram file download failed: #{inspect(reason)}")
+        {:error, reason}
+    end
+  end
+
+  defp build_inbound_content(text, nil) when is_binary(text), do: text
+  defp build_inbound_content(nil, nil), do: nil
+
+  defp build_inbound_content(text, media) when is_list(media) and media != [] do
+    text = if is_binary(text), do: String.trim(text), else: ""
+
+    if text == "" do
+      "[image]"
+    else
+      text <> " [image]"
+    end
+  end
+
+  defp build_inbound_content(text, _media) when is_binary(text), do: text
+  defp build_inbound_content(_, _), do: nil
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   defp do_send(%{chat_id: chat_id, content: content} = payload, state) do
     chat_id = to_string(chat_id)
     content = to_string(content)
+    chunks = chunk_message(content, @telegram_max_message_len)
 
-    params = %{
-      chat_id: chat_id,
-      text: content
-    }
+    Enum.reduce_while(chunks, :ok, fn chunk, _acc ->
+      params =
+        %{
+          chat_id: chat_id,
+          text: chunk
+        }
+        |> maybe_reply_params(payload, state)
 
-    params = maybe_reply_params(params, payload, state)
-    telegram_post(state, "sendMessage", params)
+      case telegram_post(state, "sendMessage", params) do
+        {:ok, %{"ok" => true} = _body} ->
+          {:cont, :ok}
+
+        {:ok, %{"ok" => false} = body} ->
+          {:halt, {:error, body}}
+
+        {:ok, body} ->
+          {:halt, {:error, {:unexpected_response, body}}}
+
+        {:error, reason} ->
+          {:halt, {:error, reason}}
+      end
+    end)
   end
 
   defp do_send(payload, _state) do
@@ -360,6 +505,16 @@ defmodule Nex.Agent.Channel.Telegram do
     )
   end
 
+  defp default_http_get_binary(url, req_options) do
+    finch_name = Keyword.get(req_options, :finch, Req.Finch)
+
+    Req.get(url,
+      receive_timeout: @default_send_timeout_ms + 5_000,
+      retry: false,
+      finch: finch_name
+    )
+  end
+
   defp normalize_proxy(proxy) when is_binary(proxy) and proxy != "", do: proxy
   defp normalize_proxy(_), do: nil
 
@@ -411,5 +566,14 @@ defmodule Nex.Agent.Channel.Telegram do
 
   defp schedule_poll(interval_ms) do
     Process.send_after(self(), :poll, interval_ms)
+  end
+
+  defp chunk_message(text, max_len) do
+    if String.length(text) <= max_len do
+      [text]
+    else
+      {chunk, rest} = String.split_at(text, max_len)
+      [chunk | chunk_message(rest, max_len)]
+    end
   end
 end
