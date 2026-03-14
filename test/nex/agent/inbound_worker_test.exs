@@ -78,7 +78,10 @@ defmodule Nex.Agent.InboundWorkerTest do
       end
     end
 
-    start_supervised!({InboundWorker, name: worker_name, agent_prompt_fun: prompt_fun})
+    start_supervised!(%{
+      id: worker_name,
+      start: {InboundWorker, :start_link, [[name: worker_name, agent_prompt_fun: prompt_fun]]}
+    })
 
     Bus.subscribe(:feishu_outbound)
 
@@ -112,6 +115,47 @@ defmodule Nex.Agent.InboundWorkerTest do
                  "nofunction clause matching in io.chardata_to_string"
                )
            end)
+  end
+
+  test "inbound worker forwards media from payload metadata into agent prompt opts", %{} do
+    parent = self()
+    worker_name = String.to_atom("inbound_worker_media_#{System.unique_integer([:positive])}")
+
+    prompt_fun = fn agent, prompt, opts ->
+      send(parent, {:prompt_opts, prompt, Keyword.get(opts, :media)})
+      {:ok, "done", agent}
+    end
+
+    start_supervised!({InboundWorker, name: worker_name, agent_prompt_fun: prompt_fun})
+
+    send(Process.whereis(worker_name), {
+      :bus_message,
+      :inbound,
+      %{
+        channel: "feishu",
+        chat_id: "chat-1",
+        content: "看图",
+        metadata: %{
+          "media" => [
+            %{
+              "type" => "image",
+              "url" => "data:image/png;base64,iVBORw0KGgo=",
+              "mime_type" => "image/png"
+            }
+          ]
+        }
+      }
+    })
+
+    assert_receive {:prompt_opts, "看图", media}, 1_000
+
+    assert media == [
+             %{
+               "type" => "image",
+               "url" => "data:image/png;base64,iVBORw0KGgo=",
+               "mime_type" => "image/png"
+             }
+           ]
   end
 
   defp collect_feishu_payloads(acc) do

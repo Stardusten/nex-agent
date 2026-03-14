@@ -94,6 +94,53 @@ defmodule Nex.Agent.RunnerEvolutionTest do
     assert get_in(session.metadata, ["runtime_evolution", "turns_since_memory_write"]) == 0
   end
 
+  test "runner includes media in the user message content", %{workspace: workspace} do
+    parent = self()
+
+    llm_client = fn messages, _opts ->
+      send(parent, {:messages, messages})
+      {:ok, %{content: "ok", finish_reason: nil, tool_calls: []}}
+    end
+
+    media = [
+      %{
+        "type" => "image",
+        "url" => "data:image/png;base64,iVBORw0KGgo=",
+        "mime_type" => "image/png"
+      }
+    ]
+
+    {:ok, _result, _session} =
+      Runner.run(Session.new("runner-media"), "这张图里是什么",
+        llm_client: llm_client,
+        media: media,
+        workspace: workspace,
+        skip_consolidation: true,
+        channel: "feishu",
+        chat_id: "ou_test"
+      )
+
+    assert_receive {:messages, messages}
+    user_message = List.last(messages)
+
+    assert user_message["role"] == "user"
+    assert is_list(user_message["content"])
+
+    assert Enum.any?(user_message["content"], fn
+             %{
+               "type" => "image",
+               "source" => %{
+                 "url" => "data:image/png;base64,iVBORw0KGgo=",
+                 "media_type" => "image/png"
+               }
+             } ->
+               true
+
+             _ ->
+               false
+           end)
+  end
+
   test "complex task sets next-turn skill nudge and skill creation clears it", %{
     workspace: workspace
   } do

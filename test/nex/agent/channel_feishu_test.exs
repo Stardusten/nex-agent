@@ -26,9 +26,29 @@ defmodule Nex.Agent.Channel.FeishuTest do
       end
     end
 
+    http_get_fun = fn url, headers ->
+      send(parent, {:http_get, url, headers})
+
+      if String.contains?(url, "/im/v1/messages/") and String.contains?(url, "/resources/") do
+        {:ok,
+         %{
+           status: 200,
+           headers: [{"content-type", "image/png"}],
+           body: <<137, 80, 78, 71, 13, 10, 26, 10>>
+         }}
+      else
+        {:error, :unexpected}
+      end
+    end
+
     config = %Config{Config.default() | feishu: %{"enabled" => false}}
     name = String.to_atom("feishu_test_#{System.unique_integer([:positive])}")
-    pid = start_supervised!({Feishu, name: name, config: config, http_post_fun: http_post_fun})
+
+    pid =
+      start_supervised!(
+        {Feishu,
+         name: name, config: config, http_post_fun: http_post_fun, http_get_fun: http_get_fun}
+      )
 
     :sys.replace_state(pid, fn state ->
       %{state | enabled: true, app_id: "cli_test", app_secret: "sec_test"}
@@ -148,6 +168,96 @@ defmodule Nex.Agent.Channel.FeishuTest do
     assert inbound.metadata["message_type"] == "post"
     assert inbound.content =~ "Title"
     assert inbound.content =~ "link(https://example.com)"
-    assert Enum.any?(inbound.metadata["resources"], &(&1["image_key"] == "img_post_1"))
+
+    assert Enum.any?(
+             inbound.metadata["resources"],
+             &(&1["image_key"] == "img_post_1" and &1["message_id"] == "om_post")
+           )
+
+    assert Enum.any?(inbound.metadata["media"], &(&1["image_key"] == "img_post_1"))
+
+    assert Enum.any?(
+             inbound.metadata["media"],
+             &String.starts_with?(&1["url"], "data:image/png;base64,")
+           )
+  end
+
+  test "ingest_event hydrates image messages into media payloads", %{pid: pid} do
+    payload = %{
+      "event" => %{
+        "sender" => %{
+          "sender_id" => %{"open_id" => "ou_sender"},
+          "sender_type" => "user"
+        },
+        "message" => %{
+          "message_id" => "om_img",
+          "chat_id" => "ou_sender",
+          "chat_type" => "p2p",
+          "message_type" => "image",
+          "content" => Jason.encode!(%{"image_key" => "img_abc"})
+        }
+      }
+    }
+
+    assert :ok = GenServer.call(pid, {:ingest_event, payload})
+
+    assert_receive {:http_get, url, headers}
+    assert url =~ "/im/v1/messages/om_img/resources/img_abc?type=image"
+
+    assert Enum.any?(headers, fn {key, value} -> key == "Authorization" and value =~ "Bearer " end)
+
+    assert_receive {:bus_message, :inbound, inbound}
+    assert inbound.metadata["message_type"] == "image"
+
+    assert [
+             %{
+               "type" => "image",
+               "image_key" => "img_abc",
+               "mime_type" => "image/png",
+               "url" => data_url
+             }
+           ] =
+             inbound.metadata["media"]
+
+    assert String.starts_with?(data_url, "data:image/png;base64,")
+  end
+
+  test "ingest_event accepts top-level post content without locale wrapper", %{pid: pid} do
+    payload = %{
+      "event" => %{
+        "sender" => %{
+          "sender_id" => %{"open_id" => "ou_sender"},
+          "sender_type" => "user"
+        },
+        "message" => %{
+          "message_id" => "om_post_flat",
+          "chat_id" => "ou_sender",
+          "chat_type" => "p2p",
+          "message_type" => "post",
+          "content" =>
+            Jason.encode!(%{
+              "title" => "",
+              "content" => [
+                [%{"tag" => "img", "image_key" => "img_flat_1"}],
+                [%{"tag" => "text", "text" => "你好"}]
+              ]
+            })
+        }
+      }
+    }
+
+    assert :ok = GenServer.call(pid, {:ingest_event, payload})
+
+    assert_receive {:bus_message, :inbound, inbound}
+    assert inbound.metadata["message_type"] == "post"
+    assert inbound.content =~ "你好"
+    assert inbound.content =~ "[image]"
+
+    assert Enum.any?(
+             inbound.metadata["resources"],
+             &(&1["image_key"] == "img_flat_1" and &1["message_id"] == "om_post_flat")
+           )
+
+    assert Enum.any?(inbound.metadata["media"], &(&1["image_key"] == "img_flat_1"))
   end
 end

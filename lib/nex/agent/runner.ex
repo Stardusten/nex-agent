@@ -60,9 +60,10 @@ defmodule Nex.Agent.Runner do
 
     channel = Keyword.get(opts, :channel, "telegram")
     chat_id = Keyword.get(opts, :chat_id, "default")
+    media = Keyword.get(opts, :media)
 
     messages =
-      ContextBuilder.build_messages(history, prompt, channel, chat_id, nil,
+      ContextBuilder.build_messages(history, prompt, channel, chat_id, media,
         skip_skills: Keyword.get(opts, :skip_skills, false),
         workspace: workspace,
         runtime_system_messages: runtime_system_messages

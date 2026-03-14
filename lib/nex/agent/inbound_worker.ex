@@ -203,6 +203,7 @@ defmodule Nex.Agent.InboundWorker do
     parent = self()
     from_cron = get_in(payload, [:metadata, "_from_cron"]) == true
     on_progress = if from_cron, do: nil, else: build_progress_callback(payload)
+    media = extract_media(payload)
 
     cron_opts =
       if from_cron,
@@ -222,7 +223,9 @@ defmodule Nex.Agent.InboundWorker do
             state.agent_prompt_fun.(
               agent,
               content,
-              [channel: channel, chat_id: chat_id, on_progress: on_progress] ++ cron_opts
+              [channel: channel, chat_id: chat_id, on_progress: on_progress]
+              |> maybe_put_opt(:media, media)
+              |> Kernel.++(cron_opts)
             )
 
           send(parent, {:async_result, key, result, payload})
@@ -415,8 +418,19 @@ defmodule Nex.Agent.InboundWorker do
     end
   end
 
+  defp extract_media(payload) do
+    metadata = Map.get(payload, :metadata) || Map.get(payload, "metadata") || %{}
+
+    case Map.get(metadata, "media") || Map.get(metadata, :media) do
+      media when is_list(media) and media != [] -> media
+      _ -> nil
+    end
+  end
+
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
+  defp maybe_put_opt(opts, _key, nil), do: opts
+  defp maybe_put_opt(opts, key, value), do: Keyword.put(opts, key, value)
 
   # Suppress LLM outputs that are clearly not real replies to the user.
   # Uses structural checks rather than keyword blocklists.

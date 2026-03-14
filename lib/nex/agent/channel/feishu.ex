@@ -28,6 +28,7 @@ defmodule Nex.Agent.Channel.Feishu do
     :react_emoji,
     :enabled,
     :http_post_fun,
+    :http_get_fun,
     :tenant_access_token,
     :tenant_access_token_expire_at,
     :ws_pid,
@@ -49,6 +50,7 @@ defmodule Nex.Agent.Channel.Feishu do
           react_emoji: String.t(),
           enabled: boolean(),
           http_post_fun: (String.t(), map(), keyword() -> {:ok, map()} | {:error, term()}),
+          http_get_fun: (String.t(), keyword() -> {:ok, map()} | {:error, term()}),
           tenant_access_token: String.t() | nil,
           tenant_access_token_expire_at: integer() | nil,
           ws_pid: pid() | nil,
@@ -107,6 +109,7 @@ defmodule Nex.Agent.Channel.Feishu do
       react_emoji: Config.feishu_react_emoji(config),
       enabled: Config.feishu_enabled?(config),
       http_post_fun: Keyword.get(opts, :http_post_fun, &default_http_post/3),
+      http_get_fun: Keyword.get(opts, :http_get_fun, &default_http_get/2),
       tenant_access_token: nil,
       tenant_access_token_expire_at: nil,
       ws_pid: nil,
@@ -505,19 +508,21 @@ defmodule Nex.Agent.Channel.Feishu do
 
       if allowed?(Map.get(inbound, :sender_id), state.allow_from) do
         add_reaction(message_id, state)
+        {inbound, new_state} = maybe_attach_inbound_media(inbound, new_state)
 
         Logger.info(
           "[Feishu] Publishing inbound to bus content=#{inspect(Map.get(inbound, :content))}"
         )
 
         Bus.publish(:inbound, inbound)
+        new_state
       else
         Logger.warning(
           "Feishu inbound denied sender=#{Map.get(inbound, :sender_id)} allow_from=#{inspect(state.allow_from)}"
         )
-      end
 
-      new_state
+        new_state
+      end
     end
   end
 
@@ -628,8 +633,8 @@ defmodule Nex.Agent.Channel.Feishu do
     %{"summary" => text, "text" => text, "resources" => []}
   end
 
-  defp normalize_inbound_content("post", content_json, _message_id) do
-    {summary, resources} = extract_post_text(content_json)
+  defp normalize_inbound_content("post", content_json, message_id) do
+    {summary, resources} = extract_post_text(content_json, message_id)
     %{"summary" => summary, "post" => content_json, "resources" => resources}
   end
 
@@ -642,7 +647,9 @@ defmodule Nex.Agent.Channel.Feishu do
       %{
         "summary" => "[image: #{image_key} message_id:#{message_id}]",
         "image_key" => image_key,
-        "resources" => [%{"type" => "image", "image_key" => image_key, "message_id" => message_id}]
+        "resources" => [
+          %{"type" => "image", "image_key" => image_key, "message_id" => message_id}
+        ]
       }
     else
       %{"summary" => nil, "resources" => []}
@@ -720,12 +727,24 @@ defmodule Nex.Agent.Channel.Feishu do
     %{"summary" => summary, "raw" => content_json, "resources" => []}
   end
 
-  defp extract_post_text(content_json) do
-    case Map.get(content_json, "zh_cn") || Map.get(content_json, "content") do
+  defp extract_post_text(content_json, message_id) do
+    post_content =
+      cond do
+        is_map(Map.get(content_json, "zh_cn")) ->
+          Map.get(content_json, "zh_cn")
+
+        is_list(Map.get(content_json, "content")) ->
+          content_json
+
+        true ->
+          nil
+      end
+
+    case post_content do
       nil ->
         {nil, []}
 
-      post_content when is_map(post_content) ->
+      post_content ->
         title = Map.get(post_content, "title", "")
         content_blocks = Map.get(post_content, "content", [])
 
@@ -745,7 +764,11 @@ defmodule Nex.Agent.Channel.Feishu do
                     {[text | acc_parts], acc_res}
 
                   %{"tag" => "img", "image_key" => image_key}, {acc_parts, acc_res} ->
-                    {["[image]" | acc_parts], [%{"type" => "image", "image_key" => image_key} | acc_res]}
+                    {["[image]" | acc_parts],
+                     [
+                       %{"type" => "image", "image_key" => image_key, "message_id" => message_id}
+                       | acc_res
+                     ]}
 
                   %{"tag" => "media", "file_key" => file_key} = media, {acc_parts, acc_res} ->
                     {["[media]" | acc_parts],
@@ -753,7 +776,8 @@ defmodule Nex.Agent.Channel.Feishu do
                        %{
                          "type" => "media",
                          "file_key" => file_key,
-                         "image_key" => Map.get(media, "image_key")
+                         "image_key" => Map.get(media, "image_key"),
+                         "message_id" => message_id
                        }
                        | acc_res
                      ]}
@@ -779,14 +803,15 @@ defmodule Nex.Agent.Channel.Feishu do
 
         parts = parts |> Enum.reject(&(&1 == "")) |> Enum.join(" ")
 
-        if title != "" do
-          {"#{title}\n#{parts}", resources}
-        else
-          {parts, resources}
-        end
+        summary =
+          cond do
+            title != "" and parts != "" -> "#{title}\n#{parts}"
+            title != "" -> title
+            parts != "" -> parts
+            true -> nil
+          end
 
-      _ ->
-        {nil, []}
+        {summary, resources}
     end
   end
 
@@ -891,6 +916,126 @@ defmodule Nex.Agent.Channel.Feishu do
     end
   end
 
+  defp maybe_attach_inbound_media(%{metadata: metadata} = inbound, state) when is_map(metadata) do
+    resources = Map.get(metadata, "resources", [])
+
+    with resources when is_list(resources) and resources != [] <- resources,
+         {:ok, media, state} <- hydrate_inbound_media(resources, state),
+         true <- media != [] do
+      {put_in(inbound, [:metadata, "media"], media), state}
+    else
+      _ -> {inbound, state}
+    end
+  end
+
+  defp maybe_attach_inbound_media(inbound, state), do: {inbound, state}
+
+  defp hydrate_inbound_media(resources, state) do
+    Enum.reduce(resources, {:ok, [], state}, fn resource, {:ok, media_acc, acc_state} ->
+      case hydrate_single_resource(resource, acc_state) do
+        {:ok, nil, next_state} ->
+          {:ok, media_acc, next_state}
+
+        {:ok, media, next_state} ->
+          {:ok, media_acc ++ [media], next_state}
+
+        {:error, reason, next_state} ->
+          Logger.warning("[Feishu] Failed to hydrate inbound media: #{inspect(reason)}")
+          {:ok, media_acc, next_state}
+      end
+    end)
+  end
+
+  defp hydrate_single_resource(resource, state) when is_map(resource) do
+    type = Map.get(resource, "type") || Map.get(resource, :type)
+
+    case type do
+      "image" ->
+        image_key = Map.get(resource, "image_key") || Map.get(resource, :image_key)
+        message_id = Map.get(resource, "message_id") || Map.get(resource, :message_id)
+
+        if is_binary(image_key) and image_key != "" do
+          case fetch_image_data_url(image_key, message_id, state) do
+            {:ok, data_url, mime_type, new_state} ->
+              {:ok,
+               %{
+                 "type" => "image",
+                 "url" => data_url,
+                 "mime_type" => mime_type,
+                 "image_key" => image_key
+               }, new_state}
+
+            {:error, reason, new_state} ->
+              {:error, reason, new_state}
+          end
+        else
+          {:ok, nil, state}
+        end
+
+      _ ->
+        {:ok, nil, state}
+    end
+  end
+
+  defp hydrate_single_resource(_resource, state), do: {:ok, nil, state}
+
+  defp fetch_image_data_url(image_key, message_id, state)
+       when is_binary(image_key) and image_key != "" and is_binary(message_id) and
+              message_id != "" do
+    with {:ok, token, state} <- get_tenant_access_token(state),
+         {:ok, response} <-
+           feishu_get_binary(
+             state,
+             "/im/v1/messages/#{message_id}/resources/#{image_key}?type=image",
+             [
+               {"Authorization", "Bearer #{token}"}
+             ]
+           ),
+         {:ok, body} <- extract_binary_body(response) do
+      mime_type = binary_response_content_type(response)
+      data_url = "data:#{mime_type};base64," <> Base.encode64(body)
+      {:ok, data_url, mime_type, state}
+    else
+      {:error, reason} -> {:error, reason, state}
+      {:error, reason, new_state} -> {:error, reason, new_state}
+    end
+  end
+
+  defp fetch_image_data_url(_image_key, _message_id, state) do
+    {:error, :missing_message_id_for_image_resource, state}
+  end
+
+  defp extract_binary_body(%{body: body}) when is_binary(body) and body != "", do: {:ok, body}
+  defp extract_binary_body(body) when is_binary(body) and body != "", do: {:ok, body}
+  defp extract_binary_body(other), do: {:error, {:invalid_binary_body, other}}
+
+  defp binary_response_content_type(%{headers: headers}), do: headers_content_type(headers)
+  defp binary_response_content_type(_), do: "image/jpeg"
+
+  defp headers_content_type(headers) when is_list(headers) do
+    Enum.find_value(headers, "image/jpeg", fn
+      {"content-type", value} when is_binary(value) ->
+        value
+
+      {"Content-Type", value} when is_binary(value) ->
+        value
+
+      {key, value} when is_binary(key) and is_binary(value) ->
+        if String.downcase(key) == "content-type", do: value, else: nil
+
+      _ ->
+        nil
+    end)
+  end
+
+  defp headers_content_type(headers) when is_map(headers) do
+    Map.get(headers, "content-type") ||
+      Map.get(headers, "Content-Type") ||
+      "image/jpeg"
+  end
+
+  defp headers_content_type(_), do: "image/jpeg"
+
   defp do_send(_payload, %{enabled: false} = state), do: {:ok, state}
 
   defp do_send(payload, state) do
@@ -918,10 +1063,10 @@ defmodule Nex.Agent.Channel.Feishu do
             send_explicit_message(payload, chat_id, content, msg_type, content_json, state)
 
           is_progress ->
-          send_text(payload, chat_id, content, state)
+            send_text(payload, chat_id, content, state)
 
           true ->
-          send_interactive_card(payload, chat_id, content, state)
+            send_interactive_card(payload, chat_id, content, state)
         end
     end
   end
@@ -1007,7 +1152,10 @@ defmodule Nex.Agent.Channel.Feishu do
 
   defp validate_explicit_message("post", %{"zh_cn" => %{} = _post}), do: :ok
   defp validate_explicit_message("interactive", %{}), do: :ok
-  defp validate_explicit_message("image", %{"image_key" => key}) when is_binary(key) and key != "", do: :ok
+
+  defp validate_explicit_message("image", %{"image_key" => key})
+       when is_binary(key) and key != "", do: :ok
+
   defp validate_explicit_message(msg_type, %{"file_key" => key})
        when msg_type in ["file", "audio", "media", "sticker"] and is_binary(key) and key != "",
        do: :ok
@@ -1231,9 +1379,32 @@ defmodule Nex.Agent.Channel.Feishu do
     |> normalize_feishu_response()
   end
 
+  defp feishu_get_binary(state, path, headers) do
+    state.http_get_fun.(@feishu_api <> path, headers)
+    |> normalize_binary_response()
+  end
+
   defp normalize_req_response({:ok, %{body: body}}), do: {:ok, body}
   defp normalize_req_response({:ok, body}) when is_map(body), do: {:ok, body}
   defp normalize_req_response({:error, reason}), do: {:error, reason}
+
+  defp normalize_binary_response({:ok, %{status: status} = response})
+       when is_integer(status) and status in 200..299,
+       do: {:ok, response}
+
+  defp normalize_binary_response({:ok, %{status_code: status} = response})
+       when is_integer(status) and status in 200..299,
+       do: {:ok, response}
+
+  defp normalize_binary_response({:ok, %{body: body}} = response) when is_binary(body),
+    do: {:ok, elem(response, 1)}
+
+  defp normalize_binary_response({:ok, body}) when is_binary(body), do: {:ok, body}
+
+  defp normalize_binary_response({:ok, response}),
+    do: {:error, {:unexpected_binary_response, response}}
+
+  defp normalize_binary_response({:error, reason}), do: {:error, reason}
 
   defp normalize_feishu_response({:ok, %{"code" => 0} = body}), do: {:ok, body}
   defp normalize_feishu_response({:ok, body}), do: {:error, {:feishu_api_error, body}}
@@ -1242,6 +1413,15 @@ defmodule Nex.Agent.Channel.Feishu do
   defp default_http_post(url, body, headers) do
     Req.post(url,
       json: body,
+      headers: headers,
+      receive_timeout: @default_send_timeout_ms,
+      retry: false,
+      finch: Req.Finch
+    )
+  end
+
+  defp default_http_get(url, headers) do
+    Req.get(url,
       headers: headers,
       receive_timeout: @default_send_timeout_ms,
       retry: false,
