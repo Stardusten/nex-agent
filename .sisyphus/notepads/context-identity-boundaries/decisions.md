@@ -1,0 +1,11 @@
+2026-03-14: Established a test-owned canonical contract matrix (`identity`, `AGENTS`, `SOUL`, `USER`, `TOOLS`, `MEMORY`) as the authoritative baseline for tasks 2-8, instead of changing prompt composition logic in task 1.
+2026-03-14: Chose to keep runtime modules unchanged and enforce current rejection behavior through `user_update` invalid-write tests, while documenting future diagnostics/write enforcement in executable helper constants.
+2026-03-14: Standardized on stable category identifiers + deterministic message text in a reusable diagnostics module instead of scattered per-tool regex checks.
+2026-03-14: Kept read/compose behavior tolerant by surfacing warnings in diagnostics while only blocking writes for selected categories (`identity_declaration_in_soul`, `user_profile_data_in_soul`, `identity_persona_instruction_in_user`).
+2026-03-14: Adopted diagnostics-backed write enforcement for boundary-sensitive updates: `soul_update` and `user_update` now reject out-of-layer payloads using stable `ContextDiagnostics.write_error_message/1` output.
+2026-03-14: Kept USER profile ergonomics intact by preserving append field-upsert and set replacement flows, but gating both paths with validation before file write to avoid silent normalization of invalid identity/persona content.
+2026-03-14: Consolidated identity ownership into one code-owned prompt block (`## Identity (Code-Owned)`) and removed the separate `add_identity_guard/1` append step to eliminate duplicate identity sections.
+2026-03-14: Chose layer-annotated bootstrap rendering in `ContextBuilder` so each file is interpreted with explicit authority boundaries instead of being presented as equivalent instruction sources.
+9: 2026-03-14: Aligned onboarding templates with the new ownership model: AGENTS.md is now system-level guidance only (no identity restatement), SOUL.md is persona/values/style only (no "I am" declarations), USER.md is profile-focused, and MEMORY.md stays facts-focused.
+10: 2026-03-14: Preserved the ownership rule that customized user-owned files (SOUL.md, USER.md) must not be silently rewritten during onboarding initialization or migration.
+11: 2026-03-14: Forward-created workspaces now receive templates consistent with runtime layer enforcement (ContextBuilder identity block + diagnostics for out-of-layer content).

@@ -1,0 +1,5 @@
+2026-03-14: `lsp_diagnostics` verification is currently blocked in this environment because `elixir-ls` is configured but not installed; used `mix test test/nex/agent/context_builder_test.exs` as executable verification instead.
+2026-03-14: No blocking implementation issues found; diagnostics ordering is deterministic by file scan order and in-layer rule order, but adding new rules can intentionally change list order and should be accompanied by characterization test updates.
+2026-03-14: `lsp_diagnostics` remains unavailable during Task 5 verification (`elixir-ls` not installed); enforced verification via `mix test test/nex/agent/context_builder_test.exs` and `mix compile` instead.
+2026-03-14: `lsp_diagnostics` remains unavailable for Task 7 verification; relied on `mix test test/nex/agent/context_builder_test.exs test/nex/agent/runner_evolution_test.exs` and `mix compile` as executable checks.
+2026-03-14: No new blocking issues found; targeted regressions now lock the current non-goal that workspace-global `USER.md`/`MEMORY.md` are shared across sessions, so future scope changes must update tests intentionally.
