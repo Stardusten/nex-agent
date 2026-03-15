@@ -262,12 +262,10 @@ defmodule Nex.Agent.SessionManager do
 
   defp merge_session(%Session{} = existing, %Session{} = incoming) do
     messages =
-      cond do
-        length(incoming.messages) >= length(existing.messages) ->
-          incoming.messages
-
-        true ->
-          existing.messages
+      if length(incoming.messages) >= length(existing.messages) do
+        incoming.messages
+      else
+        existing.messages
       end
 
     updated_at =

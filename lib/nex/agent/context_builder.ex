@@ -3,8 +3,8 @@ defmodule Nex.Agent.ContextBuilder do
   Builds context for LLM calls - system prompt + messages.
   """
 
-  alias Nex.Agent.Skills
   alias Nex.Agent.ContextDiagnostics
+  alias Nex.Agent.Skills
 
   @bootstrap_layer_order [
     {"AGENTS.md", :agents},

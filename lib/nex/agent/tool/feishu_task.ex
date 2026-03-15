@@ -389,8 +389,7 @@ defmodule Nex.Agent.Tool.FeishuTask do
              Enum.map(items, fn item ->
                content =
                  (get_in(item, ["body", "content"]) || [])
-                 |> Enum.map(fn x -> Map.get(x, "text") end)
-                 |> Enum.join("")
+                 |> Enum.map_join("", fn x -> Map.get(x, "text") end)
 
                %{
                  id: Map.get(item, "id"),

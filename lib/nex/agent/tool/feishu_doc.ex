@@ -1,4 +1,6 @@
 defmodule Nex.Agent.Tool.FeishuDoc do
+  @moduledoc false
+
   @behaviour Nex.Agent.Tool.Behaviour
   alias Nex.Agent.Feishu.Api
 
@@ -161,9 +163,7 @@ defmodule Nex.Agent.Tool.FeishuDoc do
   end
 
   defp parse_blocks_to_text(blocks) when is_list(blocks) do
-    blocks
-    |> Enum.map(&block_to_text/1)
-    |> Enum.join("\n")
+    blocks |> Enum.map_join("\n", &block_to_text/1)
   end
 
   defp parse_blocks_to_text(_), do: ""

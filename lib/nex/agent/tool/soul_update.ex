@@ -29,12 +29,10 @@ defmodule Nex.Agent.Tool.SoulUpdate do
   def execute(%{"content" => content}, _ctx) do
     trimmed = String.trim(content)
 
-    cond do
-      trimmed == "" ->
-        {:error, "content is required"}
-
-      true ->
-        persist_soul(content)
+    if trimmed == "" do
+      {:error, "content is required"}
+    else
+      persist_soul(content)
     end
   end
 

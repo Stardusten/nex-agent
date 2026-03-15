@@ -77,28 +77,24 @@ defmodule Nex.Agent.Tool.UserUpdate do
   defp do_append(current, content, workspace) do
     trimmed = String.trim(content)
 
-    cond do
-      trimmed == "" ->
-        {:error, "content is required for append"}
+    if trimmed == "" do
+      {:error, "content is required for append"}
+    else
+      case ContextDiagnostics.validate_write(:user, trimmed, source: "USER.md") do
+        :ok ->
+          updated =
+            if String.trim(current) == "" do
+              "# User Profile\n\n#{trimmed}\n"
+            else
+              upsert_or_append_profile_line(current, trimmed)
+            end
 
-      true ->
-        case ContextDiagnostics.validate_write(:user, trimmed, source: "USER.md") do
-          :ok ->
-            updated =
-              cond do
-                String.trim(current) == "" ->
-                  "# User Profile\n\n#{trimmed}\n"
+          Memory.write_user_profile(updated, workspace: workspace)
+          {:ok, "User profile updated (appended)."}
 
-                true ->
-                  upsert_or_append_profile_line(current, trimmed)
-              end
-
-            Memory.write_user_profile(updated, workspace: workspace)
-            {:ok, "User profile updated (appended)."}
-
-          {:error, diagnostics} ->
-            {:error, ContextDiagnostics.write_error_message(diagnostics)}
-        end
+        {:error, diagnostics} ->
+          {:error, ContextDiagnostics.write_error_message(diagnostics)}
+      end
     end
   end
 
@@ -135,20 +131,18 @@ defmodule Nex.Agent.Tool.UserUpdate do
   defp do_set(new_content, workspace) do
     trimmed = String.trim(new_content)
 
-    cond do
-      trimmed == "" ->
-        {:error, "content is required for set"}
+    if trimmed == "" do
+      {:error, "content is required for set"}
+    else
+      case ContextDiagnostics.validate_write(:user, trimmed, source: "USER.md") do
+        :ok ->
+          updated = String.trim_trailing(new_content) <> "\n"
+          Memory.write_user_profile(updated, workspace: workspace)
+          {:ok, "User profile updated (set)."}
 
-      true ->
-        case ContextDiagnostics.validate_write(:user, trimmed, source: "USER.md") do
-          :ok ->
-            updated = String.trim_trailing(new_content) <> "\n"
-            Memory.write_user_profile(updated, workspace: workspace)
-            {:ok, "User profile updated (set)."}
-
-          {:error, diagnostics} ->
-            {:error, ContextDiagnostics.write_error_message(diagnostics)}
-        end
+        {:error, diagnostics} ->
+          {:error, ContextDiagnostics.write_error_message(diagnostics)}
+      end
     end
   end
 end

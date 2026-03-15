@@ -37,36 +37,43 @@ defmodule Nex.Agent.Tool.Edit do
           {:error,
            "USER profile must be edited via user_update or workspace/USER.md. Do not edit workspace/memory/USER.md."}
         else
-          case File.read(expanded) do
-            {:ok, content} ->
-              case String.split(content, search, parts: 2) do
-                [_] ->
-                  {:error, "Text not found in file: #{expanded}"}
-
-                [prefix, rest] ->
-                  new_content = prefix <> replace <> rest
-
-                  case File.write(expanded, new_content) do
-                    :ok ->
-                      if String.ends_with?(expanded, ".ex") do
-                        hot_reload = auto_reload(expanded, new_content)
-                        {:ok, %{path: expanded, hot_reload: hot_reload}}
-                      else
-                        {:ok, "File edited successfully: #{expanded}"}
-                      end
-
-                    {:error, reason} ->
-                      {:error, "Error writing file #{expanded}: #{inspect(reason)}"}
-                  end
-              end
-
-            {:error, reason} ->
-              {:error, "Error reading file #{expanded}: #{inspect(reason)}"}
-          end
+          do_edit(expanded, search, replace)
         end
 
       {:error, reason} ->
         {:error, "Security: #{reason}"}
+    end
+  end
+
+  defp do_edit(expanded, search, replace) do
+    case File.read(expanded) do
+      {:ok, content} ->
+        case String.split(content, search, parts: 2) do
+          [_] ->
+            {:error, "Text not found in file: #{expanded}"}
+
+          [prefix, rest] ->
+            new_content = prefix <> replace <> rest
+            write_and_respond(expanded, new_content)
+        end
+
+      {:error, reason} ->
+        {:error, "Error reading file #{expanded}: #{inspect(reason)}"}
+    end
+  end
+
+  defp write_and_respond(expanded, new_content) do
+    case File.write(expanded, new_content) do
+      :ok ->
+        if String.ends_with?(expanded, ".ex") do
+          hot_reload = auto_reload(expanded, new_content)
+          {:ok, %{path: expanded, hot_reload: hot_reload}}
+        else
+          {:ok, "File edited successfully: #{expanded}"}
+        end
+
+      {:error, reason} ->
+        {:error, "Error writing file #{expanded}: #{inspect(reason)}"}
     end
   end
 

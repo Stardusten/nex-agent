@@ -75,8 +75,7 @@ defmodule Nex.Agent.ContextDiagnostics do
     source = Keyword.get(opts, :source, layer_to_source(layer))
 
     @rules
-    |> Enum.filter(&(&1.layer == layer))
-    |> Enum.filter(&Regex.match?(&1.pattern, content))
+    |> Enum.filter(&(&1.layer == layer and Regex.match?(&1.pattern, content)))
     |> Enum.map(fn rule ->
       %{
         category: rule.category,

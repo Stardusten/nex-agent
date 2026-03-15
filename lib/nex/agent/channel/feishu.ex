@@ -730,10 +730,7 @@ defmodule Nex.Agent.Channel.Feishu do
 
   defp normalize_inbound_content(msg_type, content_json, _message_id) do
     summary =
-      cond do
-        is_map(content_json) and map_size(content_json) > 0 -> "[#{msg_type}]"
-        true -> nil
-      end
+      if is_map(content_json) and map_size(content_json) > 0, do: "[#{msg_type}]", else: nil
 
     %{"summary" => summary, "raw" => content_json, "resources" => []}
   end

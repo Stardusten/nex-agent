@@ -88,12 +88,10 @@ defmodule Nex.Agent.Tool.MemoryStatus do
   defp load_session(""), do: nil
 
   defp load_session(session_key) do
-    cond do
-      Process.whereis(SessionManager) ->
-        SessionManager.get(session_key) || Session.load(session_key)
-
-      true ->
-        Session.load(session_key)
+    if Process.whereis(SessionManager) do
+      SessionManager.get(session_key) || Session.load(session_key)
+    else
+      Session.load(session_key)
     end
   end
 
