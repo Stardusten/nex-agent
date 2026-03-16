@@ -379,7 +379,8 @@ defmodule Mix.Tasks.Nex.Agent do
         provider: String.to_atom(config.provider),
         model: config.model,
         api_key: Nex.Agent.Config.get_current_api_key(config),
-        base_url: Nex.Agent.Config.get_current_base_url(config)
+        base_url: Nex.Agent.Config.get_current_base_url(config),
+        tools: config.tools
       )
 
     {:ok, result, _} = Nex.Agent.prompt(agent, opts[:message])
@@ -405,7 +406,8 @@ defmodule Mix.Tasks.Nex.Agent do
         provider: String.to_atom(config.provider),
         model: config.model,
         api_key: Nex.Agent.Config.get_current_api_key(config),
-        base_url: Nex.Agent.Config.get_current_base_url(config)
+        base_url: Nex.Agent.Config.get_current_base_url(config),
+        tools: config.tools
       )
 
     loop(agent)

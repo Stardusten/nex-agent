@@ -351,6 +351,7 @@ defmodule Nex.Agent.InboundWorker do
       model: config.model,
       api_key: Config.get_current_api_key(config),
       base_url: Config.get_current_base_url(config),
+      tools: config.tools,
       project: session_key,
       cwd: home,
       max_iterations: Config.get_max_iterations(config),

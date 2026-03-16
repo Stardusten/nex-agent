@@ -8,6 +8,7 @@ defmodule Nex.Agent.Config do
   defstruct provider: "openai",
             model: "gpt-4o",
             providers: %{},
+            tools: %{},
             defaults: %{},
             gateway: %{},
             telegram: %{},
@@ -20,6 +21,7 @@ defmodule Nex.Agent.Config do
           provider: String.t(),
           model: String.t(),
           providers: map(),
+          tools: map(),
           defaults: map(),
           gateway: map(),
           telegram: map(),
@@ -51,6 +53,7 @@ defmodule Nex.Agent.Config do
             provider: Map.get(data, "provider", "openai"),
             model: Map.get(data, "model", "gpt-4o"),
             providers: Map.get(data, "providers", default_providers()),
+            tools: Map.get(data, "tools", %{}),
             defaults: Map.get(data, "defaults", default_defaults()),
             gateway: Map.get(data, "gateway", default_gateway()),
             telegram: Map.get(data, "telegram", default_telegram()),
@@ -284,6 +287,29 @@ defmodule Nex.Agent.Config do
   @spec get_current_base_url(t()) :: String.t() | nil
   def get_current_base_url(%__MODULE__{provider: provider} = config) do
     get_base_url(config, provider)
+  end
+
+  @doc """
+  Get tool configuration value.
+  Supports reading from:
+  - Direct value in config.json: "brave_api_key": "xxx"
+  - Environment variable: "brave_api_key": {"env": "BRAVE_API_KEY"}
+  """
+  @spec get_tool_config(t(), String.t()) :: String.t() | nil
+  def get_tool_config(%__MODULE__{tools: tools}, key) do
+    case Map.get(tools, key) do
+      nil ->
+        nil
+
+      %{"env" => env_var} when is_binary(env_var) ->
+        System.get_env(env_var)
+
+      value when is_binary(value) ->
+        value
+
+      _ ->
+        nil
+    end
   end
 
   @doc """

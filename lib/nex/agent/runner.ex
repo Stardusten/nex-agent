@@ -872,6 +872,7 @@ defmodule Nex.Agent.Runner do
       model: Keyword.get(opts, :model),
       api_key: Keyword.get(opts, :api_key),
       base_url: Keyword.get(opts, :base_url),
+      tools: Keyword.get(opts, :tools, %{}),
       cwd: Keyword.get(opts, :cwd, File.cwd!()),
       workspace: Keyword.get(opts, :workspace),
       metadata: Keyword.get(opts, :metadata, %{})

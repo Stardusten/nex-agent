@@ -246,7 +246,8 @@ defmodule Nex.Agent.Gateway do
       provider: Nex.Agent.Config.provider_to_atom(config.provider),
       model: config.model,
       api_key: api_key,
-      base_url: base_url
+      base_url: base_url,
+      tools: config.tools
     ]
 
     case Nex.Agent.start(opts) do

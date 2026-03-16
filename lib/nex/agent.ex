@@ -16,6 +16,7 @@ defmodule Nex.Agent do
           model: String.t(),
           api_key: String.t() | nil,
           base_url: String.t() | nil,
+          tools: map(),
           cwd: String.t(),
           max_iterations: pos_integer()
         }
@@ -27,6 +28,7 @@ defmodule Nex.Agent do
     :model,
     :api_key,
     :base_url,
+    :tools,
     :cwd,
     max_iterations: 10
   ]
@@ -43,6 +45,7 @@ defmodule Nex.Agent do
     cwd = Keyword.get(opts, :cwd, File.cwd!())
     channel = Keyword.get(opts, :channel, "telegram")
     chat_id = Keyword.get(opts, :chat_id, "default")
+    tools = Keyword.get(opts, :tools, %{})
 
     session_key = "#{channel}:#{chat_id}"
 
@@ -59,6 +62,7 @@ defmodule Nex.Agent do
          model: model,
          api_key: api_key,
          base_url: base_url,
+         tools: tools,
          cwd: cwd,
          max_iterations: max_iterations
        }}
@@ -74,6 +78,7 @@ defmodule Nex.Agent do
     max_iterations = Keyword.get(opts, :max_iterations, agent.max_iterations)
     channel = Keyword.get(opts, :channel, "telegram")
     chat_id = Keyword.get(opts, :chat_id, "default")
+    tools = Keyword.get(opts, :tools, agent.tools || %{})
 
     session_key = "#{channel}:#{chat_id}"
     skip_consolidation = Keyword.get(opts, :skip_consolidation, false)
@@ -96,6 +101,7 @@ defmodule Nex.Agent do
         model: model,
         api_key: api_key,
         base_url: base_url,
+        tools: tools,
         cwd: cwd,
         max_iterations: max_iterations,
         session_key: agent.session_key,

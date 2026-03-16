@@ -1,9 +1,11 @@
 defmodule Nex.Agent.Tool.WebSearch do
   @moduledoc """
-  Web Search Tool - Search the web using Brave Search API
+  Web Search Tool - Search the web using DuckDuckGo Instant Answer API (free, no API key required)
   """
 
   @behaviour Nex.Agent.Tool.Behaviour
+
+  @ddg_url "https://api.duckduckgo.com"
 
   def name, do: "web_search"
   def description, do: "Search the web. Returns titles, URLs, and snippets."
@@ -60,47 +62,35 @@ defmodule Nex.Agent.Tool.WebSearch do
   end
 
   defp do_search(query, count) do
-    api_key = Application.get_env(:nex_agent, :brave_api_key)
+    params = %{
+      "q" => query,
+      "format" => "json",
+      "no_html" => 1,
+      "skip_disambig" => 1,
+      "count" => count
+    }
 
-    if is_nil(api_key) or api_key == "" do
-      {:ok, %{error: "Brave Search API key not configured. Set :brave_api_key in config."}}
-    else
-      url = "https://api.search.brave.com/res/v1/web/search"
+    case Req.get(@ddg_url, params: params, follow_redirects: true) do
+      {:ok, %{status: 200, body: body}} ->
+        results = parse_results(body)
+        {:ok, results}
 
-      headers = [
-        {"Accept", "application/json"},
-        {"X-Subscription-Token", api_key}
-      ]
+      {:ok, %{status: status, body: body}} ->
+        {:ok, %{error: "Search failed with status #{status}: #{inspect(body)}"}}
 
-      params = %{
-        "q" => query,
-        "count" => count
-      }
-
-      case Req.get(url, headers: headers, params: params, follow_redirects: true) do
-        {:ok, %{status: 200, body: body}} ->
-          results = parse_results(body)
-          {:ok, results}
-
-        {:ok, %{status: status, body: body}} ->
-          {:ok, %{error: "Search failed with status #{status}: #{inspect(body)}"}}
-
-        {:error, reason} ->
-          {:ok, %{error: "Search failed: #{inspect(reason)}"}}
-      end
+      {:error, reason} ->
+        {:ok, %{error: "Search failed: #{inspect(reason)}"}}
     end
   end
 
   defp parse_results(body) do
-    web_results = body["web"] || %{}
-    results = web_results["results"] || []
+    results = body["RelatedTopics"] || []
 
     formatted =
       Enum.map_join(results, "\n---\n", fn r ->
-        title = r["title"] || ""
-        url = r["url"] || ""
-        desc = r["description"] || ""
-        "#{title}\n#{url}\n#{desc}\n"
+        title = r["Text"] || r["name"] || ""
+        url = r["FirstURL"] || r["url"] || ""
+        "#{title}\n#{url}\n"
       end)
 
     if formatted == "" do
