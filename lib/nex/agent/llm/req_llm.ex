@@ -139,8 +139,14 @@ defmodule Nex.Agent.LLM.ReqLLM do
     resolved_provider = resolve_provider(options)
     base_url = effective_base_url(provider, options[:base_url])
 
+    {api_key, should_include_api_key} =
+      case provider do
+        :ollama -> {"", true}
+        _ -> {options[:api_key], present?(options[:api_key])}
+      end
+
     []
-    |> maybe_put_keyword(:api_key, present?(options[:api_key]), options[:api_key])
+    |> maybe_put_keyword(:api_key, should_include_api_key, api_key)
     |> maybe_put_keyword(:base_url, present?(base_url), base_url)
     |> maybe_put_keyword(:temperature, is_number(options[:temperature]), options[:temperature])
     |> maybe_put_keyword(:max_tokens, is_integer(options[:max_tokens]), options[:max_tokens])
