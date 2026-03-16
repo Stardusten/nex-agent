@@ -70,11 +70,12 @@ defmodule Nex.Agent.Tool.WebSearch do
       "count" => count
     }
 
-    req_opts = [params: params, follow_redirects: true]
+    req_opts = [params: params, redirect: true]
     req_opts = maybe_add_proxy(req_opts)
 
     case Req.get(@ddg_url, req_opts) do
       {:ok, %{status: 200, body: body}} ->
+        body = if is_binary(body), do: Jason.decode!(body), else: body
         results = parse_results(body)
         {:ok, results}
 
@@ -100,9 +101,7 @@ defmodule Nex.Agent.Tool.WebSearch do
           proxy_port =
             if port && port > 0, do: port, else: if(proxy_scheme == :https, do: 443, else: 80)
 
-          Keyword.put(opts, :connect_options,
-            proxy: {proxy_scheme, String.to_charlist(host), proxy_port, []}
-          )
+          Keyword.put(opts, :connect_options, proxy: {proxy_scheme, host, proxy_port, []})
 
         _ ->
           opts
