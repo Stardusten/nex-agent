@@ -8,7 +8,6 @@ defmodule Nex.Agent.SessionManager do
 
   alias Nex.Agent.Session
 
-  @sessions_dir Path.join(System.get_env("HOME", "~"), ".nex/agent/workspace/sessions")
   @consolidation_flag "consolidation_in_progress"
   @consolidation_started_at_flag "consolidation_started_at"
   @consolidation_timeout_sec 900
@@ -19,7 +18,7 @@ defmodule Nex.Agent.SessionManager do
 
   @impl true
   def init(:ok) do
-    File.mkdir_p!(@sessions_dir)
+    File.mkdir_p!(Session.sessions_dir())
     {:ok, %{cache: %{}}}
   end
 
@@ -135,7 +134,7 @@ defmodule Nex.Agent.SessionManager do
 
   def handle_call({:list}, _from, state) do
     sessions =
-      Path.wildcard(Path.join([@sessions_dir, "*", "messages.jsonl"]))
+      Path.wildcard(Path.join([Session.sessions_dir(), "*", "messages.jsonl"]))
       |> Enum.map(fn path ->
         case File.read(path) do
           {:ok, content} ->

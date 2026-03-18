@@ -252,16 +252,13 @@ defmodule Nex.Agent.InboundWorker do
   end
 
   defp build_progress_callback(payload) do
-    fn type, content ->
+    channel = Map.get(payload, :channel) || Map.get(payload, "channel")
+
+    fn type, _content ->
       case type do
-        :tool_hint ->
-          publish_outbound(payload, "🔧 #{content}", _progress: true, _tool_hint: true)
-
-        :thinking ->
-          publish_outbound(payload, content, _progress: true)
-
-        :stream_text ->
-          publish_outbound(payload, content, _progress: true)
+        type when type in [:tool_hint, :thinking, :stream_text] and is_binary(channel) ->
+          # External chat channels should only receive deliberate user-facing replies.
+          :ok
 
         _ ->
           :ok

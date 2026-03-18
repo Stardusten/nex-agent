@@ -258,7 +258,7 @@ defmodule Nex.Agent.Config do
   def get_api_key(%__MODULE__{} = config, provider) do
     case Map.get(config.providers, provider) do
       %{"api_key" => key} when is_binary(key) and key != "" -> key
-      _ -> nil
+      _ -> provider_env_api_key(provider)
     end
   end
 
@@ -613,6 +613,11 @@ defmodule Nex.Agent.Config do
     provider_valid? and telegram_valid?(config) and feishu_valid?(config) and
       discord_valid?(config) and slack_valid?(config) and dingtalk_valid?(config)
   end
+
+  defp provider_env_api_key("anthropic"), do: System.get_env("ANTHROPIC_API_KEY")
+  defp provider_env_api_key("openai"), do: System.get_env("OPENAI_API_KEY")
+  defp provider_env_api_key("ollama"), do: nil
+  defp provider_env_api_key(_), do: nil
 
   defp telegram_valid?(%__MODULE__{} = config) do
     if telegram_enabled?(config) do

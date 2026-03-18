@@ -48,8 +48,12 @@ defmodule Nex.Agent.ToolAlignmentTest do
       Application.delete_env(:nex_agent, :workspace_path)
       Registry.unregister("skill_message")
 
-      if Process.whereis(Skills) do
-        Agent.update(Skills, &Map.delete(&1, "message"))
+      if pid = Process.whereis(Skills) do
+        try do
+          Agent.update(pid, &Map.delete(&1, "message"))
+        catch
+          :exit, _ -> :ok
+        end
       end
 
       File.rm_rf!(workspace)

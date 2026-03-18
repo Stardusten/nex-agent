@@ -99,6 +99,16 @@ defmodule Nex.Agent.Channel.FeishuTest do
     assert Jason.decode!(body["content"]) == %{"image_key" => "img_123"}
   end
 
+  test "progress payloads are ignored instead of being sent to feishu", %{pid: _pid} do
+    Bus.publish_sync(:feishu_outbound, %{
+      chat_id: "ou_123",
+      content: "内部进度",
+      metadata: %{"_progress" => true}
+    })
+
+    refute_receive {:http_post, _, _, _}, 100
+  end
+
   test "ingest_event keeps structured normalized metadata for location messages", %{pid: pid} do
     payload = %{
       "event" => %{

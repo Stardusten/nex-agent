@@ -110,6 +110,10 @@ defmodule Nex.Agent.Tool.FeishuBitable do
             type: "string",
             description: "记录ID（record_update/delete时使用）"
           },
+          "record_fields" => %{
+            type: "object",
+            description: "记录字段对象（record_update时使用）"
+          },
           "page_size" => %{
             type: "integer",
             description: "分页大小（list时使用，默认50，最大200）"
@@ -307,17 +311,17 @@ defmodule Nex.Agent.Tool.FeishuBitable do
     app_token = Map.get(args, "app_token")
     table_id = Map.get(args, "table_id")
     record_id = Map.get(args, "record_id")
-    records = Map.get(args, "records", [])
 
-    if is_nil(app_token) or is_nil(table_id) or is_nil(record_id),
-      do: {:error, "app_token, table_id, and record_id are required"},
-      else: do_update_record(app_token, table_id, record_id, records)
+    with :ok <- require_presence(app_token, table_id, record_id),
+         {:ok, fields} <- extract_record_update_fields(args) do
+      do_update_record(app_token, table_id, record_id, fields)
+    end
   end
 
-  defp do_update_record(app_token, table_id, record_id, records) do
-    body = %{"records" => records}
+  defp do_update_record(app_token, table_id, record_id, fields) do
+    body = %{"fields" => fields}
 
-    case Api.put("/bitable/v1/apps/#{app_token}/tables/#{table_id}/records", body) do
+    case Api.put("/bitable/v1/apps/#{app_token}/tables/#{table_id}/records/#{record_id}", body) do
       {:ok, data} -> {:ok, %{success: true, data: Map.get(data, "data", %{})}}
       {:error, reason} -> {:error, format_error(reason)}
     end
@@ -345,6 +349,42 @@ defmodule Nex.Agent.Tool.FeishuBitable do
 
   defp maybe_add_param(params, _key, nil), do: params
   defp maybe_add_param(params, key, value), do: params ++ [{key, to_string(value)}]
+
+  defp require_presence(app_token, table_id, record_id) do
+    if is_nil(app_token) or is_nil(table_id) or is_nil(record_id) do
+      {:error, "app_token, table_id, and record_id are required"}
+    else
+      :ok
+    end
+  end
+
+  defp extract_record_update_fields(args) do
+    cond do
+      is_map(Map.get(args, "record_fields")) ->
+        {:ok, Map.get(args, "record_fields")}
+
+      is_map(Map.get(args, "fields")) ->
+        {:ok, Map.get(args, "fields")}
+
+      true ->
+        case Map.get(args, "records", []) do
+          [%{"fields" => fields}] when is_map(fields) ->
+            {:ok, fields}
+
+          [%{fields: fields}] when is_map(fields) ->
+            {:ok, fields}
+
+          [] ->
+            {:error, "record_update requires record_fields (or a fields map)"}
+
+          [_single] ->
+            {:error, "record_update requires record_fields or records[0].fields"}
+
+          _ ->
+            {:error, "record_update accepts exactly one record payload"}
+        end
+    end
+  end
 
   defp format_error(%{code: code, message: msg}), do: "Feishu API error #{code}: #{msg}"
   defp format_error(%{code: code}), do: "Feishu API error #{code}"

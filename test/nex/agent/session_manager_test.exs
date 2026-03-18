@@ -60,16 +60,6 @@ defmodule Nex.Agent.SessionManagerTest do
   end
 
   defp session_path_for(key) do
-    safe_filename =
-      key
-      |> String.replace(":", "_")
-      |> String.replace(~r/[^\w-]/, "_")
-
-    Path.join([
-      System.get_env("HOME", "~"),
-      ".nex/agent/workspace/sessions",
-      safe_filename,
-      "messages.jsonl"
-    ])
+    Session.messages_path(key)
   end
 end

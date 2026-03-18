@@ -17,11 +17,14 @@ defmodule Nex.Agent.Heartbeat do
   use GenServer
   require Logger
 
+  alias Nex.Agent.CodeUpgrade
+
   # 30 minutes
   @default_interval 30 * 60
   @maintenance_cooldown_seconds 86_400
   @session_max_age_days 30
   @log_archive_age_days 60
+  @code_upgrade_versions_to_keep 10
   @max_history 50
 
   defstruct [
@@ -195,11 +198,12 @@ defmodule Nex.Agent.Heartbeat do
       else
         Logger.info("[Heartbeat] Running daily maintenance (async)...")
         heartbeat = self()
+        workspace = state.workspace
 
         Task.Supervisor.start_child(Nex.Agent.TaskSupervisor, fn ->
           results = [
-            {:session_gc, run_session_gc()},
-            {:log_archive, run_log_archive()},
+            {:session_gc, run_session_gc(workspace)},
+            {:log_archive, run_log_archive(workspace)},
             {:code_upgrade_cleanup, run_code_upgrade_cleanup()}
           ]
 
@@ -211,8 +215,8 @@ defmodule Nex.Agent.Heartbeat do
     end
   end
 
-  defp run_session_gc do
-    sessions_dir = Path.join(System.get_env("HOME", "~"), ".nex/agent/workspace/sessions")
+  defp run_session_gc(workspace) do
+    sessions_dir = Path.join(workspace, "sessions")
 
     if File.exists?(sessions_dir) do
       cutoff = Date.utc_today() |> Date.add(-@session_max_age_days)
@@ -226,7 +230,7 @@ defmodule Nex.Agent.Heartbeat do
             file_date = mtime |> NaiveDateTime.from_erl!() |> NaiveDateTime.to_date()
 
             if Date.compare(file_date, cutoff) == :lt do
-              File.rm(path)
+              File.rm_rf!(path)
               Logger.info("[Heartbeat] GC'd old session: #{file}")
             end
 
@@ -245,8 +249,8 @@ defmodule Nex.Agent.Heartbeat do
       :error
   end
 
-  defp run_log_archive do
-    memory_dir = Path.join(System.get_env("HOME", "~"), ".nex/agent/workspace/memory")
+  defp run_log_archive(workspace) do
+    memory_dir = Path.join(workspace, "memory")
     archive_dir = Path.join(memory_dir, "archive")
 
     if File.exists?(memory_dir) do
@@ -292,7 +296,50 @@ defmodule Nex.Agent.Heartbeat do
       :error
   end
 
-  defp run_code_upgrade_cleanup, do: :ok
+  defp run_code_upgrade_cleanup do
+    versions_root = CodeUpgrade.versions_root()
+
+    if File.exists?(versions_root) do
+      versions_root
+      |> File.ls!()
+      |> Enum.each(fn module_name ->
+        module_dir = Path.join(versions_root, module_name)
+
+        if File.dir?(module_dir) do
+          module_dir
+          |> version_files()
+          |> Enum.drop(@code_upgrade_versions_to_keep)
+          |> Enum.each(fn path ->
+            File.rm_rf!(path)
+            Logger.info("[Heartbeat] Removed old code upgrade version: #{Path.basename(path)}")
+          end)
+        end
+      end)
+    end
+
+    :ok
+  rescue
+    e ->
+      Logger.warning("[Heartbeat] Code upgrade cleanup error: #{Exception.message(e)}")
+      :error
+  end
+
+  defp version_files(module_dir) do
+    module_dir
+    |> File.ls!()
+    |> Enum.reject(&(&1 == "backup.ex"))
+    |> Enum.filter(&String.ends_with?(&1, ".ex"))
+    |> Enum.map(&Path.join(module_dir, &1))
+    |> Enum.sort_by(
+      fn path ->
+        case File.stat(path) do
+          {:ok, stat} -> stat.mtime
+          _ -> {{0, 0, 0}, {0, 0, 0}}
+        end
+      end,
+      :desc
+    )
+  end
 
   # ── HEARTBEAT.md Tasks ──
 

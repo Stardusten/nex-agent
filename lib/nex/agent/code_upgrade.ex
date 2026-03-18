@@ -18,7 +18,13 @@ defmodule Nex.Agent.CodeUpgrade do
   alias Nex.Agent.HotReload
   alias Nex.Agent.Tool.CustomTools
 
-  @versions_dir Path.join(System.get_env("HOME", "~"), ".nex/agent/code_upgrades")
+  @default_versions_dir Path.join(System.get_env("HOME", "~"), ".nex/agent/code_upgrades")
+
+  @doc false
+  @spec versions_root() :: String.t()
+  def versions_root do
+    Application.get_env(:nex_agent, :code_upgrades_path, @default_versions_dir)
+  end
 
   @doc """
   Upgrade a module with new code.
@@ -67,7 +73,7 @@ defmodule Nex.Agent.CodeUpgrade do
       :ok
     else
       # Try backup file
-      module_dir = Path.join(@versions_dir, to_string(module))
+      module_dir = Path.join(versions_root(), to_string(module))
       backup_path = Path.join(module_dir, "backup.ex")
 
       if File.exists?(backup_path) do
@@ -104,7 +110,7 @@ defmodule Nex.Agent.CodeUpgrade do
   """
   @spec list_versions(atom()) :: list(map())
   def list_versions(module) do
-    module_dir = Path.join(@versions_dir, to_string(module))
+    module_dir = Path.join(versions_root(), to_string(module))
 
     if File.exists?(module_dir) do
       module_dir
@@ -324,7 +330,7 @@ defmodule Nex.Agent.CodeUpgrade do
   end
 
   defp create_backup(module, source_path) do
-    module_dir = Path.join(@versions_dir, to_string(module))
+    module_dir = Path.join(versions_root(), to_string(module))
     File.mkdir_p!(module_dir)
 
     if is_binary(source_path) and File.exists?(source_path) do
@@ -336,7 +342,7 @@ defmodule Nex.Agent.CodeUpgrade do
   end
 
   defp save_version(module, code) do
-    module_dir = Path.join(@versions_dir, to_string(module))
+    module_dir = Path.join(versions_root(), to_string(module))
     File.mkdir_p!(module_dir)
 
     version_id = :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)

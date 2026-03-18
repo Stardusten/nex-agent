@@ -7,6 +7,7 @@ defmodule Nex.Agent.Application do
       Application Supervisor
       ├── Finch (HTTP client)
       ├── SystemPrompt (cache)
+      ├── Skills
       ├── SessionManager
       ├── MessageBus
       ├── TaskSupervisor (for fire-and-forget tasks)
@@ -33,6 +34,7 @@ defmodule Nex.Agent.Application do
       maybe_finch() ++
         [
           Nex.Agent.SystemPrompt,
+          Nex.Agent.Skills,
           Nex.Agent.SessionManager,
           Nex.Agent.MessageBus,
           {Task.Supervisor, name: Nex.Agent.TaskSupervisor},

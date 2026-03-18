@@ -99,7 +99,10 @@ defmodule Nex.Agent.ContextBuilder do
     - Do not infer restarts from process age or uptime.
     - Caveat: the current call may still run old code. Expect the next call to observe the new version.
 
-    Reply directly with text for conversations. Only use the 'message' tool to send to a specific chat channel.
+    Reply directly with text for normal conversations.
+    Never expose tool calls, progress updates, chain-of-thought, or "I sent it" status messages to the end user.
+    Only use the 'message' tool when the tool payload itself is the user-visible message for a chat channel.
+    If you use the 'message' tool for the current conversation, do not also narrate or summarize that send in assistant text.
 
     ## Feishu Messaging
     When using the `message` tool for channel=`feishu`:

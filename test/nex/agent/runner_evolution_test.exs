@@ -1,7 +1,7 @@
 defmodule Nex.Agent.RunnerEvolutionTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{ContextBuilder, Onboarding, Runner, Session, Skills}
+  alias Nex.Agent.{Bus, ContextBuilder, Onboarding, Runner, Session, Skills}
 
   setup do
     workspace =
@@ -20,6 +20,10 @@ defmodule Nex.Agent.RunnerEvolutionTest do
 
     if Process.whereis(Nex.Agent.TaskSupervisor) == nil do
       start_supervised!({Task.Supervisor, name: Nex.Agent.TaskSupervisor})
+    end
+
+    if Process.whereis(Bus) == nil do
+      start_supervised!({Bus, name: Bus})
     end
 
     if Process.whereis(Nex.Agent.Tool.Registry) == nil do
@@ -324,6 +328,104 @@ defmodule Nex.Agent.RunnerEvolutionTest do
     refute Enum.any?(telegram_session.messages, &(&1["content"] == "hello from discord"))
     assert Enum.any?(discord_session.messages, &(&1["content"] == "hello from discord"))
     refute Enum.any?(discord_session.messages, &(&1["content"] == "hello from telegram"))
+  end
+
+  test "message tool to current chat suppresses follow-up direct reply", %{workspace: workspace} do
+    parent = self()
+    Bus.subscribe(:feishu_outbound)
+    on_exit(fn -> Bus.unsubscribe(:feishu_outbound) end)
+
+    llm_client = fn _messages, _opts ->
+      case Process.get(:llm_call_count, 0) do
+        0 ->
+          Process.put(:llm_call_count, 1)
+
+          {:ok,
+           %{
+             content: "我直接回一条。",
+             finish_reason: nil,
+             tool_calls: [
+               %{
+                 id: "call_message_current",
+                 function: %{
+                   name: "message",
+                   arguments: %{"content" => "收到 123 👋"}
+                 }
+               }
+             ]
+           }}
+
+        _ ->
+          send(parent, :runner_current_message_done)
+          {:ok, %{content: "已发送一个简单的表情回复。", finish_reason: nil, tool_calls: []}}
+      end
+    end
+
+    assert {:ok, :message_sent, _session} =
+             Runner.run(Session.new("feishu:ou_current"), "123",
+               llm_client: llm_client,
+               workspace: workspace,
+               skip_consolidation: true,
+               channel: "feishu",
+               chat_id: "ou_current"
+             )
+
+    assert_receive :runner_current_message_done
+
+    assert_receive {:bus_message, :feishu_outbound, payload}
+    assert payload.content == "收到 123 👋"
+    assert payload.metadata["_from_tool"] == true
+  end
+
+  test "message tool to another chat does not suppress current reply", %{workspace: workspace} do
+    parent = self()
+    Bus.subscribe(:feishu_outbound)
+    on_exit(fn -> Bus.unsubscribe(:feishu_outbound) end)
+
+    llm_client = fn _messages, _opts ->
+      case Process.get(:llm_call_count, 0) do
+        0 ->
+          Process.put(:llm_call_count, 1)
+
+          {:ok,
+           %{
+             content: "我顺手通知另一个会话。",
+             finish_reason: nil,
+             tool_calls: [
+               %{
+                 id: "call_message_other",
+                 function: %{
+                   name: "message",
+                   arguments: %{
+                     "content" => "给另一个会话的通知",
+                     "channel" => "feishu",
+                     "chat_id" => "ou_other"
+                   }
+                 }
+               }
+             ]
+           }}
+
+        _ ->
+          send(parent, :runner_other_message_done)
+          {:ok, %{content: "当前会话的最终回复", finish_reason: nil, tool_calls: []}}
+      end
+    end
+
+    assert {:ok, "当前会话的最终回复", _session} =
+             Runner.run(Session.new("feishu:ou_current"), "123",
+               llm_client: llm_client,
+               workspace: workspace,
+               skip_consolidation: true,
+               channel: "feishu",
+               chat_id: "ou_current"
+             )
+
+    assert_receive :runner_other_message_done
+
+    assert_receive {:bus_message, :feishu_outbound, payload}
+    assert payload.chat_id == "ou_other"
+    assert payload.content == "给另一个会话的通知"
   end
 
   test "onboarding and composition tolerate legacy content without silent mutation" do

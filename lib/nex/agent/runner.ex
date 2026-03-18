@@ -357,8 +357,10 @@ defmodule Nex.Agent.Runner do
 
       maybe_publish_tool_results(results, opts)
 
-      # Check if message tool was used
-      message_sent = Enum.any?(results, fn {_id, name, _r, _args} -> name == "message" end)
+      message_sent_to_current_channel =
+        Enum.any?(results, fn {_id, name, _r, args} ->
+          name == "message" and message_targets_current_conversation?(args, opts)
+        end)
 
       effective_max =
         if iteration + 1 >= max_iterations and iteration + 1 < @max_iterations_hard_limit and
@@ -377,8 +379,7 @@ defmodule Nex.Agent.Runner do
           else: opts
 
       case run_loop(session, new_messages, iteration + 1, effective_max, opts) do
-        {:ok, final_content, final_session}
-        when message_sent and (final_content == "" or is_nil(final_content)) ->
+        {:ok, _final_content, final_session} when message_sent_to_current_channel ->
           {:ok, :message_sent, final_session}
 
         other ->
@@ -536,6 +537,35 @@ defmodule Nex.Agent.Runner do
   end
 
   defp summarize_args(_tool_name, _args), do: %{}
+
+  defp message_targets_current_conversation?(args, opts) do
+    current_channel = Keyword.get(opts, :channel)
+
+    if is_binary(current_channel) do
+      message_targets_current_conversation_with_channel?(args, opts, current_channel)
+    else
+      false
+    end
+  end
+
+  defp message_targets_current_conversation_with_channel?(args, opts, current_channel)
+       when is_map(args) do
+    current_chat_id = normalize_chat_id(Keyword.get(opts, :chat_id))
+
+    target_channel =
+      Map.get(args, "channel") || Map.get(args, :channel) || current_channel
+
+    target_chat_id =
+      Map.get(args, "chat_id") || Map.get(args, :chat_id) || current_chat_id
+
+    target_channel == current_channel and normalize_chat_id(target_chat_id) == current_chat_id
+  end
+
+  defp message_targets_current_conversation_with_channel?(_args, _opts, _current_channel),
+    do: false
+
+  defp normalize_chat_id(nil), do: ""
+  defp normalize_chat_id(chat_id), do: to_string(chat_id)
 
   defp call_llm_with_retry(messages, opts, retries_left) do
     case call_llm(messages, opts) do

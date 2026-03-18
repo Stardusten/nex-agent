@@ -1068,7 +1068,7 @@ defmodule Nex.Agent.Channel.Feishu do
             send_explicit_message(payload, chat_id, content, msg_type, content_json, state)
 
           is_progress ->
-            send_text(payload, chat_id, content, state)
+            {:ok, state}
 
           true ->
             send_interactive_card(payload, chat_id, content, state)

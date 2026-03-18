@@ -327,7 +327,6 @@ defmodule Nex.Agent.Tool.FeishuTask do
   end
 
   defp update_subtask(args) do
-    parent_id = Map.get(args, "parent_id")
     task_id = Map.get(args, "task_id")
     summary = Map.get(args, "summary")
     completed = Map.get(args, "completed")
@@ -338,7 +337,6 @@ defmodule Nex.Agent.Tool.FeishuTask do
   end
 
   defp delete_subtask(args) do
-    parent_id = Map.get(args, "parent_id")
     task_id = Map.get(args, "task_id")
 
     if is_nil(task_id), do: {:error, "task_id is required"}, else: do_delete_task(task_id)

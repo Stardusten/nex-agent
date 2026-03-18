@@ -28,15 +28,19 @@ defmodule Nex.Agent.Tool.Bash do
     }
   end
 
-  def execute(%{"command" => command}, ctx) do
-    do_execute(command, ctx)
+  def execute(%{"command" => command} = args, ctx) do
+    do_execute(command, args, ctx)
   end
 
   def execute(_args, _ctx), do: {:error, "command is required"}
 
-  defp do_execute(command, ctx) do
+  defp do_execute(command, args, ctx) do
     cwd = Map.get(ctx, :cwd, File.cwd!())
-    timeout = (Map.get(ctx, "timeout") || Map.get(ctx, :timeout, 120)) * 1000
+
+    timeout =
+      args
+      |> Map.get("timeout", Map.get(ctx, "timeout") || Map.get(ctx, :timeout, 120))
+      |> normalize_timeout()
 
     case Security.validate_command(command) do
       :ok ->
@@ -45,40 +49,49 @@ defmodule Nex.Agent.Tool.Bash do
             System.cmd("sh", ["-c", command], stderr_to_stdout: true, cd: cwd)
           end)
 
-        result =
-          try do
-            Task.await(task, timeout)
-          rescue
-            _ ->
-              Task.shutdown(task, :brutal_kill)
-              {:error, :timeout}
-          end
+        case Task.yield(task, timeout) do
+          {:ok, {output, exit_code}} ->
+            handle_command_result(output, exit_code)
 
-        case result do
-          {:error, :timeout} ->
+          {:exit, reason} ->
+            {:error, "Command execution failed: #{inspect(reason)}"}
+
+          nil ->
+            Task.shutdown(task, :brutal_kill)
             {:error, "Command timed out after #{div(timeout, 1000)} seconds"}
-
-          {output, exit_code} ->
-            safe_output = sanitize_shell_output(output)
-
-            truncated =
-              if byte_size(safe_output) > 50_000 do
-                String.slice(safe_output, 0, 50_000) <> "\n\n[Output truncated]"
-              else
-                safe_output
-              end
-
-            if exit_code == 0 do
-              {:ok, truncated}
-            else
-              {:ok, "Exit code #{exit_code}\n#{truncated}"}
-            end
         end
 
       {:error, reason} ->
         {:error, "Security: #{reason}"}
     end
   end
+
+  defp handle_command_result(output, exit_code) do
+    safe_output = sanitize_shell_output(output)
+
+    truncated =
+      if byte_size(safe_output) > 50_000 do
+        String.slice(safe_output, 0, 50_000) <> "\n\n[Output truncated]"
+      else
+        safe_output
+      end
+
+    if exit_code == 0 do
+      {:ok, truncated}
+    else
+      {:error, format_nonzero_exit(exit_code, truncated)}
+    end
+  end
+
+  defp format_nonzero_exit(exit_code, ""), do: "Exit code #{exit_code}"
+  defp format_nonzero_exit(exit_code, output), do: "Exit code #{exit_code}\n#{output}"
+
+  defp normalize_timeout(timeout) when is_integer(timeout) and timeout > 0, do: timeout * 1000
+
+  defp normalize_timeout(timeout) when is_float(timeout) and timeout > 0,
+    do: trunc(timeout * 1000)
+
+  defp normalize_timeout(_), do: 120_000
 
   defp sanitize_shell_output(output) when is_binary(output) do
     if String.valid?(output) do

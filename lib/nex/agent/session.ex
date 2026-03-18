@@ -21,7 +21,31 @@ defmodule Nex.Agent.Session do
           last_consolidated: non_neg_integer()
         }
 
-  @sessions_dir Path.join(System.get_env("HOME", "~"), ".nex/agent/workspace/sessions")
+  @default_workspace_path Path.join(System.get_env("HOME", "~"), ".nex/agent/workspace")
+
+  @doc false
+  @spec workspace_path() :: String.t()
+  def workspace_path do
+    Application.get_env(:nex_agent, :workspace_path, @default_workspace_path)
+  end
+
+  @doc false
+  @spec sessions_dir() :: String.t()
+  def sessions_dir do
+    Path.join(workspace_path(), "sessions")
+  end
+
+  @doc false
+  @spec session_dir(String.t()) :: String.t()
+  def session_dir(key) do
+    Path.join([sessions_dir(), safe_filename(key)])
+  end
+
+  @doc false
+  @spec messages_path(String.t()) :: String.t()
+  def messages_path(key) do
+    Path.join(session_dir(key), "messages.jsonl")
+  end
 
   @doc """
   Create a new session with key (e.g. "telegram:123456").
@@ -132,10 +156,10 @@ defmodule Nex.Agent.Session do
   """
   @spec save(t()) :: :ok | {:error, term()}
   def save(%__MODULE__{} = session) do
-    dir = Path.join([@sessions_dir, safe_filename(session.key)])
+    dir = session_dir(session.key)
     File.mkdir_p!(dir)
 
-    path = Path.join(dir, "messages.jsonl")
+    path = messages_path(session.key)
 
     lines =
       [
@@ -159,8 +183,7 @@ defmodule Nex.Agent.Session do
   """
   @spec load(String.t()) :: t() | nil
   def load(key) do
-    dir = Path.join([@sessions_dir, safe_filename(key)])
-    path = Path.join(dir, "messages.jsonl")
+    path = messages_path(key)
 
     if File.exists?(path) do
       load_from_path(path, key)

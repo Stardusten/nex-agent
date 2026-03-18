@@ -94,7 +94,9 @@ defmodule Nex.Agent.InboundWorkerTest do
     {:ok, workspace: workspace, worker_name: worker_name}
   end
 
-  test "feishu outbound does not echo raw chardata exception", %{worker_name: worker_name} do
+  test "feishu outbound only sends final user reply, not progress chatter", %{
+    worker_name: worker_name
+  } do
     send(Process.whereis(worker_name), {
       :bus_message,
       :inbound,
@@ -105,8 +107,8 @@ defmodule Nex.Agent.InboundWorkerTest do
 
     payloads = collect_feishu_payloads([])
 
-    assert Enum.any?(payloads, &(&1.metadata["_progress"] == true))
     assert Enum.any?(payloads, &(&1.content == "done"))
+    refute Enum.any?(payloads, &(&1.metadata["_progress"] == true))
 
     refute Enum.any?(payloads, fn payload ->
              is_binary(payload.content) and
@@ -156,6 +158,76 @@ defmodule Nex.Agent.InboundWorkerTest do
                "mime_type" => "image/png"
              }
            ]
+  end
+
+  test "feishu reply via message tool does not append duplicate narration", %{
+    workspace: workspace
+  } do
+    parent = self()
+    worker_name = String.to_atom("inbound_worker_message_#{System.unique_integer([:positive])}")
+
+    prompt_fun = fn agent, prompt, opts ->
+      Process.put(:llm_call_count, 0)
+
+      llm_client = fn _messages, _llm_opts ->
+        case Process.get(:llm_call_count, 0) do
+          0 ->
+            Process.put(:llm_call_count, 1)
+
+            {:ok,
+             %{
+               content: "用户是在打个招呼。我直接回复一下。",
+               finish_reason: nil,
+               tool_calls: [
+                 %{
+                   id: "call_message_reply",
+                   function: %{
+                     name: "message",
+                     arguments: %{"content" => "收到 123 👋"}
+                   }
+                 }
+               ]
+             }}
+
+          _ ->
+            send(parent, :message_tool_turn_finished)
+            {:ok, %{content: "已发送一个简单的表情回复。", finish_reason: nil, tool_calls: []}}
+        end
+      end
+
+      runner_opts = [
+        llm_client: llm_client,
+        workspace: workspace,
+        skip_consolidation: true,
+        on_progress: Keyword.get(opts, :on_progress),
+        channel: Keyword.get(opts, :channel),
+        chat_id: Keyword.get(opts, :chat_id)
+      ]
+
+      case Runner.run(agent.session, prompt, runner_opts) do
+        {:ok, result, session} -> {:ok, result, %{agent | session: session}}
+        {:error, reason, session} -> {:error, reason, %{agent | session: session}}
+      end
+    end
+
+    start_supervised!({InboundWorker, name: worker_name, agent_prompt_fun: prompt_fun})
+
+    send(Process.whereis(worker_name), {
+      :bus_message,
+      :inbound,
+      %{channel: "feishu", chat_id: "chat-1", content: "123"}
+    })
+
+    assert_receive :message_tool_turn_finished, 1_000
+
+    payloads = collect_feishu_payloads([])
+
+    assert Enum.any?(payloads, fn payload ->
+             payload.content == "收到 123 👋" and payload.metadata["_from_tool"] == true
+           end)
+
+    refute Enum.any?(payloads, &(&1.content == "已发送一个简单的表情回复。"))
+    refute Enum.any?(payloads, &(&1.metadata["_progress"] == true))
   end
 
   defp collect_feishu_payloads(acc) do

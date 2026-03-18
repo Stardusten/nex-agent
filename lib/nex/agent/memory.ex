@@ -271,10 +271,22 @@ defmodule Nex.Agent.Memory do
   end
 
   defp normalize_consolidation_args(args) when is_map(args) do
-    if map_size(args) == 0 do
-      {:error, "missing save_memory payload"}
-    else
-      {:ok, args}
+    normalized =
+      args
+      |> Enum.into(%{}, fn {key, value} -> {to_string(key), value} end)
+
+    cond do
+      map_size(normalized) == 0 ->
+        {:error, "missing save_memory payload"}
+
+      Map.get(normalized, "history_entry") in [nil, ""] ->
+        {:error, "save_memory payload missing history_entry"}
+
+      Map.get(normalized, "memory_update") in [nil, ""] ->
+        {:error, "save_memory payload missing memory_update"}
+
+      true ->
+        {:ok, normalized}
     end
   end
 

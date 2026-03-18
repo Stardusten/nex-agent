@@ -45,6 +45,8 @@ defmodule Nex.Agent.Tool.Edit do
     end
   end
 
+  def execute(_args, _ctx), do: {:error, "path, search, and replace are required"}
+
   defp do_edit(expanded, search, replace) do
     case File.read(expanded) do
       {:ok, content} ->
@@ -54,7 +56,7 @@ defmodule Nex.Agent.Tool.Edit do
 
           [prefix, rest] ->
             new_content = prefix <> replace <> rest
-            write_and_respond(expanded, new_content)
+            write_and_respond(expanded, new_content, content)
         end
 
       {:error, reason} ->
@@ -62,12 +64,18 @@ defmodule Nex.Agent.Tool.Edit do
     end
   end
 
-  defp write_and_respond(expanded, new_content) do
+  defp write_and_respond(expanded, new_content, original_content) do
     case File.write(expanded, new_content) do
       :ok ->
         if String.ends_with?(expanded, ".ex") do
           hot_reload = auto_reload(expanded, new_content)
-          {:ok, %{path: expanded, hot_reload: hot_reload}}
+
+          if hot_reload.reload_succeeded do
+            {:ok, %{path: expanded, hot_reload: hot_reload}}
+          else
+            File.write(expanded, original_content)
+            {:error, "Hot reload failed for #{expanded}: #{hot_reload.reason}. Changes reverted."}
+          end
         else
           {:ok, "File edited successfully: #{expanded}"}
         end
@@ -76,8 +84,6 @@ defmodule Nex.Agent.Tool.Edit do
         {:error, "Error writing file #{expanded}: #{inspect(reason)}"}
     end
   end
-
-  def execute(_args, _ctx), do: {:error, "path, search, and replace are required"}
 
   defp reserved_profile_shadow_path?(expanded) do
     Enum.take(Path.split(expanded), -2) == ["memory", "USER.md"]

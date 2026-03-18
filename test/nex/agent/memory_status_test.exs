@@ -119,15 +119,6 @@ defmodule Nex.Agent.MemoryStatusTest do
   end
 
   defp session_dir_for(key) do
-    safe_filename =
-      key
-      |> String.replace(":", "_")
-      |> String.replace(~r/[^\w-]/, "_")
-
-    Path.join([
-      System.get_env("HOME", "~"),
-      ".nex/agent/workspace/sessions",
-      safe_filename
-    ])
+    Session.session_dir(key)
   end
 end
