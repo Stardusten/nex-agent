@@ -1,7 +1,7 @@
 defmodule Nex.Agent.MemoryConsolidationTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{Memory, Session}
+  alias Nex.Agent.{Memory, Runner, Session}
 
   setup do
     workspace =
@@ -61,6 +61,60 @@ defmodule Nex.Agent.MemoryConsolidationTest do
     assert updated_session.last_consolidated == length(session.messages)
     assert File.read!(Path.join(workspace, "memory/HISTORY.md")) =~ "Captured a durable fact"
     assert Memory.read_long_term(workspace: workspace) =~ "Captured fact"
+  end
+
+  test "consolidation retries anthropic tool_choice match errors through runner wrapper", %{
+    workspace: workspace
+  } do
+    parent = self()
+    session = build_session()
+
+    llm_generate_text_fun = fn _model_spec, _messages, opts ->
+      send(parent, {:llm_opts, opts})
+
+      case Process.get(:memory_consolidation_retry_count, 0) do
+        0 ->
+          Process.put(:memory_consolidation_retry_count, 1)
+          raise %MatchError{term: {:error, :not_implemented}}
+
+        _ ->
+          {:ok,
+           %{
+             tool_calls: [
+               %{
+                 function: %{
+                   name: "save_memory",
+                   arguments: %{
+                     "history_entry" =>
+                       "[2026-03-18 12:00] Retried after Anthropic tool-choice fallback.",
+                     "memory_update" =>
+                       "# Long-term Memory\n\nAnthropic fallback retry succeeded.\n"
+                   }
+                 }
+               }
+             ]
+           }}
+      end
+    end
+
+    assert {:ok, updated_session} =
+             Memory.consolidate(session, :anthropic, "claude-sonnet-4-20250514",
+               archive_all: true,
+               workspace: workspace,
+               llm_call_fun: &Runner.call_llm_for_consolidation/2,
+               req_llm_generate_text_fun: llm_generate_text_fun
+             )
+
+    assert_receive {:llm_opts, first_opts}
+    assert_receive {:llm_opts, second_opts}
+    assert first_opts[:tool_choice] == %{type: "tool", name: "save_memory"}
+    refute Keyword.has_key?(second_opts, :tool_choice)
+    assert updated_session.last_consolidated == length(session.messages)
+
+    assert File.read!(Path.join(workspace, "memory/HISTORY.md")) =~
+             "Retried after Anthropic tool-choice fallback"
+
+    assert Memory.read_long_term(workspace: workspace) =~ "Anthropic fallback retry succeeded"
   end
 
   defp build_session do

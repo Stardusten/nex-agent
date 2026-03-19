@@ -206,14 +206,19 @@ defmodule Nex.Agent.Memory do
         %{"role" => "user", "content" => prompt}
       ]
 
-      llm_opts = [
-        provider: provider,
-        model: model,
-        api_key: api_key,
-        base_url: base_url,
-        tools: save_memory_tool(),
-        tool_choice: tool_choice_for(provider, "save_memory")
-      ]
+      llm_opts =
+        [
+          provider: provider,
+          model: model,
+          api_key: api_key,
+          base_url: base_url,
+          tools: save_memory_tool(),
+          tool_choice: tool_choice_for(provider, "save_memory")
+        ]
+        |> maybe_put_llm_opt(
+          :req_llm_generate_text_fun,
+          Keyword.get(opts, :req_llm_generate_text_fun)
+        )
 
       llm_call_fun =
         Keyword.get(opts, :llm_call_fun, &Nex.Agent.Runner.call_llm_for_consolidation/2)
@@ -437,4 +442,7 @@ defmodule Nex.Agent.Memory do
 
   defp tool_choice_for(_provider, name),
     do: %{type: "function", function: %{name: name}}
+
+  defp maybe_put_llm_opt(opts, _key, nil), do: opts
+  defp maybe_put_llm_opt(opts, key, value), do: Keyword.put(opts, key, value)
 end

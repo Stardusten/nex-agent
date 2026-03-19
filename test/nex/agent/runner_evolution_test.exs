@@ -428,6 +428,76 @@ defmodule Nex.Agent.RunnerEvolutionTest do
     assert payload.content == "给另一个会话的通知"
   end
 
+  test "call_llm_for_consolidation retries anthropic match errors without tool_choice" do
+    parent = self()
+
+    llm_generate_text_fun = fn _model_spec, _messages, opts ->
+      send(parent, {:consolidation_opts, opts})
+
+      case Process.get(:runner_consolidation_retry_count, 0) do
+        0 ->
+          Process.put(:runner_consolidation_retry_count, 1)
+          raise %MatchError{term: {:error, :not_implemented}}
+
+        _ ->
+          {:ok,
+           %{
+             tool_calls: [
+               %{
+                 function: %{
+                   name: "save_memory",
+                   arguments: %{
+                     "history_entry" => "[2026-03-18 13:00] Anthropic retry worked.",
+                     "memory_update" => "# Memory\n\nRetry path succeeded.\n"
+                   }
+                 }
+               }
+             ]
+           }}
+      end
+    end
+
+    assert {:ok,
+            %{
+              "history_entry" => "[2026-03-18 13:00] Anthropic retry worked.",
+              "memory_update" => "# Memory\n\nRetry path succeeded.\n"
+            }} =
+             Runner.call_llm_for_consolidation(consolidation_messages(),
+               provider: :anthropic,
+               model: "claude-sonnet-4-20250514",
+               tools: [save_memory_tool_definition()],
+               tool_choice: %{type: "tool", name: "save_memory"},
+               req_llm_generate_text_fun: llm_generate_text_fun
+             )
+
+    assert_receive {:consolidation_opts, first_opts}
+    assert_receive {:consolidation_opts, second_opts}
+    assert first_opts[:tool_choice] == %{type: "tool", name: "save_memory"}
+    refute Keyword.has_key?(second_opts, :tool_choice)
+  end
+
+  test "call_llm_for_consolidation returns non-retryable errors unchanged" do
+    parent = self()
+
+    llm_generate_text_fun = fn _model_spec, _messages, opts ->
+      send(parent, {:consolidation_opts, opts})
+      {:error, "upstream unavailable"}
+    end
+
+    assert {:error, "upstream unavailable"} =
+             Runner.call_llm_for_consolidation(consolidation_messages(),
+               provider: :anthropic,
+               model: "claude-sonnet-4-20250514",
+               tools: [save_memory_tool_definition()],
+               tool_choice: %{type: "tool", name: "save_memory"},
+               req_llm_generate_text_fun: llm_generate_text_fun
+             )
+
+    assert_receive {:consolidation_opts, first_opts}
+    assert first_opts[:tool_choice] == %{type: "tool", name: "save_memory"}
+    refute_receive {:consolidation_opts, _}
+  end
+
   test "onboarding and composition tolerate legacy content without silent mutation" do
     base_dir =
       Path.join(
@@ -474,5 +544,30 @@ defmodule Nex.Agent.RunnerEvolutionTest do
 
     assert File.read!(Path.join(workspace, "USER.md")) == legacy_user
     assert File.read!(Path.join(workspace, "memory/MEMORY.md")) == legacy_memory
+  end
+
+  defp consolidation_messages do
+    [
+      %{"role" => "system", "content" => "Use the save_memory tool."},
+      %{"role" => "user", "content" => "Persist this summary."}
+    ]
+  end
+
+  defp save_memory_tool_definition do
+    %{
+      "type" => "function",
+      "function" => %{
+        "name" => "save_memory",
+        "description" => "Save the memory consolidation result to persistent storage.",
+        "parameters" => %{
+          "type" => "object",
+          "properties" => %{
+            "history_entry" => %{"type" => "string"},
+            "memory_update" => %{"type" => "string"}
+          },
+          "required" => ["history_entry", "memory_update"]
+        }
+      }
+    }
   end
 end

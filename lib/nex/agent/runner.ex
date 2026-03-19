@@ -935,19 +935,19 @@ defmodule Nex.Agent.Runner do
       {:ok, response} ->
         extract_tool_call(response)
 
-      {:error, err} when tool_choice != nil ->
-        err_msg = err |> inspect() |> String.downcase()
+      {:error, err} ->
+        case consolidation_tool_choice_retry_reason(provider, tool_choice, err) do
+          nil ->
+            {:error, err}
 
-        if String.contains?(err_msg, "tool_choice") do
-          Logger.warning("[Runner] tool_choice incompatible, retrying without it")
-          retry_opts = Keyword.delete(call_opts, :tool_choice)
+          reason ->
+            Logger.warning("[Runner] #{consolidation_tool_choice_retry_message(reason)}")
+            retry_opts = Keyword.delete(call_opts, :tool_choice)
 
-          case Nex.Agent.LLM.ReqLLM.chat(messages, retry_opts) do
-            {:ok, response} -> extract_tool_call(response)
-            error -> error
-          end
-        else
-          {:error, err}
+            case Nex.Agent.LLM.ReqLLM.chat(messages, retry_opts) do
+              {:ok, response} -> extract_tool_call(response)
+              error -> error
+            end
         end
 
       error ->
@@ -976,6 +976,33 @@ defmodule Nex.Agent.Runner do
 
   defp maybe_put_opt(opts, _key, nil), do: opts
   defp maybe_put_opt(opts, key, value), do: Keyword.put(opts, key, value)
+
+  defp consolidation_tool_choice_retry_reason(_provider, nil, _err), do: nil
+
+  defp consolidation_tool_choice_retry_reason(provider, _tool_choice, err) do
+    err_msg = err |> inspect() |> String.downcase()
+
+    cond do
+      String.contains?(err_msg, "tool_choice") ->
+        :tool_choice_incompatible
+
+      provider == :anthropic and
+        String.contains?(err_msg, "matcherror") and
+          String.contains?(err_msg, "not_implemented") ->
+        :anthropic_match_error
+
+      true ->
+        nil
+    end
+  end
+
+  defp consolidation_tool_choice_retry_message(:tool_choice_incompatible) do
+    "tool_choice incompatible, retrying without it"
+  end
+
+  defp consolidation_tool_choice_retry_message(:anthropic_match_error) do
+    "Anthropic tool_choice fallback triggered after MatchError, retrying without it"
+  end
 
   defp default_evolution_signals do
     %{
