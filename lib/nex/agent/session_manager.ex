@@ -286,11 +286,22 @@ defmodule Nex.Agent.SessionManager do
         _ -> incoming.updated_at
       end
 
+    # Deep-merge metadata so consolidation flags from either side are preserved.
+    # Incoming values win for non-nil keys, but existing keys are kept when incoming is nil.
+    merged_metadata =
+      Map.merge(
+        existing.metadata || %{},
+        incoming.metadata || %{},
+        fn _key, existing_val, incoming_val ->
+          if is_nil(incoming_val), do: existing_val, else: incoming_val
+        end
+      )
+
     %Session{
       incoming
       | created_at: existing.created_at,
         updated_at: updated_at,
-        metadata: incoming.metadata || existing.metadata || %{},
+        metadata: merged_metadata,
         messages: messages,
         last_consolidated:
           min(max(existing.last_consolidated, incoming.last_consolidated), length(messages))

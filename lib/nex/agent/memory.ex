@@ -223,8 +223,14 @@ defmodule Nex.Agent.Memory do
       llm_call_fun =
         Keyword.get(opts, :llm_call_fun, &Nex.Agent.Runner.call_llm_for_consolidation/2)
 
+      Logger.info(
+        "[Memory] Consolidation LLM call: provider=#{provider} model=#{model} lines=#{length(lines)} tool_choice=#{inspect(llm_opts[:tool_choice])}"
+      )
+
       case llm_call_fun.(messages, llm_opts) do
         {:ok, result} ->
+          Logger.info("[Memory] Consolidation LLM returned tool args: #{inspect(result, limit: 5, printable_limit: 200)}")
+
           case normalize_consolidation_args(result) do
             {:ok, args} ->
               apply_consolidation_result(
@@ -237,11 +243,18 @@ defmodule Nex.Agent.Memory do
               )
 
             {:error, reason} ->
-              Logger.warning("Memory consolidation: #{reason}")
+              Logger.warning(
+                "[Memory] Consolidation normalize_args failed: #{reason}, raw=#{inspect(result, limit: 200)}"
+              )
+
               {:error, reason}
           end
 
         {:error, reason} ->
+          Logger.error(
+            "[Memory] Consolidation LLM call failed: #{inspect(reason, limit: 500)}"
+          )
+
           {:error, reason}
       end
     end

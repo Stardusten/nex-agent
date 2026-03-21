@@ -78,6 +78,26 @@ defmodule Nex.Agent.Channel.Feishu do
     })
   end
 
+  @doc "Send an interactive card and return its message_id for subsequent PATCH updates."
+  @spec send_card(String.t(), String.t(), map()) :: {:ok, String.t()} | {:error, term()}
+  def send_card(chat_id, content, metadata \\ %{}) do
+    if Process.whereis(__MODULE__) do
+      GenServer.call(__MODULE__, {:send_card, chat_id, content, metadata}, 15_000)
+    else
+      {:error, :feishu_not_running}
+    end
+  end
+
+  @doc "Update an existing card message via PATCH."
+  @spec update_card(String.t(), String.t()) :: :ok | {:error, term()}
+  def update_card(message_id, content) do
+    if Process.whereis(__MODULE__) do
+      GenServer.cast(__MODULE__, {:update_card, message_id, content})
+    else
+      {:error, :feishu_not_running}
+    end
+  end
+
   @spec ingest_event(map()) :: :ok | {:ok, map()} | {:error, term()}
   def ingest_event(payload) when is_map(payload) do
     GenServer.call(__MODULE__, {:ingest_event, payload})
@@ -163,6 +183,17 @@ defmodule Nex.Agent.Channel.Feishu do
   end
 
   @impl true
+  def handle_call({:send_card, chat_id, content, metadata}, _from, state) do
+    case do_send_card_with_id(chat_id, content, metadata, state) do
+      {:ok, message_id, new_state} ->
+        {:reply, {:ok, message_id}, new_state}
+
+      {:error, reason, new_state} ->
+        {:reply, {:error, reason}, new_state}
+    end
+  end
+
+  @impl true
   def handle_call({:ingest_event, payload}, _from, state) do
     case normalize_event(payload) do
       {:challenge, challenge} ->
@@ -178,13 +209,30 @@ defmodule Nex.Agent.Channel.Feishu do
 
   @impl true
   def handle_info({:bus_message, :feishu_outbound, payload}, state) when is_map(payload) do
-    case do_send(payload, state) do
-      {:ok, new_state} ->
-        {:noreply, new_state}
+    metadata = Map.get(payload, :metadata) || Map.get(payload, "metadata") || %{}
+    update_mid = Map.get(metadata, "_update_message_id") || Map.get(metadata, :_update_message_id)
 
-      {:error, reason, new_state} ->
-        Logger.warning("Feishu send failed: #{inspect(reason)}")
-        {:noreply, new_state}
+    if is_binary(update_mid) and update_mid != "" do
+      content = Map.get(payload, :content) || Map.get(payload, "content") || ""
+
+      case do_patch_card(update_mid, content, state) do
+        {:ok, new_state} -> {:noreply, new_state}
+        {:error, reason, _new_state} ->
+          Logger.warning("[Feishu] Card PATCH failed (#{update_mid}): #{inspect(reason)}, falling back to new message")
+          case do_send(payload, state) do
+            {:ok, s} -> {:noreply, s}
+            {:error, _, s} -> {:noreply, s}
+          end
+      end
+    else
+      case do_send(payload, state) do
+        {:ok, new_state} ->
+          {:noreply, new_state}
+
+        {:error, reason, new_state} ->
+          Logger.warning("Feishu send failed: #{inspect(reason)}")
+          {:noreply, new_state}
+      end
     end
   end
 
@@ -279,6 +327,16 @@ defmodule Nex.Agent.Channel.Feishu do
 
   @impl true
   def handle_info(_msg, state), do: {:noreply, state}
+
+  @impl true
+  def handle_cast({:update_card, message_id, content}, state) do
+    case do_patch_card(message_id, content, state) do
+      {:ok, new_state} -> {:noreply, new_state}
+      {:error, reason, new_state} ->
+        Logger.warning("[Feishu] Card update cast failed: #{inspect(reason)}")
+        {:noreply, new_state}
+    end
+  end
 
   defp add_reaction(_message_id, %{react_emoji: ""}), do: :ok
   defp add_reaction(_, %{enabled: false}), do: :ok
@@ -1200,6 +1258,59 @@ defmodule Nex.Agent.Channel.Feishu do
     end
   end
 
+  defp do_send_card_with_id(chat_id, content, metadata, state) do
+    if not state.enabled or state.app_id == "" or state.app_secret == "" do
+      {:error, :not_configured, state}
+    else
+      card = build_interactive_card(content)
+      payload = %{metadata: metadata}
+
+      with {:ok, token, state} <- get_tenant_access_token(state),
+           {:ok, receive_id_type} <- outbound_receive_id_type(payload, chat_id),
+           {:ok, body} <-
+             feishu_post(
+               state,
+               "/im/v1/messages?receive_id_type=#{receive_id_type}",
+               %{
+                 "receive_id" => chat_id,
+                 "msg_type" => "interactive",
+                 "content" => Jason.encode!(card)
+               },
+               [{"Authorization", "Bearer #{token}"}]
+             ) do
+        message_id =
+          get_in(body, ["data", "message_id"]) || ""
+
+        {:ok, message_id, state}
+      else
+        {:error, reason} -> {:error, reason, state}
+      end
+    end
+  end
+
+  defp do_patch_card(message_id, content, state) do
+    if not state.enabled or state.app_id == "" or state.app_secret == "" do
+      {:error, :not_configured, state}
+    else
+      card = build_interactive_card(content)
+
+      with {:ok, token, state} <- get_tenant_access_token(state),
+           {:ok, _body} <-
+             feishu_patch(
+               state,
+               "/im/v1/messages/#{message_id}",
+               %{
+                 "content" => Jason.encode!(card)
+               },
+               [{"Authorization", "Bearer #{token}"}]
+             ) do
+        {:ok, state}
+      else
+        {:error, reason} -> {:error, reason, state}
+      end
+    end
+  end
+
   defp send_interactive_card(payload, chat_id, content, state) do
     card = build_interactive_card(content)
 
@@ -1380,6 +1491,20 @@ defmodule Nex.Agent.Channel.Feishu do
 
   defp feishu_post(state, path, body, headers) do
     state.http_post_fun.(@feishu_api <> path, body, headers)
+    |> normalize_req_response()
+    |> normalize_feishu_response()
+  end
+
+  defp feishu_patch(_state, path, body, headers) do
+    url = @feishu_api <> path
+
+    Req.patch(url,
+      json: body,
+      headers: headers,
+      receive_timeout: @default_send_timeout_ms,
+      retry: false,
+      finch: Req.Finch
+    )
     |> normalize_req_response()
     |> normalize_feishu_response()
   end

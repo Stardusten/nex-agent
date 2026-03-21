@@ -46,10 +46,11 @@ defmodule Nex.Agent.Runner do
 
     Logger.info("[Runner] Starting provider=#{provider} model=#{model}")
 
+    # Automatic consolidation disabled — trigger manually if needed
     session =
-      if Keyword.get(opts, :skip_consolidation, false),
-        do: session,
-        else: maybe_consolidate_memory(session, provider, model, api_key, base_url, opts)
+      if Keyword.get(opts, :force_consolidation, false),
+        do: maybe_consolidate_memory(session, provider, model, api_key, base_url, opts),
+        else: session
 
     initial_message_count = length(session.messages)
     {session, runtime_system_messages} = prepare_evolution_turn(session, prompt, opts)
@@ -142,7 +143,7 @@ defmodule Nex.Agent.Runner do
         consolidation_session
 
       :already_running ->
-        Logger.debug("[Runner] Skipping memory consolidation: already in progress")
+        Logger.info("[Runner] Skipping memory consolidation: already in progress")
         session
 
       :below_threshold ->
@@ -786,7 +787,7 @@ defmodule Nex.Agent.Runner do
           {tool_call_id, tool_name, truncated, parsed_args}
         end,
         ordered: true,
-        timeout: 60_000,
+        timeout: 120_000,
         on_timeout: :kill_task
       )
       |> Enum.zip(indexed_calls)
@@ -908,11 +909,21 @@ defmodule Nex.Agent.Runner do
       ]
       |> maybe_put_opt(:req_llm_generate_text_fun, Keyword.get(opts, :req_llm_generate_text_fun))
 
+    Logger.info(
+      "[Runner] consolidation LLM call: provider=#{provider} model=#{Keyword.get(call_opts, :model)} tool_choice=#{inspect(tool_choice)}"
+    )
+
     case Nex.Agent.LLM.ReqLLM.chat(messages, call_opts) do
       {:ok, response} ->
+        Logger.info(
+          "[Runner] consolidation LLM response: finish_reason=#{inspect(Map.get(response, :finish_reason))} has_tool_calls=#{is_list(Map.get(response, :tool_calls) || Map.get(response, "tool_calls"))} content_preview=#{inspect(String.slice(to_string(Map.get(response, :content, "")), 0, 100))}"
+        )
+
         extract_tool_call(response)
 
       {:error, err} ->
+        Logger.warning("[Runner] consolidation LLM error: #{inspect(err, limit: 300)}")
+
         case consolidation_tool_choice_retry_reason(provider, tool_choice, err) do
           nil ->
             {:error, err}
@@ -928,6 +939,7 @@ defmodule Nex.Agent.Runner do
         end
 
       error ->
+        Logger.error("[Runner] consolidation unexpected error: #{inspect(error, limit: 300)}")
         error
     end
   end
@@ -945,8 +957,15 @@ defmodule Nex.Agent.Runner do
 
       args = parse_args(args)
 
+      Logger.info("[Runner] extract_tool_call success: keys=#{inspect(Map.keys(args))}")
       {:ok, args}
     else
+      content = Map.get(response, :content, "") |> to_string() |> String.slice(0, 200)
+
+      Logger.warning(
+        "[Runner] extract_tool_call: no tool_calls in response, content=#{inspect(content)}"
+      )
+
       {:error, "No tool call in response"}
     end
   end

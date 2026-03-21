@@ -17,7 +17,8 @@ defmodule Nex.Agent.InboundWorker do
     :agent_abort_fun,
     agents: %{},
     active_tasks: %{},
-    agent_last_active: %{}
+    agent_last_active: %{},
+    pending_queue: %{}
   ]
 
   @type agent_start_fun :: (keyword() -> {:ok, term()} | {:error, term()})
@@ -32,7 +33,8 @@ defmodule Nex.Agent.InboundWorker do
           agent_abort_fun: agent_abort_fun(),
           agents: %{String.t() => term()},
           active_tasks: %{String.t() => pid()},
-          agent_last_active: %{String.t() => integer()}
+          agent_last_active: %{String.t() => integer()},
+          pending_queue: %{term() => :queue.queue()}
         }
 
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -55,7 +57,8 @@ defmodule Nex.Agent.InboundWorker do
       agent_abort_fun: Keyword.get(opts, :agent_abort_fun, &Nex.Agent.abort/1),
       agents: %{},
       active_tasks: %{},
-      agent_last_active: %{}
+      agent_last_active: %{},
+      pending_queue: %{}
     }
 
     Bus.subscribe(:inbound)
@@ -91,7 +94,7 @@ defmodule Nex.Agent.InboundWorker do
       publish_outbound(payload, result)
     end
 
-    {:noreply, state}
+    {:noreply, maybe_drain_pending(state, key)}
   end
 
   @impl true
@@ -107,14 +110,14 @@ defmodule Nex.Agent.InboundWorker do
       publish_outbound(payload, "Error: #{format_reason(reason)}")
     end
 
-    {:noreply, state}
+    {:noreply, maybe_drain_pending(state, key)}
   end
 
   @impl true
   def handle_info({:async_result, key, {:error, reason}, payload}, state) do
     state = %{state | active_tasks: Map.delete(state.active_tasks, key)}
     publish_outbound(payload, "Error: #{format_reason(reason)}")
-    {:noreply, state}
+    {:noreply, maybe_drain_pending(state, key)}
   end
 
   @impl true
@@ -189,15 +192,41 @@ defmodule Nex.Agent.InboundWorker do
       cmd == "/new" ->
         state = cancel_active_task(state, key)
         publish_outbound(payload, "New session started.")
-        %{state | agents: Map.delete(state.agents, key)}
+        %{state | agents: Map.delete(state.agents, key), pending_queue: Map.delete(state.pending_queue, key)}
 
       cmd == "/stop" ->
         {count, state} = stop_session(state, key, session_key, workspace)
-        publish_outbound(payload, "Stopped #{count} task(s).")
+        dropped = :queue.len(Map.get(state.pending_queue, key, :queue.new()))
+        state = %{state | pending_queue: Map.delete(state.pending_queue, key)}
+        publish_outbound(payload, "Stopped #{count} task(s)#{if dropped > 0, do: ", dropped #{dropped} queued message(s)", else: ""}.")
         state
 
       true ->
-        dispatch_async(state, key, session_key, workspace, content, payload)
+        if Map.has_key?(state.active_tasks, key) do
+          # Session already has an active task — queue this message
+          queue = Map.get(state.pending_queue, key, :queue.new())
+          queued = {session_key, workspace, content, payload}
+          queue = :queue.in(queued, queue)
+          queue_len = :queue.len(queue)
+
+          Logger.info(
+            "[InboundWorker] Queued message for busy session #{inspect(key)} (queue=#{queue_len})"
+          )
+
+          # Keep max 5 pending messages per session to prevent unbounded growth
+          queue =
+            if queue_len > 5 do
+              {_, trimmed} = :queue.out(queue)
+              Logger.warning("[InboundWorker] Dropped oldest queued message for #{inspect(key)}")
+              trimmed
+            else
+              queue
+            end
+
+          %{state | pending_queue: Map.put(state.pending_queue, key, queue)}
+        else
+          dispatch_async(state, key, session_key, workspace, content, payload)
+        end
     end
   end
 
@@ -208,7 +237,6 @@ defmodule Nex.Agent.InboundWorker do
     parent = self()
     from_cron = get_in(payload, [:metadata, "_from_cron"]) == true
     from_subagent = get_in(payload, [:metadata, "_from_subagent"]) == true
-    on_progress = if from_cron, do: nil, else: build_progress_callback(payload)
     media = extract_media(payload)
 
     cron_opts =
@@ -233,7 +261,30 @@ defmodule Nex.Agent.InboundWorker do
 
     {:ok, pid} =
       Task.Supervisor.start_child(Nex.Agent.TaskSupervisor, fn ->
+        # For Feishu channels: send initial "thinking" card and get message_id for updates
+        card_message_id =
+          if channel == "feishu" and not from_cron do
+            case Nex.Agent.Channel.Feishu.send_card(
+                   chat_id,
+                   "✨ Thinking...",
+                   extract_metadata(payload)
+                 ) do
+              {:ok, mid} when is_binary(mid) and mid != "" ->
+                mid
+
+              _ ->
+                nil
+            end
+          else
+            nil
+          end
+
         try do
+          on_progress =
+            if from_cron,
+              do: nil,
+              else: build_progress_callback(channel, card_message_id)
+
           result =
             state.agent_prompt_fun.(
               agent,
@@ -243,12 +294,26 @@ defmodule Nex.Agent.InboundWorker do
               |> Kernel.++(cron_opts)
             )
 
+          # Finalize progress card with all accumulated tool hints (card stays as execution log)
+          if is_binary(card_message_id) and card_message_id != "" do
+            finalize_progress_card(card_message_id)
+          end
+
+          # Send original payload (no _card_message_id) so the final result goes as a new message
           send(parent, {:async_result, key, result, payload})
         rescue
           e ->
+            if is_binary(card_message_id) and card_message_id != "" do
+              finalize_progress_card(card_message_id)
+            end
+
             send(parent, {:async_result, key, {:error, Exception.message(e)}, payload})
         catch
           kind, reason ->
+            if is_binary(card_message_id) and card_message_id != "" do
+              finalize_progress_card(card_message_id)
+            end
+
             send(
               parent,
               {:async_result, key, {:error, "#{kind}: #{inspect(reason)}"}, payload}
@@ -266,18 +331,77 @@ defmodule Nex.Agent.InboundWorker do
     }
   end
 
-  defp build_progress_callback(payload) do
-    channel = Map.get(payload, :channel) || Map.get(payload, "channel")
+  defp build_progress_callback(channel, card_message_id) do
+    fn type, progress_content ->
+      cond do
+        # Feishu with active card: accumulate tool hints on the card
+        channel == "feishu" and is_binary(card_message_id) and card_message_id != "" ->
+          case type do
+            :tool_hint ->
+              hints = Process.get(:tool_hints, [])
+              hints = hints ++ [progress_content]
+              Process.put(:tool_hints, hints)
 
-    fn type, _content ->
-      case type do
-        type when type in [:tool_hint, :thinking, :stream_text] and is_binary(channel) ->
-          # External chat channels should only receive deliberate user-facing replies.
+              text = Enum.map_join(hints, "\n", fn h -> "⚙️ #{h}" end)
+              Nex.Agent.Channel.Feishu.update_card(card_message_id, text)
+
+            :thinking ->
+              hints = Process.get(:tool_hints, [])
+
+              text =
+                if hints == [] do
+                  "💡 Thinking..."
+                else
+                  Enum.map_join(hints, "\n", fn h -> "⚙️ #{h}" end) <> "\n💡 Thinking..."
+                end
+
+              Nex.Agent.Channel.Feishu.update_card(card_message_id, text)
+
+            _ ->
+              :ok
+          end
+
           :ok
 
-        _ ->
+        true ->
           :ok
       end
+    end
+  end
+
+  defp finalize_progress_card(card_message_id) do
+    hints = Process.get(:tool_hints, [])
+
+    text =
+      if hints == [] do
+        "✅ Done"
+      else
+        Enum.map_join(hints, "\n", fn h -> "⚙️ #{h}" end) <> "\n✅ Done"
+      end
+
+    Nex.Agent.Channel.Feishu.update_card(card_message_id, text)
+  end
+
+  defp maybe_drain_pending(state, key) do
+    case Map.get(state.pending_queue, key) do
+      nil ->
+        state
+
+      queue ->
+        case :queue.out(queue) do
+          {{:value, {session_key, workspace, content, payload}}, rest} ->
+            remaining = if :queue.is_empty(rest), do: Map.delete(state.pending_queue, key), else: Map.put(state.pending_queue, key, rest)
+            state = %{state | pending_queue: remaining}
+
+            Logger.info(
+              "[InboundWorker] Draining queued message for #{inspect(key)} (remaining=#{:queue.len(rest)})"
+            )
+
+            dispatch_async(state, key, session_key, workspace, content, payload)
+
+          {:empty, _} ->
+            %{state | pending_queue: Map.delete(state.pending_queue, key)}
+        end
     end
   end
 
@@ -408,6 +532,16 @@ defmodule Nex.Agent.InboundWorker do
       |> Map.put_new("channel", channel)
       |> Map.put_new("chat_id", chat_id)
       |> Map.merge(Map.new(extra_meta, fn {k, v} -> {to_string(k), v} end))
+
+    # If a streaming card was created, update it instead of sending a new message
+    card_mid = Map.get(payload, :_card_message_id)
+
+    metadata =
+      if is_binary(card_mid) and card_mid != "" do
+        Map.put(metadata, "_update_message_id", card_mid)
+      else
+        metadata
+      end
 
     Logger.info("InboundWorker publishing topic=#{inspect(outbound_topic)} chat_id=#{chat_id}")
 
