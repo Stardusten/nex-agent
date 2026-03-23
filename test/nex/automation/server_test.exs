@@ -7,7 +7,7 @@ defmodule Nex.Automation.ServerTest do
   setup do
     {:ok, tracker_state} = Agent.start_link(fn -> %{ready: [], issues: %{}} end)
     {:ok, workspace_state} = Agent.start_link(fn -> %{prepared: [], cleaned: []} end)
-    {:ok, worker_state} = Agent.start_link(fn -> %{running: %{}, cancelled: []} end)
+    {:ok, worker_state} = Agent.start_link(fn -> %{running: %{}, cancelled: [], started_opts: []} end)
     status_dir = temp_dir("orchestrator-status")
 
     on_exit(fn ->
@@ -198,6 +198,39 @@ defmodule Nex.Automation.ServerTest do
     GenServer.stop(pid)
   end
 
+  test "poll shares the repo mix build and deps paths with worktree workers", ctx do
+    issue = %GitHub.Issue{
+      number: 55,
+      title: "Worker needs shared mix artifacts",
+      body: "Please automate this",
+      html_url: "https://github.com/openai/symphony/issues/55",
+      state: "open",
+      labels: ["agent:ready"]
+    }
+
+    Agent.update(ctx.tracker_state, fn _ -> %{ready: [issue], issues: %{55 => issue}} end)
+
+    {:ok, pid} =
+      Server.start_link(
+        workflow: ctx.workflow,
+        tracker: {__MODULE__.FakeTracker, [state: ctx.tracker_state]},
+        workspace_manager: {__MODULE__.FakeWorkspaceManager, [state: ctx.workspace_state]},
+        worker_runner: {__MODULE__.FakeWorkerRunner, [state: ctx.worker_state, mode: :manual]}
+      )
+
+    assert :ok = Server.poll_now(pid)
+
+    eventually(fn ->
+      [started_opts | _] = Agent.get(ctx.worker_state, & &1.started_opts)
+      env = Keyword.fetch!(started_opts, :env)
+
+      assert env["MIX_DEPS_PATH"] == Path.join(ctx.workflow.repo_root, "deps")
+      assert env["MIX_BUILD_PATH"] == Path.join(ctx.workflow.repo_root, "_build")
+    end)
+
+    GenServer.stop(pid)
+  end
+
   defmodule FakeTracker do
     def ready_issues(_workflow, opts) do
       state = Keyword.fetch!(opts, :state)
@@ -232,7 +265,7 @@ defmodule Nex.Automation.ServerTest do
   end
 
   defmodule FakeWorkspaceManager do
-    def prepare(_workflow, issue, opts) do
+    def prepare(workflow, issue, opts) do
       state = Keyword.fetch!(opts, :state)
 
       Agent.update(state, fn current ->
@@ -245,7 +278,7 @@ defmodule Nex.Automation.ServerTest do
          branch: "nex/#{issue.number}",
          code_path: "/tmp/code/#{issue.number}",
          agent_path: "/tmp/agent/#{issue.number}",
-         repo_root: "/tmp/repo"
+         repo_root: workflow.repo_root
        }}
     end
 
@@ -279,7 +312,11 @@ defmodule Nex.Automation.ServerTest do
           end
         end)
 
-      Agent.update(state, fn current -> put_in(current, [:running, id], pid) end)
+      Agent.update(state, fn current ->
+        current
+        |> put_in([:running, id], pid)
+        |> Map.update!(:started_opts, &[opts | &1])
+      end)
 
       {:ok, pid}
     end

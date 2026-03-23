@@ -151,7 +151,7 @@ defmodule Nex.Automation.Server do
     case state.workspace_manager.prepare(state.workflow, running_issue, state.workspace_opts) do
       {:ok, workspace} ->
         case state.worker_runner.start_link(
-               state.worker_opts ++
+               merge_worker_env(state.worker_opts, worker_env(workspace)) ++
                  [
                    id: running_issue.number,
                    command: build_worker_command(state.workflow, workspace, running_issue),
@@ -244,6 +244,17 @@ defmodule Nex.Automation.Server do
         "-m",
         render_prompt(workflow, issue)
       ]
+  end
+
+  defp worker_env(workspace) do
+    %{
+      "MIX_DEPS_PATH" => Path.join(workspace.repo_root, "deps"),
+      "MIX_BUILD_PATH" => Path.join(workspace.repo_root, "_build")
+    }
+  end
+
+  defp merge_worker_env(opts, env) do
+    Keyword.update(opts, :env, env, &Map.merge(env, &1))
   end
 
   defp render_prompt(workflow, issue) do
