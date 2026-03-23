@@ -38,6 +38,45 @@ defmodule Nex.Automation.Tracker.GitHubTest do
     assert options[:params] == [state: "open", labels: "agent:ready"]
   end
 
+  test "ready_issues includes an authorization header when an auth token is available" do
+    workflow = workflow_fixture()
+
+    request_fun = fn options ->
+      send(self(), {:request, options})
+      {:ok, %{status: 200, body: []}}
+    end
+
+    assert {:ok, []} =
+             GitHub.ready_issues(
+               workflow,
+               request_fun: request_fun,
+               auth_token_fun: fn -> "token-123" end
+             )
+
+    assert_received {:request, options}
+
+    assert {"authorization", "Bearer token-123"} in options[:headers]
+  end
+
+  test "ready_issues returns an error for non-success github responses" do
+    workflow = workflow_fixture()
+
+    request_fun = fn _options ->
+      {:ok,
+       %{
+         status: 403,
+         body: %{
+           "message" => "API rate limit exceeded",
+           "documentation_url" => "https://docs.github.com/rest"
+         }
+       }}
+    end
+
+    assert {:error, message} = GitHub.ready_issues(workflow, request_fun: request_fun)
+    assert message =~ "403"
+    assert message =~ "API rate limit exceeded"
+  end
+
   test "mark_running swaps ready labels for the running label" do
     workflow = workflow_fixture()
 
