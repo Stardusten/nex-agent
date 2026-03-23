@@ -30,7 +30,9 @@ ehthumbs.db
 Thumbs.db
 
 # Project specific - Nex Agent workspace and config
-/.nex/
+/.nex/*
+!/.nex/skills/
+!/.nex/skills/**
 ~/.nex/
 
 # Temporary files and logs

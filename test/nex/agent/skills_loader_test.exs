@@ -63,6 +63,38 @@ defmodule Nex.Agent.SkillsLoaderTest do
     assert skill.description == "第一行 第二行\n\n第三段"
   end
 
+  test "loads repo-owned policy skills from .nex/skills alongside workspace skills" do
+    repo_root = temp_dir("skills-loader-project")
+    workspace = Path.join(repo_root, "workspace")
+    repo_skill_dir = Path.join(repo_root, ".nex/skills/repo-policy")
+
+    on_exit(fn ->
+      File.rm_rf!(repo_root)
+    end)
+
+    File.mkdir_p!(Path.join(workspace, "skills"))
+    File.mkdir_p!(repo_skill_dir)
+
+    File.write!(
+      Path.join(repo_skill_dir, "SKILL.md"),
+      """
+      ---
+      name: repo-policy
+      description: Repository-local workflow policy
+      ---
+
+      # Repo Policy
+      """
+    )
+
+    skills =
+      File.cd!(repo_root, fn ->
+        Loader.load_all(workspace: workspace, filter_unavailable: false)
+      end)
+
+    assert Enum.any?(skills, &(&1.name == "repo-policy"))
+  end
+
   defp temp_dir(prefix) do
     Path.join(System.tmp_dir!(), "#{prefix}-#{System.unique_integer([:positive])}")
   end

@@ -30,8 +30,10 @@ defmodule Mix.Tasks.Nex.AgentCliTest do
       end)
 
     assert output =~ "mix nex.agent [--config PATH] [--workspace PATH]"
+    assert output =~ "Automation / orchestration:"
     assert output =~ "mix nex.agent gateway restart [--config PATH] [--workspace PATH]"
     assert output =~ "mix nex.agent evolve"
+    assert output =~ "mix nex.agent orchestrator WORKFLOW.md"
     refute output =~ "mix nex.agent evolve [daily|weekly|consolidation]"
     assert output =~ "-c, --config PATH"
     assert output =~ "-w, --workspace PATH"
@@ -207,6 +209,52 @@ defmodule Mix.Tasks.Nex.AgentCliTest do
     assert process_alive?(pid_b)
     refute File.exists?(Path.join(Path.dirname(config_a), "gateway.pid"))
     assert File.exists?(Path.join(Path.dirname(config_b), "gateway.pid"))
+  end
+
+  test "orchestrator status reads the latest snapshot for a workflow" do
+    base_dir = temp_dir("cli-orchestrator")
+    workflow_path = Path.join(base_dir, "WORKFLOW.md")
+    status_path = Path.join(base_dir, ".nex/orchestrator/status.json")
+
+    on_exit(fn ->
+      File.rm_rf!(base_dir)
+    end)
+
+    File.mkdir_p!(Path.dirname(status_path))
+
+    File.write!(
+      workflow_path,
+      """
+      ---
+      tracker:
+        kind: github
+        owner: openai
+        repo: symphony
+      ---
+      Follow the repo workflow.
+      """
+    )
+
+    File.write!(
+      status_path,
+      Jason.encode!(%{
+        "running" => [7],
+        "completed" => [5],
+        "failed" => [],
+        "cancelled" => [],
+        "last_poll_at" => "2026-03-23T02:00:00Z"
+      })
+    )
+
+    output =
+      capture_io(fn ->
+        Mix.Tasks.Nex.Agent.run(["orchestrator", "status", workflow_path])
+      end)
+
+    assert output =~ "Workflow: #{Path.expand(workflow_path)}"
+    assert output =~ "Running: [7]"
+    assert output =~ "Completed: [5]"
+    assert output =~ "Last poll: 2026-03-23T02:00:00Z"
   end
 
   defp temp_dir(prefix) do
