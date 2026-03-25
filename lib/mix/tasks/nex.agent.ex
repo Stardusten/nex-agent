@@ -6,7 +6,6 @@ defmodule Mix.Tasks.Nex.Agent do
   use Mix.Task
 
   alias Nex.Agent.{Config, Gateway, Onboarding, Workspace}
-  alias Nex.Automation.Orchestrator
 
   @shortdoc "Nex Agent CLI"
 
@@ -76,14 +75,6 @@ defmodule Mix.Tasks.Nex.Agent do
     with_cli_targeting(opts, &run_evolve/1)
   end
 
-  defp dispatch(["orchestrator", "status", workflow_path], _opts) do
-    run_orchestrator_status(workflow_path)
-  end
-
-  defp dispatch(["orchestrator", workflow_path], _opts) do
-    run_orchestrator(workflow_path)
-  end
-
   defp dispatch(["evolve", legacy_scope], _opts)
        when legacy_scope in ~w(daily weekly consolidation) do
     Mix.raise("mix nex.agent evolve no longer accepts a scope. Use `mix nex.agent evolve`.")
@@ -126,9 +117,6 @@ defmodule Mix.Tasks.Nex.Agent do
     Mix.shell().info("  mix nex.agent gateway stop [--config PATH] [--workspace PATH]")
     Mix.shell().info("  mix nex.agent gateway restart [--config PATH] [--workspace PATH]")
     Mix.shell().info("  mix nex.agent evolve")
-    Mix.shell().info("Automation / orchestration:")
-    Mix.shell().info("  mix nex.agent orchestrator WORKFLOW.md")
-    Mix.shell().info("  mix nex.agent orchestrator status WORKFLOW.md")
     Mix.shell().info("Configuration:")
     Mix.shell().info("  mix nex.agent config show [--config PATH]")
     Mix.shell().info("  mix nex.agent config set provider VALUE [--config PATH]")
@@ -268,37 +256,6 @@ defmodule Mix.Tasks.Nex.Agent do
 
       {:error, reason} ->
         Mix.shell().error("Evolution cycle failed: #{inspect(reason)}")
-    end
-  end
-
-  defp run_orchestrator(workflow_path) do
-    ensure_app_started()
-
-    case Orchestrator.start(workflow_path) do
-      {:ok, _pid} ->
-        Mix.shell().info("Starting orchestrator for #{Path.expand(workflow_path)}")
-        Process.sleep(:infinity)
-
-      {:error, reason} ->
-        Mix.raise("Failed to start orchestrator: #{reason}")
-    end
-  end
-
-  defp run_orchestrator_status(workflow_path) do
-    case Orchestrator.status(workflow_path) do
-      {:ok, snapshot} ->
-        Mix.shell().info("Workflow: #{snapshot["workflow_path"]}")
-        Mix.shell().info("Last poll: #{snapshot["last_poll_at"]}")
-        Mix.shell().info("Running: #{inspect(snapshot["running"], charlists: :as_lists)}")
-
-        Mix.shell().info("Completed: #{inspect(snapshot["completed"], charlists: :as_lists)}")
-
-        Mix.shell().info("Failed: #{inspect(snapshot["failed"], charlists: :as_lists)}")
-
-        Mix.shell().info("Cancelled: #{inspect(snapshot["cancelled"], charlists: :as_lists)}")
-
-      {:error, reason} ->
-        Mix.raise(reason)
     end
   end
 

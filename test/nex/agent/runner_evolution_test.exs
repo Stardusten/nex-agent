@@ -1,3 +1,25 @@
+defmodule Nex.Agent.Test.MalformedTool do
+  @behaviour Nex.Agent.Tool.Behaviour
+
+  def name, do: "malformed_tool"
+  def description, do: "Returns a bare map instead of a tagged tuple"
+  def category, do: :base
+
+  def definition do
+    %{
+      name: name(),
+      description: description(),
+      parameters: %{
+        type: "object",
+        properties: %{},
+        required: []
+      }
+    }
+  end
+
+  def execute(_args, _ctx), do: %{success: false, output: 0}
+end
+
 defmodule Nex.Agent.RunnerEvolutionTest do
   use ExUnit.Case, async: false
 
@@ -241,6 +263,52 @@ defmodule Nex.Agent.RunnerEvolutionTest do
                workspace: workspace,
                skip_consolidation: true
              )
+  end
+
+  test "runner does not crash when a tool returns a bare map", %{workspace: workspace} do
+    Nex.Agent.Tool.Registry.register(Nex.Agent.Test.MalformedTool)
+    assert "malformed_tool" in Nex.Agent.Tool.Registry.list()
+
+    on_exit(fn ->
+      Nex.Agent.Tool.Registry.unregister("malformed_tool")
+      Nex.Agent.Tool.Registry.list()
+    end)
+
+    llm_client = fn messages, _opts ->
+      if Enum.any?(messages, &(&1["role"] == "tool" and &1["name"] == "malformed_tool")) do
+        {:ok, %{content: "ok", finish_reason: nil, tool_calls: []}}
+      else
+        {:ok,
+         %{
+           content: "",
+           finish_reason: nil,
+           tool_calls: [
+             %{
+               id: "call_malformed_tool",
+               function: %{
+                 name: "malformed_tool",
+                 arguments: %{}
+               }
+             }
+           ]
+         }}
+      end
+    end
+
+    assert {:ok, "ok", session} =
+             Runner.run(Session.new("runner-malformed-tool"), "trigger malformed tool",
+               llm_client: llm_client,
+               workspace: workspace,
+               skip_consolidation: true
+             )
+
+    assert Enum.any?(session.messages, fn
+             %{"role" => "tool", "name" => "malformed_tool", "content" => content} ->
+               content =~ "\"success\": false" and content =~ "\"output\": 0"
+
+             _ ->
+               false
+           end)
   end
 
   test "structured model content crashes in progress thinking sanitization", %{

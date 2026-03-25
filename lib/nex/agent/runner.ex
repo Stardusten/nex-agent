@@ -919,6 +919,34 @@ defmodule Nex.Agent.Runner do
 
         {:error, reason} ->
           "Error: #{reason}"
+
+        %{content: content} when is_binary(content) ->
+          Logger.warning(
+            "[Runner] Tool #{tool_name} returned non-standard bare map result; coercing to success"
+          )
+
+          content
+
+        %{error: error} ->
+          Logger.warning(
+            "[Runner] Tool #{tool_name} returned non-standard bare error map; coercing to error"
+          )
+
+          "Error: #{error}"
+
+        result when is_map(result) ->
+          Logger.warning(
+            "[Runner] Tool #{tool_name} returned non-standard bare map result; coercing to success"
+          )
+
+          Jason.encode!(result, pretty: true)
+
+        result ->
+          Logger.warning(
+            "[Runner] Tool #{tool_name} returned non-standard result #{inspect(result, limit: 50)}; coercing to text"
+          )
+
+          render_text(result)
       end
     else
       "Error: tool registry unavailable"

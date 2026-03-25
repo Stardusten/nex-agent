@@ -5,6 +5,8 @@ defmodule Nex.Agent.Tool.WebSearch do
 
   @behaviour Nex.Agent.Tool.Behaviour
 
+  alias Nex.Agent.HTTP
+
   @ddg_url "https://api.duckduckgo.com"
 
   def name, do: "web_search"
@@ -53,15 +55,15 @@ defmodule Nex.Agent.Tool.WebSearch do
     }
   end
 
-  def execute(%{"query" => query, "count" => count}, _opts) when is_integer(count) do
-    do_search(query, count)
+  def execute(%{"query" => query, "count" => count}, opts) when is_integer(count) do
+    do_search(query, count, request_fun(opts))
   end
 
-  def execute(%{"query" => query}, _opts) do
-    do_search(query, 5)
+  def execute(%{"query" => query}, opts) do
+    do_search(query, 5, request_fun(opts))
   end
 
-  defp do_search(query, count) do
+  defp do_search(query, count, http_get) do
     params = %{
       "q" => query,
       "format" => "json",
@@ -70,10 +72,11 @@ defmodule Nex.Agent.Tool.WebSearch do
       "count" => count
     }
 
-    req_opts = [params: params, redirect: true]
-    req_opts = maybe_add_proxy(req_opts)
+    req_opts =
+      [params: params, redirect: true]
+      |> HTTP.maybe_add_proxy(@ddg_url)
 
-    case Req.get(@ddg_url, req_opts) do
+    case http_get.(@ddg_url, req_opts) do
       {:ok, %{status: 200, body: body}} ->
         body = if is_binary(body), do: Jason.decode!(body), else: body
         results = parse_results(body)
@@ -84,30 +87,6 @@ defmodule Nex.Agent.Tool.WebSearch do
 
       {:error, reason} ->
         {:ok, %{error: "Search failed: #{inspect(reason)}"}}
-    end
-  end
-
-  defp maybe_add_proxy(opts) do
-    proxy_url =
-      System.get_env("HTTPS_PROXY") || System.get_env("https_proxy") ||
-        System.get_env("HTTP_PROXY") || System.get_env("http_proxy")
-
-    if proxy_url && proxy_url != "" do
-      case URI.parse(proxy_url) do
-        %URI{scheme: scheme, host: host, port: port}
-        when is_binary(host) and host != "" ->
-          proxy_scheme = if scheme in ["https", "HTTPS"], do: :https, else: :http
-
-          proxy_port =
-            if port && port > 0, do: port, else: if(proxy_scheme == :https, do: 443, else: 80)
-
-          Keyword.put(opts, :connect_options, proxy: {proxy_scheme, host, proxy_port, []})
-
-        _ ->
-          opts
-      end
-    else
-      opts
     end
   end
 
@@ -127,4 +106,11 @@ defmodule Nex.Agent.Tool.WebSearch do
       formatted
     end
   end
+
+  defp request_fun(%{http_get: http_get}) when is_function(http_get, 2), do: http_get
+
+  defp request_fun(opts) when is_list(opts),
+    do: Keyword.get_lazy(opts, :http_get, fn -> &Req.get/2 end)
+
+  defp request_fun(_opts), do: &Req.get/2
 end

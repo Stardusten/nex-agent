@@ -332,6 +332,8 @@ NexAgent 当前支持以下 provider:
 
 技能文件位于 `workspace/skills/<name>/SKILL.md`，并以 `skill_<name>` 工具形式暴露给模型。
 
+仓库自己的协作约定也可以放在 `.nex/skills/<name>/SKILL.md` 里；这些 repo-local skills 不属于通用运行时默认能力，而是当前仓库自己的工作流策略。
+
 需要确定性代码能力时，应通过 tools 系统实现；Elixir 模块属于 tools，不属于 skills。
 
 ## Memory and Sessions

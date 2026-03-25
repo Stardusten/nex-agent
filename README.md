@@ -326,26 +326,9 @@ Skills are reusable workflow modules that help the agent:
 Instance-local skills live in `workspace/skills/<name>/SKILL.md` and are exposed to the model as `skill_<name>` tools.
 
 Repository-owned workflow policy can also live in `.nex/skills/<name>/SKILL.md`.
-Those repo-local skills are not part of the generic runtime defaults; they are the automation policy of the current repository.
+Those repo-local skills are not part of the generic runtime defaults; they capture repository-specific collaboration policy for the current repository.
 
 Code-based capabilities belong in the tool system, where Elixir modules implement deterministic behavior through `Tool.Behaviour`.
-
-### Repository Automation
-
-NexAgent can also run a repository automation subsystem on top of the core runtime:
-
-```bash
-mix nex.agent orchestrator WORKFLOW.md
-mix nex.agent orchestrator status WORKFLOW.md
-```
-
-This layer is intentionally separate from the core agent runtime.
-
-- `Nex.Agent.*` remains the long-running runtime, session, memory, tool, and skill engine
-- `WORKFLOW.md` defines how this repository wants issue-to-PR automation to behave
-- `.nex/skills/*` can provide repository-owned execution policy for that workflow
-
-That means a repository can use NexAgent without any orchestrator at all, or add repo-local automation policy without turning the runtime itself into a GitHub issue bot.
 
 ## Memory and Sessions
 
@@ -521,7 +504,6 @@ Another way to read the system is:
 - **Agent layer**: InboundWorker + Runner
 - **Capability layer**: Tools + Skills + Memory + Sessions
 - **Background layer**: Cron + Subagent
-- **Automation layer**: Workflow + Tracker + Workspace isolation + Orchestrator
 - **Six-layer growth model**: Soul + User + Memory + Skill + Tool + Code
 
 Core roles in code:
@@ -535,9 +517,6 @@ Core roles in code:
 - `Skills`: load and execute skills
 - `Cron`: manage scheduled jobs
 - `Subagent`: manage background subagents
-- `Automation.Orchestrator`: manage repository issue polling and worker lifecycle
-- `Automation.Workflow`: load repo automation configuration from `WORKFLOW.md`
-- `Automation.WorkspaceManager`: isolate worktrees and agent workspaces per issue
 - `CodeUpgrade` / `UpgradeManager`: manage source-level code upgrades
 
 These parts are held together by an OTP supervision tree instead of being scattered across unrelated scripts.
