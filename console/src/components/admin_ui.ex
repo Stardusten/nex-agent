@@ -4,14 +4,14 @@ defmodule NexAgentConsole.Components.AdminUI do
   alias NexAgentConsole.Components.Nav
 
   @page_meta %{
-    "/" => %{name: "控制台", group: "运行证据"},
-    "/evolution" => %{name: "分层进化", group: "进化层"},
-    "/skills" => %{name: "能力层", group: "进化层"},
-    "/memory" => %{name: "认知记忆", group: "进化层"},
-    "/sessions" => %{name: "会话", group: "运行证据"},
-    "/tasks" => %{name: "任务", group: "运行证据"},
-    "/runtime" => %{name: "运行时", group: "运行证据"},
-    "/code" => %{name: "代码层", group: "进化层"}
+    "/" => %{name: "分流", group: "六层进化"},
+    "/evolution" => %{name: "分流", group: "六层进化"},
+    "/skills" => %{name: "能力", group: "六层进化"},
+    "/memory" => %{name: "认知", group: "六层进化"},
+    "/sessions" => %{name: "分流", group: "六层进化"},
+    "/tasks" => %{name: "分流", group: "六层进化"},
+    "/runtime" => %{name: "分流", group: "六层进化"},
+    "/code" => %{name: "代码", group: "六层进化"}
   }
 
   def page_shell(assigns) do
@@ -96,7 +96,7 @@ defmodule NexAgentConsole.Components.AdminUI do
           </div>
 
           <p class="section-summary">
-            控制台页只保留运行证据与入口分发。分层判断去 `/evolution`，这里负责告诉你现在该先看哪里。
+            控制台页只保留当前状态与入口分发。分层判断去 `/evolution`，这里负责告诉你现在该先看哪里。
           </p>
 
           <div class="metric-grid">
@@ -144,18 +144,14 @@ defmodule NexAgentConsole.Components.AdminUI do
                 %{
                   href: "/memory",
                   title: "检查认知层",
-                  body: "SOUL、USER、MEMORY 和 HISTORY 放在一起看，避免把长期事实和方法混成一页。"
+                  body: "SOUL、USER 和 MEMORY 放在一起看，先判断这是不是长期认知，而不是方法或实现问题。"
                 },
                 %{
                   href: "/skills",
                   title: "检查能力层",
                   body: "SKILL 和 TOOL 在这里分开看：前者是方法沉淀，后者是确定性能力。"
                 },
-                %{
-                  href: "/sessions",
-                  title: "检查运行证据",
-                  body: "如果问题来自单条上下文，就回到 session 详情、消息和 consolidation。"
-                }
+                %{href: "/code", title: "最后才看代码层", body: "只有高层和能力层都不能解决时，才进入 `/code` 做 diff、热更和回滚。"}
               ]
             })}
           </section>
@@ -190,9 +186,9 @@ defmodule NexAgentConsole.Components.AdminUI do
           <div class="section-head">
             <div>
               <p class="section-kicker">最近会话</p>
-              <h2>运行证据入口</h2>
+              <h2>近期上下文</h2>
             </div>
-            <a class="ghost-link" href="/sessions">查看全部</a>
+            <a class="ghost-link" href="/memory">回到认知层</a>
           </div>
 
           {session_list(%{sessions: Enum.take(@state.recent_sessions, 4), compact: true})}
@@ -208,8 +204,8 @@ defmodule NexAgentConsole.Components.AdminUI do
       <section class="section-card section-card--hero">
         <div class="section-head">
           <div>
-            <p class="section-kicker">六层分流</p>
-            <h2>先判断变化应该落到哪一层，再决定是否真的进入更重的层</h2>
+            <p class="section-kicker">当前判断框架</p>
+            <h2>先把变化送到真正拥有它的那一层，再决定是否需要进一步操作</h2>
           </div>
           <span class="status-pill">
             最近事件：{Map.get(List.first(@state.recent_events) || %{}, "event", "暂无相关记录")}
@@ -217,41 +213,58 @@ defmodule NexAgentConsole.Components.AdminUI do
         </div>
 
         <p class="section-summary">
-          默认顺序是先稳定高层，再沉淀方法，再扩展能力，最后才修改代码。`/evolution` 应该先回答“该落哪一层”，而不是直接去改实现。
+          `/evolution` 只负责分流，不负责展开认知原文、能力库存或代码编辑。默认顺序是先稳定高层，再沉淀方法，再扩展能力，最后才修改代码。
         </p>
 
         {layer_map(%{layers: @state.layers})}
       </section>
 
-      <div class="pair-layout">
-        <section class="section-card">
+      <div class="pair-layout" id="pending-signals">
+        <section class="section-card section-card--accent">
           <div class="section-head">
             <div>
-              <p class="section-kicker">cycle 状态</p>
-              <h2>当前是否值得运行下一轮 evolution</h2>
+              <p class="section-kicker">待分流 signals</p>
+              <h2>先看有哪些变化正在请求被整理</h2>
             </div>
           </div>
 
-          <div class="detail-grid">
-            {detail_item(%{label: "待处理 signals", value: length(@state.pending_signals)})}
-            {detail_item(%{label: "最近相关记录", value: length(@state.recent_events)})}
-            {detail_item(%{label: "工作区", value: Path.basename(@state.workspace)})}
-          </div>
+          <p class="section-summary">
+            这里是首屏的主证据区。先看信号，再判断它属于认知、能力还是实现问题。
+          </p>
+
+          {signal_list(%{signals: @state.pending_signals})}
         </section>
 
         <section class="section-card">
           <div class="section-head">
             <div>
-              <p class="section-kicker">分流原则</p>
-              <h2>默认先走高层、轻层、稳定层</h2>
+              <p class="section-kicker">建议落层</p>
+              <h2>把变化送到真正拥有这类信息的页面</h2>
             </div>
           </div>
 
-          {rule_list(%{
-            rules: [
-              "能写进 USER 或 MEMORY，就不要先写 SKILL。",
-              "能沉淀为 SKILL，就不要急着造 TOOL。",
-              "能扩展 TOOL，就不要立刻改 CODE。"
+          {workflow_links(%{
+            links: [
+              %{
+                href: "/memory",
+                title: "进入认知层",
+                body: "当变化更像长期原则、用户偏好或项目事实时，落到 SOUL / USER / MEMORY，而不是继续下沉到能力或代码。"
+              },
+              %{
+                href: "/skills",
+                title: "进入能力层",
+                body: "当变化已经超出认知，开始变成可复用流程或确定性能力时，才进入 SKILL / TOOL 库存治理。"
+              },
+              %{
+                href: "/code",
+                title: "最后才进代码层",
+                body: "只有认知层和能力层都不能解决时，才进入 `/code` 做只读审查、diff、热更和回滚。"
+              },
+              %{
+                href: "#manual-cycle",
+                title: "确认后再手动运行",
+                body: "手动 cycle 是次级操作。先完成分流判断，再决定是否需要人工触发一次整理。"
+              }
             ]
           })}
         </section>
@@ -260,52 +273,8 @@ defmodule NexAgentConsole.Components.AdminUI do
       <section class="section-card">
         <div class="section-head">
           <div>
-            <p class="section-kicker">pending signals</p>
-            <h2>当前待处理变化</h2>
-          </div>
-        </div>
-
-        {signal_list(%{signals: @state.pending_signals})}
-      </section>
-
-      <div class="pair-layout">
-        <section class="section-card">
-          <div class="section-head">
-            <div>
-              <p class="section-kicker">高层认知</p>
-              <h2>SOUL 与 USER 快照</h2>
-            </div>
-          </div>
-
-          <div class="stack-layout stack-layout--tight">
-            <article class="detail-card">
-              <span class="section-kicker">SOUL</span>
-              {code_block(%{content: @state.soul_preview})}
-            </article>
-            <article class="detail-card">
-              <span class="section-kicker">USER</span>
-              {code_block(%{content: @state.user_preview})}
-            </article>
-          </div>
-        </section>
-
-        <section class="section-card">
-          <div class="section-head">
-            <div>
-              <p class="section-kicker">长期事实</p>
-              <h2>MEMORY 快照</h2>
-            </div>
-          </div>
-
-          {code_block(%{content: @state.memory_preview})}
-        </section>
-      </div>
-
-      <section class="section-card">
-        <div class="section-head">
-          <div>
             <p class="section-kicker">最近结果</p>
-            <h2>最近几次进化相关记录</h2>
+            <h2>最近几次分流与进化的摘要</h2>
           </div>
         </div>
 
@@ -321,7 +290,7 @@ defmodule NexAgentConsole.Components.AdminUI do
         </div>
 
         <p class="section-summary">
-          这不是默认动作。先看 `signals`、最近结果和高层认知，再决定是否需要人工触发一次分层整理。
+          这不是默认动作。先看 `signals` 和最近结果，再决定是否需要人工触发一次分层整理。
         </p>
 
         <div class="actions-row">
@@ -352,20 +321,36 @@ defmodule NexAgentConsole.Components.AdminUI do
       <section class="section-card section-card--hero">
         <div class="section-head">
           <div>
-            <p class="section-kicker">SKILL / TOOL</p>
-            <h2>这里承接方法沉淀与确定性能力，不和认知层或代码层混在一起</h2>
+            <p class="section-kicker">当前能力版图</p>
+            <h2>这里先只看资产，以及最近实际命中记录</h2>
           </div>
         </div>
 
         <p class="section-summary">
-          `SKILL` 是可复用流程，`TOOL` 是可调用能力。它们都属于能力层，但不应该被当成同一种东西展示。
+          `/skills` 暂时不展开边界说明、catalog 或 lineage。先回答两件事：现在有哪些能力资产，以及最近哪些 skill 真的被命中过。
         </p>
 
         <div class="metric-grid">
           {metric(%{label: "本地 skills", value: length(@state.local_skills), tone: "gold"})}
-          {metric(%{label: "runtime packages", value: length(@state.runtime_packages), tone: "ink"})}
+          {metric(%{label: "可用 tools", value: length(@state.tools.builtin) + length(@state.tools.custom), tone: "ink"})}
           {metric(%{label: "builtin tools", value: length(@state.tools.builtin), tone: "green"})}
-          {metric(%{label: "custom tools", value: length(@state.tools.custom), tone: "rust"})}
+          {metric(%{label: "custom tools", value: length(@state.tools.custom), tone: "green"})}
+        </div>
+      </section>
+
+      <section class="section-card" id="ability-inventory">
+        <div class="section-head">
+          <div>
+            <p class="section-kicker">资产总览</p>
+            <h2>先确认能力资产分布，再往下看具体清单</h2>
+          </div>
+        </div>
+
+        <div class="detail-grid">
+          {detail_item(%{label: "SKILL", value: length(@state.local_skills)})}
+          {detail_item(%{label: "TOOL", value: length(@state.tools.builtin) + length(@state.tools.custom)})}
+          {detail_item(%{label: "builtin tools", value: length(@state.tools.builtin)})}
+          {detail_item(%{label: "实际命中记录", value: length(actual_hit_runs(@state.recent_runs))})}
         </div>
       </section>
 
@@ -374,7 +359,7 @@ defmodule NexAgentConsole.Components.AdminUI do
           <div class="section-head">
             <div>
               <p class="section-kicker">SKILL</p>
-              <h2>本地方法与流程</h2>
+              <h2>本地方法与流程资产</h2>
             </div>
           </div>
 
@@ -385,7 +370,7 @@ defmodule NexAgentConsole.Components.AdminUI do
           <div class="section-head">
             <div>
               <p class="section-kicker">TOOL</p>
-              <h2>当前可调用能力</h2>
+              <h2>当前可调用能力资产</h2>
             </div>
           </div>
 
@@ -393,53 +378,16 @@ defmodule NexAgentConsole.Components.AdminUI do
         </section>
       </div>
 
-      <div class="pair-layout">
-        <section class="section-card">
-          <div class="section-head">
-            <div>
-              <p class="section-kicker">runtime packages</p>
-              <h2>已进入运行时的能力包</h2>
-            </div>
+      <section class="section-card" id="recent-hits">
+        <div class="section-head">
+          <div>
+            <p class="section-kicker">最近实际命中</p>
+            <h2>只看真正选中过 skill package 的运行记录</h2>
           </div>
+        </div>
 
-          {runtime_packages(%{packages: @state.runtime_packages})}
-        </section>
-
-        <section class="section-card">
-          <div class="section-head">
-            <div>
-              <p class="section-kicker">近期 runs</p>
-              <h2>能力运行轨迹</h2>
-            </div>
-          </div>
-
-          {run_list(%{runs: @state.recent_runs})}
-        </section>
-      </div>
-
-      <div class="pair-layout">
-        <section class="section-card">
-          <div class="section-head">
-            <div>
-              <p class="section-kicker">lineage</p>
-              <h2>能力进化谱系</h2>
-            </div>
-          </div>
-
-          {lineage_list(%{events: @state.lineage})}
-        </section>
-
-        <section class="section-card">
-          <div class="section-head">
-            <div>
-              <p class="section-kicker">catalog</p>
-              <h2>trusted catalog</h2>
-            </div>
-          </div>
-
-          {catalog_list(%{entries: @state.runtime_catalog})}
-        </section>
-      </div>
+        {run_list(%{runs: actual_hit_runs(@state.recent_runs)})}
+      </section>
     </div>
     """
   end
@@ -447,98 +395,105 @@ defmodule NexAgentConsole.Components.AdminUI do
   def memory_panel(assigns) do
     ~H"""
     <div class="stack-layout">
-      <section class="section-card section-card--hero">
+      <section class="section-card section-card--hero" id="memory-summary">
         <div class="section-head">
           <div>
-            <p class="section-kicker">SOUL / USER / MEMORY</p>
-            <h2>认知层只负责长期原则、用户画像与环境事实，不负责方法和实现</h2>
+            <p class="section-kicker">当前认知摘要</p>
+            <h2>认知页先给判断，再给原文证据</h2>
           </div>
-          <a class="ghost-link" href="/sessions">去会话页</a>
+          <a class="ghost-link" href="/evolution">回到六层</a>
         </div>
 
         <p class="section-summary">
-          这一页把高层认知放在一起：`SOUL` 是长期原则，`USER` 是当前用户画像，`MEMORY` 是环境事实，`HISTORY` 是操作历史。需要会话证据时再跳去 `/sessions`。
+          `/memory` 只处理 SOUL、USER、MEMORY 的长期认知，不负责能力沉淀和实现修改。首屏只看认知结论，原文预览全部降到下半区。
         </p>
 
         <div class="metric-grid">
           {metric(%{label: "SOUL", value: if(String.trim(@state.soul_preview || "") == "", do: "empty", else: "loaded"), tone: "gold"})}
           {metric(%{label: "USER", value: if(String.trim(@state.user_preview || "") == "", do: "empty", else: "loaded"), tone: "green"})}
           {metric(%{label: "MEMORY bytes", value: @state.memory_bytes, tone: "ink"})}
-          {metric(%{label: "HISTORY bytes", value: @state.history_bytes, tone: "rust"})}
+          {metric(%{label: "最近认知事件", value: length(@state.recent_events), tone: "rust"})}
         </div>
       </section>
-
-      <div class="pair-layout">
-        <section class="section-card">
-          <div class="section-head">
-            <div>
-              <p class="section-kicker">SOUL</p>
-              <h2>身份与长期原则</h2>
-            </div>
-          </div>
-
-          {code_block(%{content: @state.soul_preview})}
-        </section>
-
-        <section class="section-card">
-          <div class="section-head">
-            <div>
-              <p class="section-kicker">USER</p>
-              <h2>用户画像与协作偏好</h2>
-            </div>
-          </div>
-
-          {code_block(%{content: @state.user_preview})}
-        </section>
-      </div>
 
       <section class="section-card">
         <div class="section-head">
           <div>
-            <p class="section-kicker">MEMORY.md</p>
-            <h2>长期事实与项目上下文</h2>
+            <p class="section-kicker">认知结论</p>
+            <h2>先看 SOUL、USER、MEMORY 各自正在定义什么</h2>
           </div>
         </div>
 
-        {code_block(%{content: @state.memory_preview})}
+        <div class="stack-layout stack-layout--tight">
+          <article class="detail-card detail-card--summary">
+            <span class="section-kicker">SOUL</span>
+            <strong>长期原则</strong>
+            <p>{preview_glance(@state.soul_preview, "SOUL 还没有形成稳定原则。")}</p>
+          </article>
+
+          <article class="detail-card detail-card--summary">
+            <span class="section-kicker">USER</span>
+            <strong>用户画像</strong>
+            <p>{preview_glance(@state.user_preview, "USER 还没有沉淀出稳定协作偏好。")}</p>
+          </article>
+
+          <article class="detail-card detail-card--summary">
+            <span class="section-kicker">MEMORY</span>
+            <strong>长期事实</strong>
+            <p>{preview_glance(@state.memory_preview, "MEMORY 还没有积累出明确项目事实。")}</p>
+          </article>
+        </div>
       </section>
 
-      <div class="pair-layout">
-        <section class="section-card">
-          <div class="section-head">
-            <div>
-              <p class="section-kicker">HISTORY.md</p>
-              <h2>历史记录</h2>
-            </div>
+      <section class="section-card">
+        <div class="section-head">
+          <div>
+            <p class="section-kicker">最近变化</p>
+            <h2>与认知层相关的最近记录</h2>
           </div>
+        </div>
 
-          {code_block(%{content: @state.history_preview})}
-        </section>
+        {audit_glance(%{rows: Enum.take(@state.recent_events, 8)})}
+      </section>
 
-        <section class="section-card">
-          <div class="section-head">
-            <div>
-              <p class="section-kicker">最近变化</p>
-              <h2>与认知层相关的最近记录</h2>
-            </div>
+      <section class="section-card">
+        <div class="section-head">
+          <div>
+            <p class="section-kicker">原文证据</p>
+            <h2>SOUL、USER、MEMORY 原文按层级顺序展开</h2>
           </div>
+        </div>
 
-          {audit_glance(%{rows: Enum.take(@state.recent_events, 8)})}
-        </section>
-      </div>
+        <div class="stack-layout stack-layout--tight">
+          <article class="detail-card">
+            <span class="section-kicker">SOUL.md</span>
+            {code_block(%{content: @state.soul_preview})}
+          </article>
+
+          <article class="detail-card">
+            <span class="section-kicker">USER.md</span>
+            {code_block(%{content: @state.user_preview})}
+          </article>
+
+          <article class="detail-card">
+            <span class="section-kicker">MEMORY.md</span>
+            {code_block(%{content: @state.memory_preview})}
+          </article>
+        </div>
+      </section>
 
       <section class="section-card">
         <div class="section-head">
           <div>
             <p class="section-kicker">下一步</p>
-            <h2>需要运行证据或分层判断时</h2>
+            <h2>继续分流或进入能力层</h2>
           </div>
         </div>
 
         {workflow_links(%{
           links: [
-            %{href: "/sessions", title: "回到会话页", body: "从单条 session 检查消息、未 consolidation 数量，再决定是否整理记忆。"},
-            %{href: "/evolution", title: "回到分层总览", body: "如果你在判断这条变化该落在哪一层，直接回 `/evolution` 看六层地图。"}
+            %{href: "/evolution", title: "回到分层总览", body: "如果你在判断这条变化该落在哪一层，直接回 `/evolution` 看六层地图。"},
+            %{href: "/skills", title: "继续看能力层", body: "如果这不是长期认知，而是可复用的方法或能力，再进入 `/skills`。"}
           ]
         })}
       </section>
@@ -773,11 +728,28 @@ defmodule NexAgentConsole.Components.AdminUI do
     ~H"""
     <div class="split-layout split-layout--code">
       <aside class="split-sidebar">
+        <section class="section-card section-card--accent">
+          <div class="section-head">
+            <div>
+              <p class="section-kicker">为什么会走到代码层</p>
+              <h2>只有认知层和能力层都不能解决时，才进入这里</h2>
+            </div>
+          </div>
+
+          {rule_list(%{
+            rules: [
+              "代码层是最后一层，默认先审查，不默认直接编辑。",
+              "如果问题还能被 SOUL / USER / MEMORY 或 SKILL / TOOL 解决，就不应先改实现。",
+              "这里的变更操作都属于次级动作，先看源码与版本轨迹，再决定是否动手。"
+            ]
+          })}
+        </section>
+
         <section class="section-card">
           <div class="section-head">
             <div>
-              <p class="section-kicker">CODE</p>
-              <h2>最后一层的可热更模块</h2>
+              <p class="section-kicker">模块选择</p>
+              <h2>先定位当前要审查的模块</h2>
             </div>
           </div>
 
@@ -805,19 +777,17 @@ defmodule NexAgentConsole.Components.AdminUI do
       </aside>
 
       <div class="split-main">
-        <section class="section-card section-card--editor">
+        <section class="section-card section-card--hero" id="source-preview">
           <div class="section-head">
             <div>
-              <p class="section-kicker">代码层工作台</p>
-              <h2>只有高层不能解决时，才进入这里做 diff、热更和回滚</h2>
+              <p class="section-kicker">只读审查</p>
+              <h2>先确认为什么必须落到代码层，再查看当前源码</h2>
             </div>
           </div>
 
           <p class="section-summary">
-            左侧只负责选择模块与查看版本轨迹。这里是最后一层：对内部实现做直接修改，影响范围最大，也必须最谨慎。
+            这里先回答两件事：当前模块是什么、它最近怎么变过。当前源码只在这里只读展示，不再把编辑器当成默认首屏。
           </p>
-
-          <div id="code-action-result" class="action-result"></div>
 
           <div class="detail-grid">
             {detail_item(%{label: "当前模块", value: @state.selected_module})}
@@ -825,14 +795,46 @@ defmodule NexAgentConsole.Components.AdminUI do
             {detail_item(%{label: "最近代码事件", value: length(@state.recent_events)})}
           </div>
 
-          <form class="editor-form">
+          {code_block(%{content: @state.current_source})}
+        </section>
+
+        <section class="section-card">
+          <div class="section-head">
+            <div>
+              <p class="section-kicker">最近 code events</p>
+              <h2>先看这层最近发生过什么</h2>
+            </div>
+          </div>
+
+          {audit_glance(%{rows: Enum.take(@state.recent_events, 8)})}
+        </section>
+
+        <section class="section-card section-card--editor">
+          <div class="section-head">
+            <div>
+              <p class="section-kicker">变更操作</p>
+              <h2>这是次级区，只有确认必须下沉到实现后才使用</h2>
+            </div>
+          </div>
+
+          <p class="section-summary">
+            先在上方只读查看当前源码。这里只有当你已经准备好候选实现时，才粘贴新源码做 diff、热更或回滚。
+          </p>
+
+          <div id="code-action-result" class="action-result"></div>
+
+          <form class="editor-form editor-form--candidate">
             <input type="hidden" name="module" value={@state.selected_module} />
 
             <label for="reason">变更原因</label>
             <input id="reason" type="text" name="reason" value="Console hot upgrade" />
 
-            <label for="code">新源码</label>
-            <textarea id="code" name="code">{@state.current_source}</textarea>
+            <label for="code">候选新源码</label>
+            <textarea
+              id="code"
+              name="code"
+              placeholder="把候选源码粘贴到这里，再预览 diff 或应用热更。当前源码请看上方只读预览。"
+            ></textarea>
 
             <div class="actions-row">
               <button
@@ -868,17 +870,6 @@ defmodule NexAgentConsole.Components.AdminUI do
             </select>
             <button class="action-button action-button--danger" type="submit">回滚</button>
           </form>
-        </section>
-
-        <section class="section-card">
-          <div class="section-head">
-            <div>
-              <p class="section-kicker">变更历史</p>
-              <h2>最近代码层事件</h2>
-            </div>
-          </div>
-
-          {audit_table(%{rows: @state.recent_events})}
         </section>
       </div>
     </div>
@@ -919,7 +910,7 @@ defmodule NexAgentConsole.Components.AdminUI do
             <span>进入</span>
           </header>
           <p class="layer-card__summary">{layer.summary}</p>
-          <small>{layer.detail}</small>
+          <small class="layer-card__meta">{compress_layer_detail(layer.detail)}</small>
         </a>
       <% end %>
     </div>
@@ -1145,67 +1136,10 @@ defmodule NexAgentConsole.Components.AdminUI do
         <%= for skill <- @skills do %>
           <article class="stack-list__item">
             <header>
-              <strong>{Map.get(skill, :name) || Map.get(skill, "name")}</strong>
+              <strong>{skill_name(skill)}</strong>
+              <span>{if skill_draft?(skill), do: "draft", else: "published"}</span>
             </header>
-            <p>{Map.get(skill, :description) || Map.get(skill, "description")}</p>
-          </article>
-        <% end %>
-      </div>
-    <% end %>
-    """
-  end
-
-  defp runtime_packages(assigns) do
-    ~H"""
-    <%= if @packages == [] do %>
-      {empty_state(%{title: "runtime packages 为空", body: "skill runtime 还没有成功安装或索引任何 package。"})}
-    <% else %>
-      <div class="stack-list">
-        <%= for package <- @packages do %>
-          <article class="stack-list__item">
-            <header>
-              <strong>{package["name"]}</strong>
-              <span>{package["execution_mode"]}</span>
-            </header>
-            <p>{get_in(package, ["manifest", "description"]) || "No description"}</p>
-          </article>
-        <% end %>
-      </div>
-    <% end %>
-    """
-  end
-
-  defp catalog_list(assigns) do
-    ~H"""
-    <%= if @entries == [] do %>
-      {empty_state(%{title: "catalog 为空", body: "skill runtime 还没有同步 trusted GitHub catalog。"})}
-    <% else %>
-      <div class="stack-list">
-        <%= for entry <- Enum.take(@entries, 20) do %>
-          <article class="stack-list__item">
-            <header>
-              <strong>{entry.name}</strong>
-              <span>{entry.source_id}</span>
-            </header>
-            <p>{entry.description || "No description"}</p>
-          </article>
-        <% end %>
-      </div>
-    <% end %>
-    """
-  end
-
-  defp lineage_list(assigns) do
-    ~H"""
-    <%= if @events == [] do %>
-      {empty_state(%{title: "还没有 lineage events", body: "capture / evolve 之后这里会开始积累谱系。"})}
-    <% else %>
-      <div class="audit-table">
-        <%= for event <- @events do %>
-          <article class="audit-table__row">
-            <time>{format_timestamp(event["created_at"])}</time>
-            <strong>{event["kind"]}</strong>
-            <p>{event["summary"]}</p>
+            <p>{skill_description(skill)}</p>
           </article>
         <% end %>
       </div>
@@ -1216,14 +1150,17 @@ defmodule NexAgentConsole.Components.AdminUI do
   defp run_list(assigns) do
     ~H"""
     <%= if @runs == [] do %>
-      {empty_state(%{title: "暂无 runtime runs", body: "开启 skill runtime 后，执行轨迹会在这里出现。"})}
+      {empty_state(%{title: "最近还没有实际命中记录", body: "只有这次运行真的选中了 skill package，才会出现在这里。"})}
     <% else %>
       <div class="audit-table">
         <%= for run <- @runs do %>
           <article class="audit-table__row">
             <time>{format_timestamp(run.inserted_at)}</time>
-            <strong>{run.run_id}</strong>
+            <strong>{hit_run_title(run)}</strong>
             <p>{run.prompt || "No prompt preview"}</p>
+            <%= if result = hit_run_result(run) do %>
+              <p>{result}</p>
+            <% end %>
           </article>
         <% end %>
       </div>
@@ -1348,8 +1285,20 @@ defmodule NexAgentConsole.Components.AdminUI do
   defp page_name(path), do: path |> page_meta() |> Map.get(:name)
   defp page_group(path), do: path |> page_meta() |> Map.get(:group)
 
-  defp page_meta(path) do
-    Map.get(@page_meta, path, %{name: "控制台", group: "运行证据"})
+  defp page_meta(path), do: Map.get(@page_meta, path, %{name: "分流", group: "六层进化"})
+
+  defp preview_glance(content, fallback) do
+    content
+    |> to_string()
+    |> String.split("\n")
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == "" or String.starts_with?(&1, "#")))
+    |> Enum.take(3)
+    |> Enum.join(" · ")
+    |> case do
+      "" -> fallback
+      preview -> String.slice(preview, 0, 220)
+    end
   end
 
   defp payload_preview(payload) do
@@ -1393,4 +1342,55 @@ defmodule NexAgentConsole.Components.AdminUI do
   defp readable_bool(false), do: "no"
   defp readable_bool(nil), do: "n/a"
   defp readable_bool(value), do: to_string(value)
+
+  defp compress_layer_detail(detail) do
+    detail
+    |> to_string()
+    |> String.replace(~r/\s+/, " ")
+        |> String.slice(0, 68)
+  end
+
+  defp skill_name(skill), do: Map.get(skill, :name) || Map.get(skill, "name")
+
+  defp skill_description(skill) do
+    Map.get(skill, :display_description) || Map.get(skill, "display_description") ||
+      Map.get(skill, :description) || Map.get(skill, "description") || "No description"
+  end
+
+  defp skill_draft?(skill), do: Map.get(skill, :draft) == true or Map.get(skill, "draft") == true
+
+  defp actual_hit_runs(runs) do
+    runs
+    |> Enum.filter(fn run ->
+      run
+      |> Map.get(:packages, Map.get(run, "packages", []))
+      |> case do
+        packages when is_list(packages) -> packages != []
+        _ -> false
+      end
+    end)
+    |> Enum.take(12)
+  end
+
+  defp hit_run_title(run) do
+    names =
+      run
+      |> Map.get(:packages, Map.get(run, "packages", []))
+      |> Enum.map(fn package -> Map.get(package, "name") || Map.get(package, :name) end)
+      |> Enum.reject(&is_nil/1)
+
+    case names do
+      [] -> Map.get(run, :run_id) || Map.get(run, "run_id") || "runtime hit"
+      _ -> Enum.join(names, " + ")
+    end
+  end
+
+  defp hit_run_result(run) do
+    run
+    |> Map.get(:result, Map.get(run, "result"))
+    |> case do
+      result when is_binary(result) and result != "" -> result
+      _ -> nil
+    end
+  end
 end

@@ -4,16 +4,7 @@ defmodule NexAgentConsole.Pages.Tasks do
   alias Nex.Agent.Admin
   alias NexAgentConsole.Components.AdminUI
 
-  def mount(_params) do
-    %{
-      title: "NexAgent Console | 任务",
-      subtitle: "任务页只处理调度执行与 cron，不负责解释进化层该怎么分流。",
-      current_path: "/tasks",
-      panel_path: "/api/admin/panels/tasks",
-      primary_action_label: "查看运行时",
-      primary_action_href: "/runtime"
-    }
-  end
+  def mount(_params), do: {:redirect, "/evolution"}
 
   def render(assigns), do: AdminUI.page_shell(assigns)
 

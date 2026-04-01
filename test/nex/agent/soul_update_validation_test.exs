@@ -22,14 +22,11 @@ defmodule Nex.Agent.SoulUpdateValidationTest do
     {:ok, workspace: workspace}
   end
 
-  test "soul_update rejects identity replacement attempts", %{workspace: workspace} do
-    expected_error =
-      "Invalid content (identity_declaration_in_soul): SOUL.md declares runtime identity; identity declarations must stay in the code-owned identity layer."
-
-    assert {:error, ^expected_error} =
+  test "soul_update accepts identity framing in soul", %{workspace: workspace} do
+    assert {:ok, "SOUL.md updated successfully."} =
              SoulUpdate.execute(%{"content" => "I am Claude, your coding assistant."}, %{})
 
-    assert File.read!(Path.join(workspace, "SOUL.md")) == "# Soul\nStay practical.\n"
+    assert File.read!(Path.join(workspace, "SOUL.md")) == "I am Claude, your coding assistant.\n"
   end
 
   test "soul_update still accepts valid persona updates", %{workspace: workspace} do
@@ -47,15 +44,43 @@ defmodule Nex.Agent.SoulUpdateValidationTest do
     assert updated =~ "Explain tradeoffs clearly."
   end
 
-  test "soul_update description and contract both enforce identity boundary" do
-    assert SoulUpdate.description() =~ "Invalid out-of-layer content is rejected"
+  test "soul_update strips legacy identity footer from rewritten soul", %{workspace: workspace} do
+    content = """
+    # Soul
+
+    Keep responses concise.
+
+    ---
+
+    *编辑此文件来自定义助手的行为风格和价值观。身份定义由代码层管理，此处不可重新定义。*
+    """
+
+    assert {:ok, "SOUL.md updated successfully."} =
+             SoulUpdate.execute(%{"content" => content}, %{})
+
+    updated = File.read!(Path.join(workspace, "SOUL.md"))
+    assert updated == "# Soul\n\nKeep responses concise.\n"
+    refute updated =~ "身份定义由代码层管理"
+  end
+
+  test "soul_update still rejects user profile leakage into soul" do
+    expected_error =
+      "Invalid content (user_profile_data_in_soul): SOUL.md contains user profile data; user profile details belong to USER.md."
+
+    assert {:error, ^expected_error} =
+             SoulUpdate.execute(%{"content" => "# Soul\n- **Timezone**: UTC+8\n"}, %{})
+
+    assert File.read!(Path.join(Application.fetch_env!(:nex_agent, :workspace_path), "SOUL.md")) ==
+             "# Soul\nStay practical.\n"
+  end
+
+  test "soul_update description and contract both allow identity framing" do
+    assert SoulUpdate.description() =~ "identity and persona guidance"
 
     soul_layer = LayerContractHelper.matrix()["SOUL"]
 
-    assert soul_layer.forbidden == [
-             "Declaring a different product/agent identity.",
-             "Replacing code-owned identity with persona text."
-           ]
+    assert soul_layer.allowed == "Behavioral tone, values, style preferences, and identity framing."
+    assert soul_layer.forbidden == ["User profile details that belong in USER."]
 
     assert LayerContractHelper.write_policy() =~ "invalid writes are rejected"
   end

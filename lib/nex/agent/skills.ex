@@ -18,8 +18,12 @@ defmodule Nex.Agent.Skills do
   use Agent
 
   alias Nex.Agent.{Skills.Loader, Workspace}
+  alias Nex.SkillRuntime.{Frontmatter, Package, Registry}
 
   @name __MODULE__
+  @draft_prefix "[Draft] "
+  @draft_status_regex ~r/\A\s*<!--\s*status:\s*draft\b.*?-->\s*/s
+
   def start_link(opts \\ []) do
     Agent.start_link(fn -> %{} end, opts ++ [name: @name])
   end
@@ -74,6 +78,7 @@ defmodule Nex.Agent.Skills do
     parameters = attrs["parameters"] || attrs[:parameters] || %{}
     allowed_tools = attrs["allowed_tools"] || attrs[:allowed_tools] || []
     type = attrs["type"] || attrs[:type]
+    user_invocable = user_invocable_attr(attrs)
 
     cond do
       is_nil(name) ->
@@ -84,7 +89,15 @@ defmodule Nex.Agent.Skills do
          "Unsupported skill type. Skills are Markdown-only; implement code-based capabilities as tools."}
 
       true ->
-        save_markdown_skill(name, description, content, parameters, allowed_tools, opts)
+        save_markdown_skill(
+          name,
+          description,
+          content,
+          parameters,
+          allowed_tools,
+          user_invocable,
+          opts
+        )
     end
   end
 
@@ -121,10 +134,15 @@ defmodule Nex.Agent.Skills do
         {:error, "Skill not found: #{name}"}
 
       skill ->
-        if skill.disable_model_invocation && Keyword.get(opts, :invoked_by, :user) == :model do
+        cond do
+          draft?(skill) ->
+            {:error, "Skill #{name} is still draft-only; publish it from the console before use"}
+
+          skill.disable_model_invocation && Keyword.get(opts, :invoked_by, :user) == :model ->
           {:error, "Skill #{name} is disabled for model invocation"}
-        else
-          execute_markdown_skill(skill, args, opts)
+
+          true ->
+            execute_markdown_skill(skill, args, opts)
         end
     end
   end
@@ -140,6 +158,32 @@ defmodule Nex.Agent.Skills do
         "path" => skill.path
       }
     end)
+  end
+
+  @spec publish_draft(String.t(), keyword()) :: {:ok, map()} | {:error, String.t()}
+  def publish_draft(name, opts \\ []) when is_binary(name) do
+    with %{} = skill <- get(name, opts) || {:error, "Skill not found: #{name}"},
+         true <- draft?(skill) || {:error, "Skill is already published"},
+         :ok <- publish_draft_files(skill, opts) do
+      reload_after_publish(opts)
+      {:ok, get(name, opts)}
+    end
+  end
+
+  @spec draft?(map()) :: boolean()
+  def draft?(skill) when is_map(skill) do
+    draft_value = Map.get(skill, :draft) || Map.get(skill, "draft")
+    description = Map.get(skill, :description) || Map.get(skill, "description") || ""
+    content = Map.get(skill, :content) || Map.get(skill, "content") || ""
+
+    draft_value in [true, "true"] or draft_description?(description) or draft_content?(content)
+  end
+
+  @spec strip_draft_prefix(String.t() | nil) :: String.t()
+  def strip_draft_prefix(nil), do: ""
+
+  def strip_draft_prefix(description) when is_binary(description) do
+    String.replace_prefix(description, @draft_prefix, "")
   end
 
   @spec always_instructions(keyword()) :: String.t()
@@ -181,7 +225,15 @@ defmodule Nex.Agent.Skills do
     |> String.replace("$0", arguments)
   end
 
-  defp save_markdown_skill(name, description, content, parameters, allowed_tools, opts) do
+  defp save_markdown_skill(
+         name,
+         description,
+         content,
+         parameters,
+         allowed_tools,
+         user_invocable,
+         opts
+       ) do
     with :ok <- validate_skill_name(name) do
       skill_dir = Path.join(skills_dir(opts), name)
       skill_file = Path.join(skill_dir, "SKILL.md")
@@ -193,7 +245,7 @@ defmodule Nex.Agent.Skills do
           "---",
           "name: #{yaml_scalar(name)}",
           "description: #{yaml_scalar(description)}",
-          "user-invocable: true"
+          "user-invocable: #{if(user_invocable, do: "true", else: "false")}"
         ]
         |> maybe_put_frontmatter("parameters", parameters)
         |> maybe_put_frontmatter("allowed-tools", allowed_tools)
@@ -244,6 +296,139 @@ defmodule Nex.Agent.Skills do
   defp yaml_scalar(value), do: inspect(value)
 
   defp skill_name(skill), do: Map.get(skill, :name) || Map.get(skill, "name")
+
+  defp user_invocable_attr(attrs) when is_map(attrs) do
+    case Map.get(attrs, "user-invocable") || Map.get(attrs, "user_invocable") ||
+           Map.get(attrs, :user_invocable) do
+      nil -> true
+      value -> value in [true, "true"]
+    end
+  end
+
+  defp publish_draft_files(skill, opts) do
+    skill
+    |> draft_paths(opts)
+    |> Enum.reduce_while(:ok, fn path, :ok ->
+      case publish_draft_file(path) do
+        :ok -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp draft_paths(skill, opts) do
+    local_path =
+      Path.join([
+        skills_dir(opts),
+        skill_name(skill),
+        "SKILL.md"
+      ])
+
+    runtime_path =
+      Path.join([
+        skills_dir(opts),
+        "rt__#{Package.slugify(skill_name(skill))}",
+        "SKILL.md"
+      ])
+
+    [local_path, runtime_path, Map.get(skill, :path) || Map.get(skill, "path")]
+    |> Enum.filter(&is_binary/1)
+    |> Enum.uniq()
+    |> Enum.filter(&File.exists?/1)
+  end
+
+  defp publish_draft_file(path) do
+    with {:ok, content} <- File.read(path) do
+      {frontmatter, body} = Frontmatter.parse_document(content)
+
+      updated_frontmatter =
+        frontmatter
+        |> Map.put("description", strip_draft_prefix(frontmatter["description"]))
+        |> Map.put("user-invocable", true)
+
+      updated_body =
+        body
+        |> String.trim_leading()
+        |> then(&Regex.replace(@draft_status_regex, &1, ""))
+        |> String.trim_leading()
+
+      File.write(path, render_skill_file(updated_frontmatter, updated_body))
+    else
+      {:error, reason} -> {:error, format_file_error(reason)}
+    end
+  end
+
+  defp render_skill_file(frontmatter, body) do
+    lines =
+      ["---"] ++
+        frontmatter_lines(frontmatter) ++
+        ["---", "", String.trim_leading(body), ""]
+
+    Enum.join(lines, "\n")
+  end
+
+  defp frontmatter_lines(frontmatter) do
+    ordered_keys = [
+      "name",
+      "description",
+      "user-invocable",
+      "execution_mode",
+      "version",
+      "entry_script",
+      "disable-model-invocation",
+      "always",
+      "parameters",
+      "allowed-tools",
+      "references",
+      "requires",
+      "context",
+      "agent",
+      "argument-hint"
+    ]
+
+    prioritized =
+      ordered_keys
+      |> Enum.flat_map(fn key ->
+        if Map.has_key?(frontmatter, key), do: frontmatter_entry(key, frontmatter[key]), else: []
+      end)
+
+    remaining =
+      frontmatter
+      |> Map.drop(ordered_keys)
+      |> Enum.sort_by(fn {key, _} -> to_string(key) end)
+      |> Enum.flat_map(fn {key, value} -> frontmatter_entry(to_string(key), value) end)
+
+    prioritized ++ remaining
+  end
+
+  defp frontmatter_entry(_key, value) when value in [nil, ""], do: []
+  defp frontmatter_entry(key, value) when is_map(value), do: ["#{key}:"] ++ to_yaml_lines(value)
+  defp frontmatter_entry(key, value) when is_list(value), do: ["#{key}:"] ++ to_yaml_lines(value)
+  defp frontmatter_entry(key, value), do: ["#{key}: #{yaml_scalar(value)}"]
+
+  defp reload_after_publish(opts) do
+    if Keyword.has_key?(opts, :workspace) do
+      Registry.reload(opts)
+      :ok
+    else
+      load()
+    end
+  rescue
+    _ -> :ok
+  end
+
+  defp draft_description?(description) when is_binary(description),
+    do: String.starts_with?(description, @draft_prefix)
+
+  defp draft_description?(_), do: false
+
+  defp draft_content?(content) when is_binary(content),
+    do: Regex.match?(@draft_status_regex, String.trim_leading(content))
+
+  defp draft_content?(_), do: false
+
+  defp format_file_error(%{message: message}) when is_binary(message), do: message
+  defp format_file_error(reason), do: inspect(reason)
 
   defp truthy_skill_field?(skill, key) do
     value = Map.get(skill, key) || Map.get(skill, to_string(key))

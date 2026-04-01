@@ -1,7 +1,7 @@
 defmodule Nex.Agent.AdminTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{Admin, Audit, Bus, CodeUpgrade, Session, Workspace}
+  alias Nex.Agent.{Admin, Audit, Bus, CodeUpgrade, Session, Skills, Workspace}
   alias Nex.Agent.Tool.CustomTools
 
   setup do
@@ -118,6 +118,37 @@ defmodule Nex.Agent.AdminTest do
     assert overview_state.skills.recent_runs == 1
   end
 
+  test "console-facing admin states keep the key fields used by panels", %{workspace: workspace} do
+    File.write!(Path.join(workspace, "SOUL.md"), "# SOUL\n- stay layered\n")
+    File.write!(Path.join(workspace, "USER.md"), "# USER\n- likes structured consoles\n")
+    File.write!(Path.join(workspace, "memory/MEMORY.md"), "# MEMORY\n- keep stable facts here\n")
+
+    session =
+      Session.new("qa:console")
+      |> Session.add_message("user", "first")
+      |> Session.add_message("assistant", "second")
+
+    assert :ok = Session.save(session, workspace: workspace)
+
+    assert :ok =
+             Nex.Agent.Evolution.record_signal(
+               %{source: :qa, signal: "needs triage", context: %{layer: "MEMORY"}},
+               workspace: workspace
+             )
+
+    overview_state = Admin.overview_state(workspace: workspace)
+    evolution_state = Admin.evolution_state(workspace: workspace)
+    memory_state = Admin.memory_state(workspace: workspace)
+    sessions_state = Admin.sessions_state(workspace: workspace)
+
+    assert length(overview_state.pending_signals) == 1
+    assert length(evolution_state.pending_signals) == 1
+    assert memory_state.memory_preview =~ "# MEMORY"
+    assert memory_state.memory_bytes > 0
+    assert sessions_state.selected_session.last_consolidated == 0
+    assert sessions_state.selected_session.unconsolidated_messages == 2
+  end
+
   test "audit append broadcasts normalized admin event", %{workspace: workspace} do
     assert :ok = Admin.subscribe_events(self())
 
@@ -192,6 +223,66 @@ defmodule Nex.Agent.AdminTest do
 
     assert CodeUpgrade.source_path(CustomTools.module_for_name(tool_name)) ==
              Path.join(tool_dir, "tool.ex")
+  end
+
+  test "publish_draft_skill republishes local and runtime copies", %{workspace: workspace} do
+    assert {:ok, _} =
+             Skills.create(
+               %{
+                 name: "draft_probe",
+                 description: "[Draft] Probe stuck states",
+                 content: "<!-- status: draft, source: evolution -->\n\n# Draft Probe\n",
+                 user_invocable: false
+               },
+               workspace: workspace
+             )
+
+    runtime_dir = Path.join(workspace, "skills/rt__draft_probe")
+    File.mkdir_p!(runtime_dir)
+
+    File.write!(
+      Path.join(runtime_dir, "SKILL.md"),
+      """
+      ---
+      name: "draft_probe"
+      description: "[Draft] Probe stuck states"
+      user-invocable: false
+      execution_mode: knowledge
+      ---
+
+      <!-- status: draft, source: evolution -->
+
+      # Draft Probe
+      """
+    )
+
+    File.write!(
+      Path.join(runtime_dir, "source.json"),
+      Jason.encode!(%{"source_type" => "legacy_local", "active" => true}, pretty: true)
+    )
+
+    assert {:ok, published} = Admin.publish_draft_skill("draft_probe", workspace: workspace)
+    refute published.draft
+    assert published.display_description == "Probe stuck states"
+
+    skill_file = Path.join(workspace, "skills/draft_probe/SKILL.md")
+    runtime_file = Path.join(runtime_dir, "SKILL.md")
+
+    refute File.read!(skill_file) =~ "[Draft]"
+    refute File.read!(skill_file) =~ "status: draft"
+    assert File.read!(skill_file) =~ "user-invocable: true"
+
+    refute File.read!(runtime_file) =~ "[Draft]"
+    refute File.read!(runtime_file) =~ "status: draft"
+    assert File.read!(runtime_file) =~ "user-invocable: true"
+
+    state = Admin.skills_state(workspace: workspace)
+    assert Enum.any?(state.local_skills, &(&1.name == "draft_probe" and &1.draft == false))
+
+    assert Enum.any?(state.runtime_packages, fn package ->
+             package["name"] == "draft_probe" and package["draft"] == false and
+               package["active"] == true
+           end)
   end
 
   defp put_session_timestamps(session, naive_datetime) do

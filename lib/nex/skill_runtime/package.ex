@@ -9,6 +9,7 @@ defmodule Nex.SkillRuntime.Package do
     :slug,
     :root_path,
     :manifest,
+    :draft,
     :files,
     :source,
     :source_type,
@@ -31,7 +32,8 @@ defmodule Nex.SkillRuntime.Package do
       source = read_source(dir)
       execution_mode = Manifest.infer_execution_mode(manifest, dir)
       {available, warnings} = availability(manifest, source)
-      active = source_active?(source)
+      draft = manifest.draft == true
+      active = source_active?(source) and not draft
 
       package =
         %__MODULE__{
@@ -40,6 +42,7 @@ defmodule Nex.SkillRuntime.Package do
           slug: slugify(manifest.name),
           root_path: Path.expand(dir),
           manifest: %{manifest | execution_mode: execution_mode},
+          draft: draft,
           files: list_files(dir),
           source: source,
           source_type: source_type(source),
@@ -62,6 +65,7 @@ defmodule Nex.SkillRuntime.Package do
       "name" => package.name,
       "slug" => package.slug,
       "root_path" => package.root_path,
+      "draft" => package.draft == true,
       "installed" => package.installed,
       "active" => package.active,
       "available" => package.available,
@@ -81,6 +85,7 @@ defmodule Nex.SkillRuntime.Package do
       %Manifest{
         name: get_in(record, ["manifest", "name"]) || record["name"],
         description: get_in(record, ["manifest", "description"]) || "",
+        draft: get_in(record, ["manifest", "draft"]) == true or record["draft"] == true,
         version: get_in(record, ["manifest", "version"]) || 0,
         execution_mode: get_in(record, ["manifest", "execution_mode"]),
         entry_script: get_in(record, ["manifest", "entry_script"]),
@@ -103,11 +108,12 @@ defmodule Nex.SkillRuntime.Package do
       slug: record["slug"] || slugify(record["name"] || "skill"),
       root_path: record["root_path"],
       manifest: manifest,
+      draft: record["draft"] == true or manifest.draft == true,
       files: record["files"] || [],
       source: record["source"],
       source_type: record["source_type"] || "local",
       installed: record["installed"] != false,
-      active: record["active"] != false,
+      active: record["active"] != false and not (record["draft"] == true or manifest.draft == true),
       available: record["available"] != false,
       availability_warnings: record["availability_warnings"] || [],
       execution_mode: record["execution_mode"] || manifest.execution_mode || "knowledge",

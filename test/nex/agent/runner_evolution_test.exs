@@ -678,13 +678,13 @@ defmodule Nex.Agent.RunnerEvolutionTest do
                provider: :anthropic,
                model: "claude-sonnet-4-20250514",
                tools: [save_memory_tool_definition()],
-               tool_choice: %{type: "function", function: %{name: "save_memory"}},
+               tool_choice: %{type: "tool", name: "save_memory"},
                req_llm_generate_text_fun: llm_generate_text_fun
              )
 
     assert_receive {:consolidation_opts, first_opts}
     assert_receive {:consolidation_opts, second_opts}
-    assert first_opts[:tool_choice] == %{type: "function", function: %{name: "save_memory"}}
+    assert first_opts[:tool_choice] == %{type: "tool", name: "save_memory"}
     refute Keyword.has_key?(second_opts, :tool_choice)
   end
 
@@ -701,12 +701,12 @@ defmodule Nex.Agent.RunnerEvolutionTest do
                provider: :anthropic,
                model: "claude-sonnet-4-20250514",
                tools: [save_memory_tool_definition()],
-               tool_choice: %{type: "function", function: %{name: "save_memory"}},
+               tool_choice: %{type: "tool", name: "save_memory"},
                req_llm_generate_text_fun: llm_generate_text_fun
              )
 
     assert_receive {:consolidation_opts, first_opts}
-    assert first_opts[:tool_choice] == %{type: "function", function: %{name: "save_memory"}}
+    assert first_opts[:tool_choice] == %{type: "tool", name: "save_memory"}
     refute_receive {:consolidation_opts, _}
   end
 

@@ -79,6 +79,7 @@ defmodule Nex.Agent.Admin do
     %{
       runtime: runtime_state(opts),
       recent_events: recent_events(limit: 12, workspace: workspace(opts)),
+      pending_signals: Evolution.read_signals(workspace_opts(opts)),
       skills: skills_summary(opts),
       tasks: tasks_summary(opts),
       recent_sessions: Enum.take(list_sessions(opts), 6),
@@ -95,6 +96,7 @@ defmodule Nex.Agent.Admin do
       recent_events:
         Audit.recent(Keyword.put(workspace_opts(opts), :limit, 60))
         |> Enum.filter(&String.starts_with?(Map.get(&1, "event", ""), "evolution.")),
+      pending_signals: Evolution.read_signals(workspace_opts(opts)),
       soul_preview: file_preview(Path.join(workspace, "SOUL.md")),
       user_preview: file_preview(Path.join(workspace, "USER.md"), 40),
       memory_preview:
@@ -110,8 +112,8 @@ defmodule Nex.Agent.Admin do
 
     %{
       workspace: workspace,
-      local_skills: Skills.list(runtime_opts),
-      runtime_packages: Store.load_skill_records(runtime_opts),
+      local_skills: Skills.list(runtime_opts) |> Enum.map(&normalize_skill_record/1),
+      runtime_packages: Store.load_skill_records(runtime_opts) |> Enum.map(&normalize_package_record/1),
       runtime_catalog: Store.load_catalog_records(runtime_opts),
       lineage: Store.load_lineage_records(runtime_opts) |> Enum.take(-50) |> Enum.reverse(),
       recent_runs: list_runtime_runs(workspace) |> Enum.take(20),
@@ -130,8 +132,10 @@ defmodule Nex.Agent.Admin do
       workspace: workspace,
       soul_preview: file_preview(Path.join(workspace, "SOUL.md"), 40),
       memory_preview: file_preview(Path.join(memory_dir, "MEMORY.md"), 80),
+      history_preview: file_preview(Path.join(memory_dir, "HISTORY.md"), 80),
       user_preview: file_preview(Path.join(workspace, "USER.md"), 60),
       memory_bytes: file_size(Path.join(memory_dir, "MEMORY.md")),
+      history_bytes: file_size(Path.join(memory_dir, "HISTORY.md")),
       recent_events:
         Audit.recent(Keyword.put(workspace_opts(opts), :limit, 20))
         |> Enum.filter(fn entry ->
@@ -238,7 +242,9 @@ defmodule Nex.Agent.Admin do
           created_at: session.created_at,
           updated_at: session.updated_at,
           total_messages: length(messages),
+          last_consolidated: session.last_consolidated,
           last_reviewed_message_count: session.last_consolidated,
+          unconsolidated_messages: unreviewed,
           unreviewed_messages: unreviewed,
           last_prompt: get_in(session.metadata || %{}, ["runtime_evolution", "last_prompt"]),
           messages:
@@ -308,6 +314,23 @@ defmodule Nex.Agent.Admin do
       )
 
       :ok
+    end
+  end
+
+  @spec publish_draft_skill(String.t(), keyword()) :: {:ok, map()} | {:error, String.t()}
+  def publish_draft_skill(name, opts \\ []) when is_binary(name) do
+    with {:ok, skill} <- Skills.publish_draft(name, workspace_opts(opts)) do
+      Audit.append(
+        "skill.published",
+        %{
+          "name" => name,
+          "description" =>
+            Skills.strip_draft_prefix(Map.get(skill, :description) || Map.get(skill, "description"))
+        },
+        workspace_opts(opts)
+      )
+
+      {:ok, normalize_skill_record(skill)}
     end
   end
 
@@ -785,6 +808,44 @@ defmodule Nex.Agent.Admin do
 
   defp workspace_opts(opts) do
     [workspace: workspace(opts)]
+  end
+
+  defp normalize_skill_record(skill) when is_map(skill) do
+    description = Map.get(skill, :description) || Map.get(skill, "description") || ""
+    draft = Skills.draft?(skill)
+
+    skill
+    |> Map.put(:draft, draft)
+    |> Map.put(:display_description, Skills.strip_draft_prefix(description))
+  end
+
+  defp normalize_package_record(package) when is_map(package) do
+    manifest_description =
+      get_in(package, ["manifest", "description"]) || get_in(package, [:manifest, :description]) || ""
+
+    manifest_content =
+      get_in(package, ["manifest", "content"]) || get_in(package, [:manifest, :content]) || ""
+
+    draft =
+      package["draft"] == true or package[:draft] == true or
+        String.starts_with?(to_string(manifest_description), "[Draft] ") or
+        Regex.match?(~r/\A\s*<!--\s*status:\s*draft\b.*?-->\s*/s, String.trim_leading(to_string(manifest_content)))
+
+    active =
+      case package["active"] do
+        false -> false
+        "false" -> false
+        _ -> not draft
+      end
+
+    package
+    |> Map.put("draft", draft)
+    |> Map.put("active", active)
+    |> Map.update(
+      "manifest",
+      %{"description" => Skills.strip_draft_prefix(manifest_description)},
+      &Map.put(&1, "description", Skills.strip_draft_prefix(manifest_description))
+    )
   end
 
   defp read_json_array(path) do

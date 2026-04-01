@@ -6,12 +6,12 @@ defmodule NexAgentConsole.Pages.Evolution do
 
   def mount(_params) do
     %{
-      title: "NexAgent Console | 分层进化",
-      subtitle: "这里先判断变化该落到 SOUL、USER、MEMORY、SKILL、TOOL 还是 CODE，再决定是否手动运行。",
+      title: "NexAgent Console | 分流",
+      subtitle: "分流页先判断变化该落到哪一层，不直接展开认知原文、能力库存或代码编辑。",
       current_path: "/evolution",
       panel_path: "/api/admin/panels/evolution",
-      primary_action_label: "跳到手动运行",
-      primary_action_href: "#manual-cycle"
+      primary_action_label: "查看待分流 signals",
+      primary_action_href: "#pending-signals"
     }
   end
 

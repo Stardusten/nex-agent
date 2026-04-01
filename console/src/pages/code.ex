@@ -15,12 +15,12 @@ defmodule NexAgentConsole.Pages.Code do
       end
 
     %{
-      title: "NexAgent Console | 代码层",
-      subtitle: "代码层是最后一层：只有高层不能解决时，才应该进入这里预览 diff、热更和回滚。",
+      title: "NexAgent Console | 代码",
+      subtitle: "代码页默认只读审查；变更操作退到次级区，只有确认必须下沉到实现时才使用。",
       current_path: "/code",
       panel_path: panel_path,
-      primary_action_label: "回到六层",
-      primary_action_href: "/evolution"
+      primary_action_label: "查看源码预览",
+      primary_action_href: "#source-preview"
     }
   end
 

@@ -437,7 +437,12 @@ defmodule Nex.Agent.Evolution do
         draft_content = "<!-- status: draft, source: evolution -->\n\n" <> content
 
         case Skills.create(
-               %{name: name, description: "[Draft] " <> description, content: draft_content},
+               %{
+                 name: name,
+                 description: "[Draft] " <> description,
+                 content: draft_content,
+                 user_invocable: false
+               },
                workspace_opts
              ) do
           {:ok, _} ->

@@ -6,6 +6,7 @@ defmodule Nex.SkillRuntime.Manifest do
   defstruct [
     :name,
     :description,
+    :draft,
     :version,
     :execution_mode,
     :entry_script,
@@ -29,11 +30,13 @@ defmodule Nex.SkillRuntime.Manifest do
     with {:ok, content} <- File.read(path) do
       {frontmatter, body} = Frontmatter.parse_document(content)
       name = frontmatter["name"] || Path.basename(Path.dirname(path))
+      description = frontmatter["description"] || extract_first_paragraph(body)
 
       {:ok,
        %__MODULE__{
          name: name,
-         description: frontmatter["description"] || extract_first_paragraph(body),
+         description: description,
+         draft: draft?(description, body),
          version: normalize_version(frontmatter["version"]),
          execution_mode: normalize_execution_mode(frontmatter["execution_mode"]),
          entry_script: normalize_string(frontmatter["entry_script"]),
@@ -67,6 +70,7 @@ defmodule Nex.SkillRuntime.Manifest do
     %{
       "name" => manifest.name,
       "description" => manifest.description,
+      "draft" => manifest.draft == true,
       "version" => manifest.version,
       "execution_mode" => manifest.execution_mode,
       "entry_script" => manifest.entry_script,
@@ -111,6 +115,11 @@ defmodule Nex.SkillRuntime.Manifest do
 
   defp normalize_execution_mode(mode) when mode in ["knowledge", "playbook"], do: mode
   defp normalize_execution_mode(_), do: nil
+
+  defp draft?(description, body) do
+    String.starts_with?(to_string(description), "[Draft] ") or
+      Regex.match?(~r/\A\s*<!--\s*status:\s*draft\b.*?-->\s*/s, String.trim_leading(body))
+  end
 
   defp normalize_version(version) when is_integer(version) and version >= 0, do: version
 

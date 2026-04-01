@@ -4,11 +4,16 @@ defmodule Nex.Agent.Tool.SoulUpdate do
   @behaviour Nex.Agent.Tool.Behaviour
   alias Nex.Agent.ContextDiagnostics
 
+  @legacy_footers [
+    "*编辑此文件来自定义助手的行为风格和价值观。身份定义由代码层管理，此处不可重新定义。*",
+    "*Edit this file to customize the agent's behavioral style and values. Identity is code-owned and cannot be redefined here.*"
+  ]
+
   def name, do: "soul_update"
 
   def description,
     do:
-      "Update SOUL.md persona guidance (values, tone, and style). Invalid out-of-layer content is rejected."
+      "Update SOUL.md identity and persona guidance (identity, values, tone, and style). User profile data still belongs in USER.md."
 
   def category, do: :evolution
 
@@ -27,12 +32,13 @@ defmodule Nex.Agent.Tool.SoulUpdate do
   end
 
   def execute(%{"content" => content}, _ctx) do
-    trimmed = String.trim(content)
+    normalized = normalize_legacy_footers(content)
+    trimmed = String.trim(normalized)
 
     if trimmed == "" do
       {:error, "content is required"}
     else
-      persist_soul(content)
+      persist_soul(normalized)
     end
   end
 
@@ -61,5 +67,15 @@ defmodule Nex.Agent.Tool.SoulUpdate do
           {:error, reason} -> {:error, "Error updating SOUL.md: #{inspect(reason)}"}
         end
     end
+  end
+
+  defp normalize_legacy_footers(content) do
+    content
+    |> to_string()
+    |> then(fn text ->
+      Enum.reduce(@legacy_footers, text, fn footer, acc -> String.replace(acc, footer, "") end)
+    end)
+    |> String.replace(~r/\n[ \t]*---[ \t]*\n\s*\z/u, "\n")
+    |> String.trim_trailing()
   end
 end

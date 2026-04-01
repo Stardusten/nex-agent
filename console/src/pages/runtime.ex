@@ -4,16 +4,7 @@ defmodule NexAgentConsole.Pages.Runtime do
   alias Nex.Agent.Admin
   alias NexAgentConsole.Components.AdminUI
 
-  def mount(_params) do
-    %{
-      title: "NexAgent Console | 运行时",
-      subtitle: "运行时页只负责 gateway、services 和 heartbeat 的操作与健康检查。",
-      current_path: "/runtime",
-      panel_path: "/api/admin/panels/runtime",
-      primary_action_label: "进入进化台",
-      primary_action_href: "/evolution"
-    }
-  end
+  def mount(_params), do: {:redirect, "/evolution"}
 
   def render(assigns), do: AdminUI.page_shell(assigns)
 

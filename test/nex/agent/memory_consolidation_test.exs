@@ -121,7 +121,7 @@ defmodule Nex.Agent.MemoryConsolidationTest do
              )
 
     assert_receive {:llm_opts, opts}
-    assert opts[:tool_choice] == %{type: "function", function: %{name: "save_memory"}}
+    assert opts[:tool_choice] == %{type: "tool", name: "save_memory"}
     assert updated_session.last_consolidated == length(session.messages)
 
     assert File.read!(Path.join(workspace, "memory/HISTORY.md")) =~

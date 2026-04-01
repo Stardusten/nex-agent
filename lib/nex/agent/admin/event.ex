@@ -77,6 +77,9 @@ defmodule Nex.Agent.Admin.Event do
       "evolution.skill_drafted" ->
         "Skill drafted: #{value(payload, "name", "unknown")}"
 
+      "skill.published" ->
+        "Skill published: #{value(payload, "name", "unknown")}"
+
       "task.add" ->
         "Task added: #{value(payload, "title", "untitled")}"
 
@@ -128,6 +131,7 @@ defmodule Nex.Agent.Admin.Event do
   defp normalize_topic("cron"), do: "tasks"
   defp normalize_topic("memory"), do: "memory"
   defp normalize_topic("session"), do: "sessions"
+  defp normalize_topic("skill"), do: "skills"
   defp normalize_topic("code"), do: "code"
   defp normalize_topic("runtime"), do: "runtime"
   defp normalize_topic("evolution"), do: "evolution"

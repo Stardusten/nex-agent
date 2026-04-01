@@ -6,8 +6,7 @@ defmodule Nex.Agent.ContextDiagnostics do
   @type layer :: :agents | :soul | :user | :tools | :memory | :unknown
 
   @type category ::
-          :identity_declaration_in_soul
-          | :persona_style_instruction_in_memory
+          :persona_style_instruction_in_memory
           | :user_profile_data_in_soul
           | :outdated_capability_model_claim_in_agents
           | :identity_persona_instruction_in_user
@@ -21,14 +20,6 @@ defmodule Nex.Agent.ContextDiagnostics do
         }
 
   @rules [
-    %{
-      layer: :soul,
-      category: :identity_declaration_in_soul,
-      message:
-        "SOUL.md declares runtime identity; identity declarations must stay in the code-owned identity layer.",
-      pattern:
-        ~r/\b(?:you are|i am|this agent is)\s+(?:nex\s+agent|chatgpt|gpt-?\d|claude|copilot|nanobot|hermes\s+agent)\b/i
-    },
     %{
       layer: :memory,
       category: :persona_style_instruction_in_memory,
@@ -63,7 +54,6 @@ defmodule Nex.Agent.ContextDiagnostics do
   ]
 
   @write_blocked_categories MapSet.new([
-                              :identity_declaration_in_soul,
                               :user_profile_data_in_soul,
                               :identity_persona_instruction_in_user
                             ])

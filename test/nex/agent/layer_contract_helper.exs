@@ -5,27 +5,26 @@ defmodule Nex.Agent.LayerContractHelper do
 
   @matrix %{
     "identity" => %{
-      authority: "code-owned and authoritative runtime identity",
-      allowed: "Defines who the agent is and cannot be replaced by workspace content.",
+      authority: "default runtime identity and execution baseline",
+      allowed: "Provides the default runtime identity; workspace content may refine or replace it.",
       forbidden: [
-        "User or workspace markdown replacing the agent name.",
-        "Any layer overriding the canonical runtime identity."
+        "Stale capability/model claims presented as authoritative runtime facts.",
+        "User profile or tool reference content that belongs in other layers."
       ]
     },
     "AGENTS" => %{
       authority: "system-level operating instructions",
-      allowed: "System constraints and workflow guidance that operate under code-owned identity.",
+      allowed: "System constraints and workflow guidance for the runtime.",
       forbidden: [
-        "Redefining or replacing canonical identity.",
+        "Hard-coded capability/model identity claims.",
         "Rewriting persona ownership away from SOUL boundaries."
       ]
     },
     "SOUL" => %{
-      authority: "persona, values, and style",
-      allowed: "Behavioral tone, values, and style preferences only.",
+      authority: "persona, values, style, and optional identity framing",
+      allowed: "Behavioral tone, values, style preferences, and identity framing.",
       forbidden: [
-        "Declaring a different product/agent identity.",
-        "Replacing code-owned identity with persona text."
+        "User profile details that belong in USER."
       ]
     },
     "USER" => %{

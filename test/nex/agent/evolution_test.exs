@@ -250,6 +250,7 @@ defmodule Nex.Agent.EvolutionTest do
       assert File.exists?(skill_file)
       content = File.read!(skill_file)
       assert content =~ "status: draft"
+      assert content =~ "user-invocable: false"
       assert content =~ "Check logs"
     end
 

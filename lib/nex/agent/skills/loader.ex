@@ -109,6 +109,8 @@ defmodule Nex.Agent.Skills.Loader do
   defp parse_skill(frontmatter, body, path) do
     metadata = parse_frontmatter(frontmatter)
     requires = parse_requires(metadata["requires"])
+    description = metadata["description"] || extract_first_paragraph(body)
+    draft = draft?(description, body)
 
     name =
       metadata["name"] ||
@@ -119,14 +121,15 @@ defmodule Nex.Agent.Skills.Loader do
 
     %{
       name: name,
-      description: metadata["description"] || extract_first_paragraph(body),
+      description: description,
       content: content,
       type: "markdown",
       code: content,
       parameters: normalize_parameters(metadata["parameters"]),
       disable_model_invocation: truthy?(metadata["disable-model-invocation"]),
       allowed_tools: normalize_allowed_tools(metadata["allowed-tools"]),
-      user_invocable: metadata["user-invocable"] not in [false, "false"],
+      user_invocable: metadata["user-invocable"] not in [false, "false"] and not draft,
+      draft: draft,
       always: truthy?(metadata["always"]),
       requires: requires,
       context: metadata["context"],
@@ -202,6 +205,11 @@ defmodule Nex.Agent.Skills.Loader do
 
   defp truthy?(value) when value in [true, "true"], do: true
   defp truthy?(_), do: false
+
+  defp draft?(description, body) do
+    String.starts_with?(to_string(description), "[Draft] ") or
+      Regex.match?(~r/\A\s*<!--\s*status:\s*draft\b.*?-->\s*/s, String.trim_leading(body))
+  end
 
   defp extract_first_paragraph(""), do: ""
 

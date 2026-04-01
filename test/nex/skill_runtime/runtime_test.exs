@@ -217,6 +217,51 @@ defmodule Nex.SkillRuntimeTest do
     assert [_ | _] = Path.wildcard(Path.join(runs_dir, "*.jsonl"))
   end
 
+  test "draft runtime packages are not selected or exposed as ephemeral tools", %{workspace: workspace} do
+    package_dir = Path.join(workspace, "skills/rt__draft_widget_ops")
+    File.mkdir_p!(Path.join(package_dir, "scripts"))
+
+    File.write!(
+      Path.join(package_dir, "SKILL.md"),
+      """
+      ---
+      name: draft-widget-ops
+      description: [Draft] Handle widget incidents
+      execution_mode: playbook
+      entry_script: scripts/run.sh
+      ---
+
+      <!-- status: draft, source: evolution -->
+
+      Use this skill when the widget is down.
+      """
+    )
+
+    File.write!(Path.join(package_dir, "scripts/run.sh"), "#!/bin/sh\necho should-not-run\n")
+
+    assert {:ok, hits} =
+             SkillRuntime.search("widget incidents",
+               workspace: workspace,
+               project_root: workspace,
+               skill_runtime: %{"enabled" => true}
+             )
+
+    refute Enum.any?(hits, fn
+             %{type: :local, package: package} -> package.name == "draft-widget-ops"
+             _ -> false
+           end)
+
+    assert {:ok, prepared_run} =
+             SkillRuntime.prepare_run("run the widget incident playbook",
+               workspace: workspace,
+               project_root: workspace,
+               skill_runtime: %{"enabled" => true}
+             )
+
+    assert prepared_run.selected_packages == []
+    assert prepared_run.ephemeral_tools == []
+  end
+
   test "prepare_run prefers poster skill over URL noise for Chinese poster prompts", %{
     workspace: workspace
   } do

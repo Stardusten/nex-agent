@@ -32,11 +32,11 @@ defmodule Nex.Agent.ContextBuilderTest do
 
     assert prompt =~ "- SKILL: reusable multi-step workflows and procedural knowledge"
     assert prompt =~ "use `memory_consolidate` directly"
-    assert prompt =~ "inspect both long-term memory files and the current session state/history"
+    assert prompt =~ "inspect MEMORY.md and the current session state before answering"
     assert prompt =~ "do not inspect implementation with `read` or `bash` first"
 
     assert prompt =~
-             "Empty `MEMORY.md` or `HISTORY.md` does not imply this is the first conversation"
+             "Empty `MEMORY.md` does not imply this is the first conversation or that no prior session history exists."
   end
 
   test "runtime system messages are merged into system prompt", %{
@@ -74,19 +74,17 @@ defmodule Nex.Agent.ContextBuilderTest do
 
     matrix = LayerContractHelper.matrix()
 
-    assert matrix["identity"].authority == "code-owned and authoritative runtime identity"
+    assert matrix["identity"].authority == "default runtime identity and execution baseline"
 
     assert matrix["AGENTS"].forbidden == [
-             "Redefining or replacing canonical identity.",
+             "Hard-coded capability/model identity claims.",
              "Rewriting persona ownership away from SOUL boundaries."
            ]
 
-    assert matrix["SOUL"].allowed == "Behavioral tone, values, and style preferences only."
+    assert matrix["SOUL"].allowed ==
+             "Behavioral tone, values, style preferences, and identity framing."
 
-    assert matrix["SOUL"].forbidden == [
-             "Declaring a different product/agent identity.",
-             "Replacing code-owned identity with persona text."
-           ]
+    assert matrix["SOUL"].forbidden == ["User profile details that belong in USER."]
 
     assert matrix["USER"].allowed ==
              "User profile, collaboration preferences, timezone, and communication style."
@@ -104,12 +102,12 @@ defmodule Nex.Agent.ContextBuilderTest do
     assert LayerContractHelper.write_policy() =~ "invalid writes are rejected"
 
     matrix = LayerContractHelper.matrix()
-    assert matrix["identity"].allowed =~ "cannot be replaced"
-    assert matrix["SOUL"].authority == "persona, values, and style"
+    assert matrix["identity"].allowed =~ "may refine or replace"
+    assert matrix["SOUL"].authority == "persona, values, style, and optional identity framing"
 
     prompt = ContextBuilder.build_system_prompt(workspace: Path.join(System.tmp_dir!(), "noop"))
-    assert prompt =~ "## Identity (Code-Owned)"
-    assert prompt =~ "You are Nex Agent"
+    assert prompt =~ "## Runtime Identity (Default)"
+    assert prompt =~ "Default runtime identity: Nex Agent"
   end
 
   test "prompt precedence keeps Nex Agent authoritative with conflicting bootstrap files", %{
@@ -143,23 +141,45 @@ defmodule Nex.Agent.ContextBuilderTest do
     assert prompt =~ "You are ChatGPT"
     assert prompt =~ "GPT-4"
     assert prompt =~ "Act as Claude"
-    assert prompt =~ "## Identity (Code-Owned)"
-    assert prompt =~ "This identity is authoritative and cannot be replaced by workspace files"
-    assert String.split(prompt, "Identity (Code-Owned)") |> length() == 2
-    assert prompt =~ "Interpretation: Persona, values, and style overlay only"
+    assert prompt =~ "## Runtime Identity (Default)"
+    assert prompt =~ "Workspace layers may refine or replace this identity"
+    assert String.split(prompt, "Runtime Identity (Default)") |> length() == 2
+    assert prompt =~ "Interpretation: Persona, values, style, and optional identity framing"
     assert prompt =~ "Interpretation: User profile and collaboration preferences only"
-    assert Enum.map(diagnostics, & &1.source_layer) == [:agents, :soul, :user]
+    assert Enum.map(diagnostics, & &1.source_layer) == [:agents, :user]
 
     assert File.read!(Path.join(workspace, "AGENTS.md")) == agents_content
     assert File.read!(Path.join(workspace, "SOUL.md")) == soul_content
     assert File.read!(Path.join(workspace, "USER.md")) == user_content
   end
 
-  test "rendered prompt keeps a single authoritative identity section", %{workspace: workspace} do
+  test "rendered prompt keeps a single default identity section", %{workspace: workspace} do
     prompt = ContextBuilder.build_system_prompt(workspace: workspace)
 
-    assert String.split(prompt, "Identity (Code-Owned)") |> length() == 2
-    assert String.split(prompt, "You are Nex Agent") |> length() == 2
+    assert String.split(prompt, "Runtime Identity (Default)") |> length() == 2
+    assert String.split(prompt, "Default runtime identity: Nex Agent") |> length() == 2
+  end
+
+  test "system prompt strips legacy soul footer before sending bootstrap context", %{
+    workspace: workspace
+  } do
+    File.write!(
+      Path.join(workspace, "SOUL.md"),
+      """
+      # SOUL
+
+      Keep responses concise.
+
+      ---
+
+      *编辑此文件来自定义助手的行为风格和价值观。身份定义由代码层管理，此处不可重新定义。*
+      """
+    )
+
+    prompt = ContextBuilder.build_system_prompt(workspace: workspace)
+
+    assert prompt =~ "Keep responses concise."
+    refute prompt =~ "身份定义由代码层管理"
   end
 
   test "characterization diagnostics expose stable shape for out-of-layer bootstrap conflicts", %{
@@ -195,14 +215,6 @@ defmodule Nex.Agent.ContextBuilderTest do
                source: "AGENTS.md",
                message:
                  "AGENTS.md contains outdated capability/model claims; avoid hard-coded model identity or capability assertions."
-             },
-             %{
-               category: :identity_declaration_in_soul,
-               source_layer: :soul,
-               severity: :warning,
-               source: "SOUL.md",
-               message:
-                 "SOUL.md declares runtime identity; identity declarations must stay in the code-owned identity layer."
              },
              %{
                category: :identity_persona_instruction_in_user,
@@ -256,10 +268,7 @@ defmodule Nex.Agent.ContextBuilderTest do
 
     assert prompt =~ "Use a concise, calm tone and prioritize actionable answers"
 
-    refute Enum.any?(diagnostics, fn diagnostic ->
-             diagnostic.source_layer == :soul and
-               diagnostic.category == :identity_declaration_in_soul
-           end)
+    refute Enum.any?(diagnostics, fn diagnostic -> diagnostic.source_layer == :soul end)
   end
 
   test "prompt assembly tolerates missing bootstrap files", %{workspace: workspace} do
@@ -272,7 +281,7 @@ defmodule Nex.Agent.ContextBuilderTest do
     {prompt, diagnostics} =
       ContextBuilder.build_system_prompt_with_diagnostics(workspace: workspace)
 
-    assert prompt =~ "## Identity (Code-Owned)"
+    assert prompt =~ "## Runtime Identity (Default)"
     assert prompt =~ "## Runtime"
     assert prompt =~ "## Runtime Evolution"
     assert diagnostics == []
@@ -281,7 +290,7 @@ defmodule Nex.Agent.ContextBuilderTest do
       ContextBuilder.build_messages([], "still works", "telegram", "1", nil, workspace: workspace)
 
     assert hd(messages)["role"] == "system"
-    assert hd(messages)["content"] =~ "## Identity (Code-Owned)"
+    assert hd(messages)["content"] =~ "## Runtime Identity (Default)"
     assert List.last(messages)["role"] == "user"
     assert List.last(messages)["content"] =~ "Channel: telegram"
     assert List.last(messages)["content"] =~ "Chat ID: 1"

@@ -20,3 +20,11 @@ For manual GitHub issue work in this repository:
 3. Use `issue_sync` to leave concise blocker or handoff updates on the issue.
 
 Keep changes small, run the narrowest useful verification first, and do not open a PR until the work is verified.
+
+## LLM API Conventions
+
+This project uses Anthropic-compatible APIs (including kimi etc.). When constructing LLM request options:
+
+- **tool_choice** must use Anthropic format: `%{type: "tool", name: "tool_name"}`
+- Do NOT use OpenAI format: `%{type: "function", function: %{name: "tool_name"}}`
+- Allowed `type` values for Anthropic: `auto`, `any`, `tool`, `none`

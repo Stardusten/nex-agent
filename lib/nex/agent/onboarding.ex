@@ -356,7 +356,7 @@ defmodule Nex.Agent.Onboarding do
 
     The runtime system prompt is assembled from:
 
-    1. Core identity and runtime guidance (code-owned, authoritative)
+    1. Default runtime identity and runtime guidance
     2. Bootstrap files (`AGENTS.md`, `SOUL.md`, `USER.md`, `TOOLS.md`)
     3. Long-term memory context
     4. On-demand skill discovery guidance
