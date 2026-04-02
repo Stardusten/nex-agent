@@ -716,6 +716,160 @@ select {
   overflow-wrap: anywhere;
 }
 
+.trace-index {
+  gap: 0.9rem;
+}
+
+.trace-item {
+  display: grid;
+  gap: 0.7rem;
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 140ms ease, background 140ms ease, transform 140ms ease;
+}
+
+.trace-item:hover,
+.trace-item.is-active {
+  border-color: color-mix(in oklab, var(--accent) 28%, var(--line));
+  background: color-mix(in oklab, var(--accent) 8%, white);
+  transform: translateY(-1px);
+}
+
+.trace-item__head,
+.trace-item__title,
+.trace-call-card__title,
+.trace-turn__title {
+  display: grid;
+  gap: 0.18rem;
+}
+
+.trace-item__head {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 0.75rem;
+}
+
+.trace-item__title small,
+.trace-call-card__title small,
+.trace-turn__title small {
+  color: var(--ink-muted);
+  font-size: 0.8rem;
+}
+
+.trace-item__status {
+  display: grid;
+  justify-items: end;
+  gap: 0.28rem;
+}
+
+.trace-item__status small,
+.trace-item__hint {
+  color: var(--ink-muted);
+  font-size: 0.8rem;
+}
+
+.trace-meta-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  color: var(--ink-muted);
+  font-size: 0.82rem;
+}
+
+.trace-chip-row {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.trace-chip-row__label {
+  color: var(--ink-muted);
+  font-size: 0.76rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.trace-chip-row__items,
+.trace-package-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.trace-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  min-height: 1.9rem;
+  padding: 0.24rem 0.68rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: color-mix(in oklab, white 86%, var(--bg));
+  color: var(--ink-soft);
+  font-size: 0.79rem;
+  overflow-wrap: anywhere;
+}
+
+.trace-chip--skill {
+  background: color-mix(in oklab, var(--accent) 14%, white);
+}
+
+.trace-chip--tool {
+  background: color-mix(in oklab, var(--ok) 10%, white);
+}
+
+.trace-package-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+}
+
+.trace-package-card,
+.trace-subsection {
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.88rem 0.92rem;
+  border: 1px solid var(--line);
+  border-radius: 0.95rem;
+  background: color-mix(in oklab, white 82%, var(--bg));
+}
+
+.trace-package-card header {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  gap: 0.75rem;
+}
+
+.trace-package-card header span {
+  color: var(--ink-muted);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.trace-call-list,
+.trace-turn-list {
+  gap: 0.85rem;
+}
+
+.trace-call-card {
+  gap: 0.7rem;
+}
+
+.trace-call-card--skill {
+  border-color: color-mix(in oklab, var(--accent) 24%, var(--line));
+  background: color-mix(in oklab, var(--accent) 7%, white);
+}
+
+.trace-turn {
+  gap: 0.8rem;
+}
+
+.trace-subsection summary {
+  cursor: pointer;
+  color: var(--ink);
+  font-weight: 600;
+}
+
 .tool-clusters {
   display: grid;
   gap: 0.75rem;

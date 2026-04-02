@@ -7,6 +7,8 @@ defmodule Nex.Agent.Runner do
     Bus,
     ContextBuilder,
     Memory,
+    MemoryUpdater,
+    RequestTrace,
     Session
   }
 
@@ -40,8 +42,17 @@ defmodule Nex.Agent.Runner do
     provider = Keyword.get(opts, :provider, :anthropic)
     model = Keyword.get(opts, :model, "claude-sonnet-4-20250514")
     workspace = Keyword.get(opts, :workspace)
+    run_id = generate_run_id()
 
     Logger.info("[Runner] Starting provider=#{provider} model=#{model}")
+
+    opts =
+      opts
+      |> Keyword.put(:workspace, workspace)
+      |> Keyword.put(:run_id, run_id)
+      |> Keyword.put(:request_trace, RequestTrace.config(opts))
+      |> Keyword.put(:skill_runtime, SkillRuntime.config(opts))
+      |> Keyword.put_new(:_evolution_signals, default_evolution_signals())
 
     initial_message_count = length(session.messages)
     {session, runtime_system_messages} = prepare_evolution_turn(session, prompt, opts)
@@ -56,6 +67,8 @@ defmodule Nex.Agent.Runner do
     chat_id = Keyword.get(opts, :chat_id, "default")
     media = Keyword.get(opts, :media)
 
+    trace_request_started(prompt, channel, chat_id, prepared_run, runtime_system_messages, opts)
+
     messages =
       ContextBuilder.build_messages(history, prompt, channel, chat_id, media,
         skip_skills: Keyword.get(opts, :skip_skills, false),
@@ -68,13 +81,7 @@ defmodule Nex.Agent.Runner do
       Session.add_message(session, "user", prompt, project: Keyword.get(opts, :project))
 
     Logger.info("[Runner] LLM request: history=#{length(history)} messages=#{length(messages)}")
-
-    opts =
-      opts
-      |> Keyword.put(:workspace, workspace)
-      |> Keyword.put(:skill_runtime, SkillRuntime.config(opts))
-      |> Keyword.put(:skill_runtime_prepared_run, prepared_run)
-      |> Keyword.put_new(:_evolution_signals, default_evolution_signals())
+    opts = Keyword.put(opts, :skill_runtime_prepared_run, prepared_run)
 
     case run_loop(session, messages, 0, max_iterations, opts) do
       {:ok, result, final_session} ->
@@ -88,8 +95,10 @@ defmodule Nex.Agent.Runner do
             opts
           )
 
+        trace_request_completed("completed", result, opts)
+
         {:ok, result,
-         finalize_evolution_turn(final_session, initial_message_count, prompt, workspace)}
+         finalize_evolution_turn(final_session, initial_message_count, prompt, workspace, opts)}
 
       {:error, reason, final_session} ->
         final_session =
@@ -103,8 +112,10 @@ defmodule Nex.Agent.Runner do
             status: "failed"
           )
 
+        trace_request_completed("failed", reason, opts)
+
         {:error, reason,
-         finalize_evolution_turn(final_session, initial_message_count, prompt, workspace)}
+         finalize_evolution_turn(final_session, initial_message_count, prompt, workspace, opts)}
     end
   end
 
@@ -113,10 +124,30 @@ defmodule Nex.Agent.Runner do
       evolution_metadata(session)
       |> Map.put("last_prompt", prompt)
 
-    {put_evolution_metadata(session, metadata), []}
+    runtime_system_messages =
+      []
+      |> maybe_add_memory_nudge(metadata)
+      |> maybe_add_skill_nudge(metadata)
+
+    {put_evolution_metadata(session, metadata), runtime_system_messages}
   end
 
-  defp finalize_evolution_turn(session, _initial_message_count, _prompt, _workspace), do: session
+  defp finalize_evolution_turn(session, initial_message_count, prompt, workspace, opts) do
+    signals =
+      session.messages
+      |> Enum.drop(initial_message_count)
+      |> collect_evolution_signals(prompt)
+
+    metadata =
+      session
+      |> evolution_metadata()
+      |> Map.put("turns_since_memory_write", next_memory_turn_count(session, signals))
+      |> Map.put("pending_skill_nudge", next_skill_nudge(session, signals))
+
+    session = put_evolution_metadata(session, metadata)
+    maybe_enqueue_memory_refresh(session, workspace, opts)
+    session
+  end
 
   defp prepare_skill_runtime_turn(session, prompt, runtime_system_messages, opts) do
     case SkillRuntime.prepare_run(prompt, opts) do
@@ -186,7 +217,7 @@ defmodule Nex.Agent.Runner do
       tool_messages = Enum.filter(delta_messages, &(Map.get(&1, "role") == "tool"))
 
       trace = %{
-        run_id: "run_" <> (:crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)),
+        run_id: Keyword.get(opts, :run_id) || generate_run_id(),
         prompt: prompt,
         selected_packages: Enum.map(prepared_run.selected_packages, &package_metadata/1),
         tool_messages: tool_messages,
@@ -219,7 +250,11 @@ defmodule Nex.Agent.Runner do
 
       llm_result =
         try do
-          call_llm_with_retry(messages, opts, _retries = 1)
+          call_llm_with_retry(
+            messages,
+            Keyword.put(opts, :trace_iteration, iteration + 1),
+            _retries = 1
+          )
         rescue
           e ->
             Logger.error("[Runner] LLM call crashed: #{Exception.message(e)}")
@@ -237,6 +272,7 @@ defmodule Nex.Agent.Runner do
         {:ok, response} ->
           content = response.content
           finish_reason = Map.get(response, :finish_reason)
+          trace_llm_response(iteration + 1, response, llm_duration, opts)
 
           reasoning_content =
             Map.get(response, :reasoning_content) || Map.get(response, "reasoning_content")
@@ -715,6 +751,7 @@ defmodule Nex.Agent.Runner do
       end
 
     opts = Keyword.put(opts, :tools, tools)
+    trace_llm_request(Keyword.get(opts, :trace_iteration), messages, tools, opts)
 
     if opts[:llm_client] do
       opts[:llm_client].(messages, opts)
@@ -822,6 +859,7 @@ defmodule Nex.Agent.Runner do
     {new_messages, session} =
       Enum.reduce(results, {messages, session}, fn {tool_call_id, tool_name, result, _args},
                                                    {msgs, sess} ->
+        trace_tool_result(tool_call_id, tool_name, result, opts)
         msgs = ContextBuilder.add_tool_result(msgs, tool_call_id, tool_name, result)
 
         sess =
@@ -945,6 +983,10 @@ defmodule Nex.Agent.Runner do
 
   defp generate_tool_call_id do
     "call_" <> (:crypto.strong_rand_bytes(12) |> Base.encode16(case: :lower))
+  end
+
+  defp generate_run_id do
+    "run_" <> (:crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower))
   end
 
   @doc """
@@ -1089,6 +1131,71 @@ defmodule Nex.Agent.Runner do
 
   defp put_evolution_metadata(session, metadata) do
     %{session | metadata: Map.put(session.metadata || %{}, "runtime_evolution", metadata)}
+  end
+
+  defp maybe_add_memory_nudge(messages, metadata) do
+    if Map.get(metadata, "turns_since_memory_write", 0) >= 5 do
+      messages ++
+        [
+          "[Runtime Evolution] Several exchanges have passed since durable memory was refreshed. " <>
+            "If this turn confirms a lasting fact, use user_update for user-profile facts and use memory_write for durable project or workflow knowledge."
+        ]
+    else
+      messages
+    end
+  end
+
+  defp maybe_add_skill_nudge(messages, metadata) do
+    if Map.get(metadata, "pending_skill_nudge") == true do
+      messages ++
+        [
+          "[Runtime Evolution] The previous task was complex. If you just proved a reusable workflow, capture it with skill_capture before you move on."
+        ]
+    else
+      messages
+    end
+  end
+
+  defp next_memory_turn_count(_session, %{wrote_memory: true}), do: 0
+
+  defp next_memory_turn_count(session, _signals) do
+    session
+    |> evolution_metadata()
+    |> Map.get("turns_since_memory_write", 0)
+    |> Kernel.+(1)
+  end
+
+  defp next_skill_nudge(_session, %{created_skill: true}), do: false
+  defp next_skill_nudge(_session, %{complex_task: true}), do: true
+
+  defp next_skill_nudge(session, _signals) do
+    session
+    |> evolution_metadata()
+    |> Map.get("pending_skill_nudge", false)
+  end
+
+  defp maybe_enqueue_memory_refresh(session, workspace, opts) do
+    if Keyword.get(opts, :skip_consolidation, false) do
+      :ok
+    else
+      maybe_enqueue_memory_refresh_now(session, workspace, opts)
+    end
+  end
+
+  defp maybe_enqueue_memory_refresh_now(session, workspace, opts) do
+    if Process.whereis(MemoryUpdater) do
+      MemoryUpdater.enqueue(session,
+        provider: Keyword.get(opts, :provider),
+        model: Keyword.get(opts, :model),
+        api_key: Keyword.get(opts, :api_key),
+        base_url: Keyword.get(opts, :base_url),
+        workspace: workspace,
+        req_llm_generate_text_fun: Keyword.get(opts, :req_llm_generate_text_fun),
+        llm_call_fun: Keyword.get(opts, :llm_call_fun)
+      )
+    end
+
+    :ok
   end
 
   defp collect_evolution_signals(delta_messages, prompt) do
@@ -1245,6 +1352,113 @@ defmodule Nex.Agent.Runner do
   end
 
   defp tool_choice_for_memory_write(_provider), do: nil
+
+  defp trace_request_started(
+         prompt,
+         channel,
+         chat_id,
+         prepared_run,
+         runtime_system_messages,
+         opts
+       ) do
+    request_trace_event(
+      "request_started",
+      %{
+        "prompt" => prompt,
+        "channel" => channel,
+        "chat_id" => chat_id,
+        "selected_packages" => Enum.map(prepared_run.selected_packages, &package_metadata/1),
+        "runtime_system_messages" => runtime_system_messages
+      },
+      opts
+    )
+  end
+
+  defp trace_request_completed(status, result, opts) do
+    request_trace_event(
+      "request_completed",
+      %{
+        "status" => status,
+        "result" => render_text(result)
+      },
+      opts
+    )
+  end
+
+  defp trace_llm_request(nil, _messages, _tools, _opts), do: :ok
+
+  defp trace_llm_request(iteration, messages, tools, opts) do
+    request_trace_event(
+      "llm_request",
+      %{
+        "iteration" => iteration,
+        "messages" => messages,
+        "tools" => Enum.map(tools, &trace_tool_definition/1),
+        "tool_choice" => Keyword.get(opts, :tool_choice)
+      },
+      opts
+    )
+  end
+
+  defp trace_llm_response(iteration, response, duration_ms, opts) do
+    request_trace_event(
+      "llm_response",
+      %{
+        "iteration" => iteration,
+        "content" => Map.get(response, :content) || Map.get(response, "content"),
+        "tool_calls" => Map.get(response, :tool_calls) || Map.get(response, "tool_calls") || [],
+        "finish_reason" =>
+          Map.get(response, :finish_reason) || Map.get(response, "finish_reason"),
+        "duration_ms" => duration_ms
+      },
+      opts
+    )
+  end
+
+  defp trace_tool_result(tool_call_id, tool_name, result, opts) do
+    request_trace_event(
+      "tool_result",
+      %{
+        "tool" => tool_name,
+        "tool_call_id" => tool_call_id,
+        "content" => result
+      },
+      opts
+    )
+  end
+
+  defp request_trace_event(type, payload, opts) do
+    _ =
+      RequestTrace.append_event(
+        Map.merge(payload, %{
+          "type" => type,
+          "run_id" => Keyword.get(opts, :run_id)
+        }),
+        opts
+      )
+
+    :ok
+  end
+
+  defp trace_tool_definition(tool) when is_map(tool) do
+    function = Map.get(tool, "function") || Map.get(tool, :function) || %{}
+
+    %{
+      "name" =>
+        Map.get(tool, "name") || Map.get(tool, :name) || Map.get(function, "name") ||
+          Map.get(function, :name),
+      "description" =>
+        Map.get(tool, "description") || Map.get(tool, :description) ||
+          Map.get(function, "description") || Map.get(function, :description),
+      "parameters" =>
+        Map.get(tool, "parameters") || Map.get(tool, :parameters) ||
+          Map.get(tool, "input_schema") || Map.get(tool, :input_schema) ||
+          Map.get(function, "parameters") || Map.get(function, :parameters) ||
+          Map.get(function, "input_schema") || Map.get(function, :input_schema) || %{}
+    }
+  end
+
+  defp trace_tool_definition(tool), do: %{"definition" => inspect(tool)}
 
   defp workspace_opts(opts) do
     case Keyword.get(opts, :workspace) do

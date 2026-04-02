@@ -13,6 +13,7 @@ defmodule Nex.Agent.Admin do
     Evolution,
     Gateway,
     Heartbeat,
+    RequestTrace,
     Session,
     SessionManager,
     Skills,
@@ -113,7 +114,8 @@ defmodule Nex.Agent.Admin do
     %{
       workspace: workspace,
       local_skills: Skills.list(runtime_opts) |> Enum.map(&normalize_skill_record/1),
-      runtime_packages: Store.load_skill_records(runtime_opts) |> Enum.map(&normalize_package_record/1),
+      runtime_packages:
+        Store.load_skill_records(runtime_opts) |> Enum.map(&normalize_package_record/1),
       runtime_catalog: Store.load_catalog_records(runtime_opts),
       lineage: Store.load_lineage_records(runtime_opts) |> Enum.take(-50) |> Enum.reverse(),
       recent_runs: list_runtime_runs(workspace) |> Enum.take(20),
@@ -170,6 +172,12 @@ defmodule Nex.Agent.Admin do
   @spec runtime_state(keyword()) :: map()
   def runtime_state(opts \\ []) do
     workspace = workspace(opts)
+    trace_id = Keyword.get(opts, :trace)
+
+    request_trace_config =
+      Config.load(config_path: Keyword.get(opts, :config_path)) |> Config.request_trace()
+
+    trace_opts = [workspace: workspace, request_trace: request_trace_config]
 
     gateway =
       if Process.whereis(Gateway) do
@@ -200,6 +208,14 @@ defmodule Nex.Agent.Admin do
       workspace: workspace,
       gateway: gateway,
       heartbeat: heartbeat,
+      recent_request_traces: list_request_traces(trace_opts) |> Enum.take(20),
+      selected_request_trace:
+        if is_binary(trace_id) and trace_id != "" do
+          request_trace_detail(trace_id, trace_opts)
+        else
+          nil
+        end,
+      request_trace_config: request_trace_config,
       directories:
         Workspace.known_dirs()
         |> Enum.map(fn name ->
@@ -325,7 +341,9 @@ defmodule Nex.Agent.Admin do
         %{
           "name" => name,
           "description" =>
-            Skills.strip_draft_prefix(Map.get(skill, :description) || Map.get(skill, "description"))
+            Skills.strip_draft_prefix(
+              Map.get(skill, :description) || Map.get(skill, "description")
+            )
         },
         workspace_opts(opts)
       )
@@ -769,6 +787,241 @@ defmodule Nex.Agent.Admin do
     end
   end
 
+  defp list_request_traces(opts) do
+    opts
+    |> RequestTrace.list_paths()
+    |> Enum.map(&request_trace_summary(&1, opts))
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp request_trace_summary(path, opts) do
+    events = RequestTrace.read_trace(path, opts)
+    started = Enum.find(events, &(&1["type"] == "request_started")) || %{}
+    completed = Enum.find(events, &(&1["type"] == "request_completed")) || %{}
+    tool_activity = trace_tool_activity(events)
+
+    if events == [] or (started == %{} and completed == %{}) do
+      nil
+    else
+      %{
+        run_id: started["run_id"] || completed["run_id"] || Path.basename(path, ".jsonl"),
+        prompt: truncate_text(started["prompt"], 140),
+        inserted_at: started["inserted_at"] || completed["inserted_at"],
+        status: completed["status"] || "running",
+        result: truncate_text(completed["result"], 200),
+        tool_count: Enum.count(events, &(&1["type"] == "tool_result")),
+        llm_rounds: Enum.count(events, &(&1["type"] == "llm_response")),
+        selected_packages: started["selected_packages"] || [],
+        used_tools: trace_used_tools(tool_activity),
+        skill_call_count: Enum.count(tool_activity, &trace_skill_tool?/1)
+      }
+    end
+  end
+
+  defp request_trace_detail(run_id, opts) do
+    events = RequestTrace.read_trace(run_id, opts)
+
+    if events == [] do
+      nil
+    else
+      started = Enum.find(events, &(&1["type"] == "request_started")) || %{}
+      completed = Enum.find(events, &(&1["type"] == "request_completed")) || %{}
+      tool_activity = trace_tool_activity(events)
+      llm_turns = trace_llm_turns(events)
+
+      %{
+        run_id: run_id,
+        prompt: started["prompt"],
+        channel: started["channel"],
+        chat_id: started["chat_id"],
+        inserted_at: started["inserted_at"] || completed["inserted_at"],
+        status: completed["status"] || "running",
+        result: completed["result"],
+        selected_packages: started["selected_packages"] || [],
+        runtime_system_messages: started["runtime_system_messages"] || [],
+        events: events,
+        available_tools: trace_available_tools(events),
+        tool_activity: tool_activity,
+        used_tools: trace_used_tools(tool_activity),
+        llm_turns: llm_turns,
+        tool_count: Enum.count(events, &(&1["type"] == "tool_result")),
+        llm_rounds: Enum.count(llm_turns),
+        path: RequestTrace.trace_path(run_id, opts)
+      }
+    end
+  end
+
+  defp trace_available_tools(events) do
+    events
+    |> Enum.filter(&(&1["type"] == "llm_request"))
+    |> Enum.flat_map(&(Map.get(&1, "tools", []) || []))
+    |> Enum.map(&normalize_trace_tool_definition/1)
+    |> Enum.reject(&(is_nil(&1.name) or &1.name == ""))
+    |> Enum.uniq_by(& &1.name)
+  end
+
+  defp trace_tool_activity(events) do
+    calls =
+      events
+      |> Enum.filter(&(&1["type"] == "llm_response"))
+      |> Enum.flat_map(&trace_tool_calls_from_response/1)
+
+    results =
+      events
+      |> Enum.filter(&(&1["type"] == "tool_result"))
+      |> Enum.map(&normalize_trace_tool_result/1)
+
+    results_by_id =
+      Map.new(results, fn result ->
+        {result.tool_call_id || "result:#{result.name}:#{result.inserted_at}", result}
+      end)
+
+    matched_result_keys =
+      calls
+      |> Enum.map(fn call ->
+        result = Map.get(results_by_id, call.tool_call_id)
+
+        {
+          %{
+            tool_call_id: call.tool_call_id,
+            name: call.name,
+            kind: call.kind,
+            iteration: call.iteration,
+            inserted_at: call.inserted_at,
+            arguments: call.arguments,
+            result: result && result.content,
+            result_inserted_at: result && result.inserted_at
+          },
+          result && (result.tool_call_id || "result:#{result.name}:#{result.inserted_at}")
+        }
+      end)
+
+    unmatched_results =
+      results
+      |> Enum.reject(fn result ->
+        key = result.tool_call_id || "result:#{result.name}:#{result.inserted_at}"
+        Enum.any?(matched_result_keys, fn {_activity, matched_key} -> matched_key == key end)
+      end)
+      |> Enum.map(fn result ->
+        %{
+          tool_call_id: result.tool_call_id,
+          name: result.name,
+          kind: if(trace_skill_tool_name?(result.name), do: :skill, else: :tool),
+          iteration: nil,
+          inserted_at: result.inserted_at,
+          arguments: nil,
+          result: result.content,
+          result_inserted_at: result.inserted_at
+        }
+      end)
+
+    matched_result_keys
+    |> Enum.map(&elem(&1, 0))
+    |> Kernel.++(unmatched_results)
+  end
+
+  defp trace_llm_turns(events) do
+    requests_by_iteration =
+      events
+      |> Enum.filter(&(&1["type"] == "llm_request"))
+      |> Map.new(fn event -> {Map.get(event, "iteration"), event} end)
+
+    responses_by_iteration =
+      events
+      |> Enum.filter(&(&1["type"] == "llm_response"))
+      |> Map.new(fn event -> {Map.get(event, "iteration"), event} end)
+
+    request_iterations = Map.keys(requests_by_iteration)
+    response_iterations = Map.keys(responses_by_iteration)
+
+    request_iterations
+    |> Kernel.++(response_iterations)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+    |> Enum.sort()
+    |> Enum.map(fn iteration ->
+      request = Map.get(requests_by_iteration, iteration, %{})
+      response = Map.get(responses_by_iteration, iteration, %{})
+
+      %{
+        iteration: iteration,
+        inserted_at: Map.get(request, "inserted_at") || Map.get(response, "inserted_at"),
+        message_count: length(Map.get(request, "messages", []) || []),
+        available_tool_names:
+          request
+          |> Map.get("tools", [])
+          |> Enum.map(fn tool -> Map.get(tool, "name") || Map.get(tool, :name) end)
+          |> Enum.reject(&is_nil/1)
+          |> Enum.uniq(),
+        tool_choice: Map.get(request, "tool_choice"),
+        content: Map.get(response, "content"),
+        tool_calls: trace_tool_calls_from_response(response),
+        finish_reason: Map.get(response, "finish_reason"),
+        duration_ms: Map.get(response, "duration_ms"),
+        request: request,
+        response: response
+      }
+    end)
+  end
+
+  defp trace_used_tools(activity) do
+    activity
+    |> Enum.map(& &1.name)
+    |> Enum.reject(&(is_nil(&1) or &1 == ""))
+    |> Enum.uniq()
+  end
+
+  defp trace_tool_calls_from_response(response) when is_map(response) do
+    response
+    |> Map.get("tool_calls", [])
+    |> Enum.map(fn tool_call ->
+      function = Map.get(tool_call, "function") || Map.get(tool_call, :function) || %{}
+
+      name =
+        Map.get(tool_call, "name") || Map.get(tool_call, :name) || Map.get(function, "name") ||
+          Map.get(function, :name)
+
+      arguments =
+        Map.get(tool_call, "arguments") || Map.get(tool_call, :arguments) ||
+          Map.get(function, "arguments") || Map.get(function, :arguments)
+
+      %{
+        tool_call_id: Map.get(tool_call, "id") || Map.get(tool_call, :id),
+        name: name,
+        kind: if(trace_skill_tool_name?(name), do: :skill, else: :tool),
+        arguments: arguments,
+        iteration: Map.get(response, "iteration"),
+        inserted_at: Map.get(response, "inserted_at")
+      }
+    end)
+  end
+
+  defp trace_tool_calls_from_response(_response), do: []
+
+  defp normalize_trace_tool_result(event) do
+    %{
+      tool_call_id: Map.get(event, "tool_call_id"),
+      name: Map.get(event, "tool"),
+      content: Map.get(event, "content"),
+      inserted_at: Map.get(event, "inserted_at")
+    }
+  end
+
+  defp normalize_trace_tool_definition(tool) do
+    %{
+      name: Map.get(tool, "name") || Map.get(tool, :name),
+      description: Map.get(tool, "description") || Map.get(tool, :description),
+      parameters: Map.get(tool, "parameters") || Map.get(tool, :parameters) || %{}
+    }
+  end
+
+  defp trace_skill_tool?(activity), do: trace_skill_tool_name?(activity && activity.name)
+
+  defp trace_skill_tool_name?(name) when is_binary(name),
+    do: String.starts_with?(name, "skill_run__")
+
+  defp trace_skill_tool_name?(_name), do: false
+
   defp decode_runtime_run_lines(path) do
     case File.read(path) do
       {:ok, content} ->
@@ -821,7 +1074,8 @@ defmodule Nex.Agent.Admin do
 
   defp normalize_package_record(package) when is_map(package) do
     manifest_description =
-      get_in(package, ["manifest", "description"]) || get_in(package, [:manifest, :description]) || ""
+      get_in(package, ["manifest", "description"]) || get_in(package, [:manifest, :description]) ||
+        ""
 
     manifest_content =
       get_in(package, ["manifest", "content"]) || get_in(package, [:manifest, :content]) || ""
@@ -829,7 +1083,10 @@ defmodule Nex.Agent.Admin do
     draft =
       package["draft"] == true or package[:draft] == true or
         String.starts_with?(to_string(manifest_description), "[Draft] ") or
-        Regex.match?(~r/\A\s*<!--\s*status:\s*draft\b.*?-->\s*/s, String.trim_leading(to_string(manifest_content)))
+        Regex.match?(
+          ~r/\A\s*<!--\s*status:\s*draft\b.*?-->\s*/s,
+          String.trim_leading(to_string(manifest_content))
+        )
 
     active =
       case package["active"] do

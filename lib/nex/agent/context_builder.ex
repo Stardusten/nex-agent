@@ -3,7 +3,7 @@ defmodule Nex.Agent.ContextBuilder do
   Builds context for LLM calls - system prompt + messages.
   """
 
-  alias Nex.Agent.{ContextDiagnostics, Workspace}
+  alias Nex.Agent.{ContextDiagnostics, Skills, Workspace}
 
   @bootstrap_layer_order [
     {"AGENTS.md", :agents},
@@ -129,11 +129,10 @@ defmodule Nex.Agent.ContextBuilder do
 
   defp authoritative_identity do
     """
-    ## Runtime Identity (Default)
+    ## Runtime Identity
 
-    Default runtime identity: Nex Agent, a helpful AI assistant.
-    Workspace layers may refine or replace this identity when the active persona calls for it.
-    When workspace files describe identity, treat that as intentional persona context rather than as an automatic conflict.
+    Identity is defined by workspace layers (SOUL.md, etc.).
+    No default persona is imposed by the runtime.
     """
   end
 
@@ -152,7 +151,7 @@ defmodule Nex.Agent.ContextBuilder do
 
     Prefer the highest layer that solves the need. Do not persist one-off outputs, temporary state, or information that is easy to rediscover.
     If the user explicitly asks to trigger memory refresh now, use `memory_consolidate` directly.
-    For deterministic inspection of memory refresh state, prefer the `memory_status` tool over free-form inference.
+    For deterministic inspection of memory refresh status, prefer the `memory_status` tool over free-form inference.
     If long-term memory is clearly stale or incomplete and the user explicitly wants a full rebuild, use `memory_rebuild`.
     When a built-in memory tool directly matches the user's request, do not inspect implementation with `read` or `bash` first.
     When asked whether memory was updated or previously triggered, inspect MEMORY.md and the current session state before answering.
@@ -165,7 +164,7 @@ defmodule Nex.Agent.ContextBuilder do
   defp load_bootstrap_files_with_diagnostics(parts, workspace) do
     {chunks, diagnostics} =
       Enum.reduce(@bootstrap_layer_order, {[], []}, fn {filename, layer},
-                                                       {acc_chunks, acc_diagnostics} ->
+                                                       {acc_chunks, acc_diag} ->
         path = Path.join(workspace, filename)
 
         case File.read(path) do
@@ -176,10 +175,10 @@ defmodule Nex.Agent.ContextBuilder do
             file_diagnostics =
               ContextDiagnostics.scan(layer, normalized_content, source: filename)
 
-            {[section | acc_chunks], acc_diagnostics ++ file_diagnostics}
+            {[section | acc_chunks], acc_diag ++ file_diagnostics}
 
           {:error, _} ->
-            {acc_chunks, acc_diagnostics}
+            {acc_chunks, acc_diag}
         end
       end)
 
@@ -202,7 +201,9 @@ defmodule Nex.Agent.ContextBuilder do
     content
     |> to_string()
     |> then(fn text ->
-      Enum.reduce(@legacy_soul_footers, text, fn footer, acc -> String.replace(acc, footer, "") end)
+      Enum.reduce(@legacy_soul_footers, text, fn footer, acc ->
+        String.replace(acc, footer, "")
+      end)
     end)
     |> String.replace(~r/\n[ \t]*---[ \t]*\n\s*\z/u, "\n")
     |> String.trim_trailing()
@@ -221,11 +222,11 @@ defmodule Nex.Agent.ContextBuilder do
     {parts, diagnostics}
   end
 
-  defp add_always_skills(parts, _workspace, opts) do
+  defp add_always_skills(parts, workspace, opts) do
     if Keyword.get(opts, :skip_skills, false) do
       parts
     else
-      content = Nex.Agent.Skills.always_instructions(workspace: Keyword.get(opts, :workspace))
+      content = Skills.always_instructions(workspace: workspace)
 
       if String.trim(content) == "" do
         parts
@@ -314,7 +315,7 @@ defmodule Nex.Agent.ContextBuilder do
           String.t(),
           String.t() | nil,
           String.t() | nil,
-          [String.t()] | nil,
+          [map()] | nil,
           keyword()
         ) :: [message()]
   def build_messages(
@@ -336,15 +337,13 @@ defmodule Nex.Agent.ContextBuilder do
         [%{"type" => "text", "text" => runtime_ctx} | user_content]
       end
 
-    # Merge runtime system messages into main system prompt to ensure only one system message
     system_content =
       case runtime_system_messages do
         [] ->
           build_system_prompt(opts)
 
         messages when is_list(messages) ->
-          nudge_content = Enum.join(messages, "\n\n")
-          build_system_prompt(opts) <> "\n\n---\n\n" <> nudge_content
+          build_system_prompt(opts) <> "\n\n---\n\n" <> Enum.join(messages, "\n\n")
       end
 
     [
@@ -355,47 +354,50 @@ defmodule Nex.Agent.ContextBuilder do
     |> List.flatten()
   end
 
-  defp clean_history_entry(%{"role" => role, "content" => content} = m) do
-    entry = %{"role" => role, "content" => content || ""}
+  defp clean_history_entry(%{} = entry) do
+    role = Map.get(entry, "role") || Map.get(entry, :role) || "user"
+    content = Map.get(entry, "content") || Map.get(entry, :content) || ""
 
-    entry =
-      if tool_calls = Map.get(m, "tool_calls") do
-        Map.put(entry, "tool_calls", tool_calls)
-      else
-        entry
+    cleaned = %{"role" => role, "content" => content}
+
+    cleaned =
+      case Map.get(entry, "tool_calls") || Map.get(entry, :tool_calls) do
+        calls when is_list(calls) and calls != [] -> Map.put(cleaned, "tool_calls", calls)
+        _ -> cleaned
       end
 
-    entry =
-      if tool_call_id = Map.get(m, "tool_call_id") do
-        entry
-        |> Map.put("tool_call_id", tool_call_id)
-        |> then(fn e ->
-          if name = Map.get(m, "name") do
-            Map.put(e, "name", name)
-          else
-            e
-          end
-        end)
-      else
-        entry
+    cleaned =
+      case Map.get(entry, "tool_call_id") || Map.get(entry, :tool_call_id) do
+        nil ->
+          cleaned
+
+        tool_call_id ->
+          cleaned
+          |> Map.put("tool_call_id", tool_call_id)
+          |> then(fn cleaned ->
+            case Map.get(entry, "name") || Map.get(entry, :name) do
+              nil -> cleaned
+              name -> Map.put(cleaned, "name", name)
+            end
+          end)
       end
 
-    entry
-  end
-
-  defp clean_history_entry(m) when is_map(m) do
-    %{"role" => Map.get(m, "role", "user"), "content" => Map.get(m, "content", "")}
+    case Map.get(entry, "reasoning_content") || Map.get(entry, :reasoning_content) do
+      nil -> cleaned
+      reasoning_content -> Map.put(cleaned, "reasoning_content", reasoning_content)
+    end
   end
 
   defp build_user_content(text, nil), do: text
 
   defp build_user_content(text, media) when is_list(media) and media != [] do
     content_parts =
-      Enum.map(media, fn m ->
-        case Map.get(m, "type") || Map.get(m, :type) do
+      media
+      |> Enum.map(fn item ->
+        case Map.get(item, "type") || Map.get(item, :type) do
           "image" ->
-            url = Map.get(m, "url") || Map.get(m, :url, "")
-            mime = Map.get(m, "mime_type") || Map.get(m, :mime_type, "image/jpeg")
+            url = Map.get(item, "url") || Map.get(item, :url, "")
+            mime = Map.get(item, "mime_type") || Map.get(item, :mime_type, "image/jpeg")
 
             %{
               "type" => "image",
@@ -412,8 +414,7 @@ defmodule Nex.Agent.ContextBuilder do
       end)
       |> Enum.reject(&is_nil/1)
 
-    text_part = %{"type" => "text", "text" => text}
-    content_parts ++ [text_part]
+    content_parts ++ [%{"type" => "text", "text" => text}]
   end
 
   defp git_root(nil), do: nil
@@ -437,23 +438,22 @@ defmodule Nex.Agent.ContextBuilder do
           message()
         ]
   def add_assistant_message(messages, content, tool_calls \\ nil, reasoning_content \\ nil) do
-    msg = %{"role" => "assistant", "content" => content || ""}
+    message = %{"role" => "assistant", "content" => content || ""}
 
-    msg =
-      if tool_calls && tool_calls != [] do
-        Map.put(msg, "tool_calls", tool_calls)
-      else
-        msg
+    message =
+      case tool_calls do
+        calls when is_list(calls) and calls != [] -> Map.put(message, "tool_calls", calls)
+        _ -> message
       end
 
-    msg =
-      if reasoning_content do
-        Map.put(msg, "reasoning_content", reasoning_content)
-      else
-        msg
+    message =
+      case reasoning_content do
+        nil -> message
+        "" -> message
+        value -> Map.put(message, "reasoning_content", value)
       end
 
-    messages ++ [msg]
+    messages ++ [message]
   end
 
   @doc """

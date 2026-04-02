@@ -1,7 +1,7 @@
 defmodule Nex.Agent.AdminTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{Admin, Audit, Bus, CodeUpgrade, Session, Skills, Workspace}
+  alias Nex.Agent.{Admin, Audit, Bus, CodeUpgrade, RequestTrace, Session, Skills, Workspace}
   alias Nex.Agent.Tool.CustomTools
 
   setup do
@@ -116,6 +116,87 @@ defmodule Nex.Agent.AdminTest do
            }
 
     assert overview_state.skills.recent_runs == 1
+  end
+
+  test "runtime_state exposes request trace summaries and selected trace detail", %{
+    workspace: workspace
+  } do
+    trace_opts = [workspace: workspace, request_trace: %{"dir" => "audit/request_traces"}]
+    trace_path = RequestTrace.trace_path("run_trace_admin", trace_opts)
+    File.mkdir_p!(Path.dirname(trace_path))
+
+    File.write!(
+      trace_path,
+      [
+        Jason.encode!(%{
+          "type" => "request_started",
+          "run_id" => "run_trace_admin",
+          "prompt" => "show me trace",
+          "channel" => "telegram",
+          "chat_id" => "123",
+          "selected_packages" => [%{"name" => "agent-browser"}],
+          "inserted_at" => "2026-03-30T12:00:00Z"
+        }),
+        "{bad json}",
+        Jason.encode!(%{
+          "type" => "llm_response",
+          "run_id" => "run_trace_admin",
+          "iteration" => 1,
+          "content" => "ok",
+          "inserted_at" => "2026-03-30T12:00:01Z"
+        }),
+        Jason.encode!(%{
+          "type" => "tool_result",
+          "run_id" => "run_trace_admin",
+          "tool" => "list_dir",
+          "content" => "done",
+          "inserted_at" => "2026-03-30T12:00:02Z"
+        }),
+        Jason.encode!(%{
+          "type" => "request_completed",
+          "run_id" => "run_trace_admin",
+          "status" => "completed",
+          "result" => "final answer",
+          "inserted_at" => "2026-03-30T12:00:03Z"
+        })
+      ]
+      |> Enum.join("\n")
+    )
+
+    state =
+      Admin.runtime_state(
+        workspace: workspace,
+        trace: "run_trace_admin",
+        config_path: Path.join(workspace, "config.json")
+      )
+
+    assert state.request_trace_config["enabled"] == false
+    assert length(state.recent_request_traces) == 1
+
+    assert hd(state.recent_request_traces) == %{
+             run_id: "run_trace_admin",
+             prompt: "show me trace",
+             inserted_at: "2026-03-30T12:00:00Z",
+             status: "completed",
+             result: "final answer",
+             tool_count: 1,
+             llm_rounds: 1,
+             selected_packages: [%{"name" => "agent-browser"}],
+             used_tools: ["list_dir"],
+             skill_call_count: 0
+           }
+
+    assert state.selected_request_trace.run_id == "run_trace_admin"
+    assert state.selected_request_trace.channel == "telegram"
+    assert state.selected_request_trace.chat_id == "123"
+    assert state.selected_request_trace.tool_count == 1
+    assert state.selected_request_trace.llm_rounds == 1
+    assert length(state.selected_request_trace.events) == 4
+    assert state.selected_request_trace.used_tools == ["list_dir"]
+    assert state.selected_request_trace.available_tools == []
+    assert length(state.selected_request_trace.tool_activity) == 1
+    assert hd(state.selected_request_trace.tool_activity).name == "list_dir"
+    assert length(state.selected_request_trace.llm_turns) == 1
   end
 
   test "console-facing admin states keep the key fields used by panels", %{workspace: workspace} do

@@ -11,6 +11,7 @@ defmodule Nex.Agent.Memory do
   alias Nex.Agent.{Config, Workspace}
 
   @empty_memory_context "(empty)"
+  @raw_archive_failure_threshold 3
   @memory_boilerplate_lines [
     "# Long-term Memory",
     "This file stores important facts that persist across conversations.",
@@ -70,7 +71,20 @@ defmodule Nex.Agent.Memory do
   Compatibility no-op for retired HISTORY.md writes.
   """
   @spec append_history(String.t(), keyword()) :: :ok
-  def append_history(_entry, _opts \\ []) do
+  def append_history(entry, opts \\ []) do
+    ensure_workspace(opts)
+
+    path = Path.join(memory_dir(opts), "HISTORY.md")
+    content = String.trim(to_string(entry || ""))
+
+    if content == "" do
+      :ok
+    else
+      prefix = if File.exists?(path) and File.read!(path) != "", do: "\n", else: ""
+      File.write!(path, prefix <> content <> "\n", [:append])
+      :ok
+    end
+
     :ok
   end
 
@@ -148,6 +162,7 @@ defmodule Nex.Agent.Memory do
       current_memory = read_long_term(memory_opts)
       prompt_memory = compact_consolidation_memory(current_memory)
       lines = render_memory_lines(pending_messages)
+
       if lines == [] do
         {:ok, mark_reviewed(session), :noop}
       else
@@ -184,10 +199,12 @@ defmodule Nex.Agent.Memory do
              ) do
           {:ok, result} ->
             case normalize_refresh_args(result) do
-              {:ok, %{"status" => "noop"}} ->
+              {:ok, %{"status" => "noop"} = normalized} ->
+                maybe_append_history_entry(normalized, memory_opts)
                 {:ok, mark_reviewed(session), :noop}
 
-              {:ok, %{"status" => "update", "memory_update" => update}} ->
+              {:ok, %{"status" => "update", "memory_update" => update} = normalized} ->
+                maybe_append_history_entry(normalized, memory_opts)
                 update = stringify_result(update)
 
                 if is_binary(update) and String.trim(update) != "" and
@@ -220,8 +237,12 @@ defmodule Nex.Agent.Memory do
   @spec consolidate(map(), atom(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def consolidate(session, provider, model, opts \\ []) do
     case refresh(session, provider, model, opts) do
-      {:ok, updated_session, _status} -> {:ok, updated_session}
-      {:error, reason} -> {:error, reason}
+      {:ok, updated_session, _status} ->
+        clear_refresh_failure_count(session, opts)
+        {:ok, updated_session}
+
+      {:error, reason} ->
+        maybe_archive_after_refresh_failure(session, reason, opts)
     end
   end
 
@@ -232,7 +253,7 @@ defmodule Nex.Agent.Memory do
     ## Current Long-term Memory
     #{prompt_memory}
 
-    ## Conversation Segment
+    ## Conversation to Process
     #{Enum.join(lines, "\n")}
 
     Update MEMORY.md only when this segment contains durable information worth keeping:
@@ -450,7 +471,7 @@ defmodule Nex.Agent.Memory do
         end
 
       nil ->
-        {:error, "save_memory payload missing status"}
+        normalize_legacy_refresh_args(normalized)
 
       other ->
         {:error, "unexpected save_memory status #{inspect(other)}"}
@@ -465,9 +486,68 @@ defmodule Nex.Agent.Memory do
     end
   end
 
-  defp normalize_refresh_args([first | _rest]) when is_map(first), do: normalize_refresh_args(first)
+  defp normalize_refresh_args([first | _rest]) when is_map(first),
+    do: normalize_refresh_args(first)
+
   defp normalize_refresh_args([]), do: {:error, "unexpected arguments as empty list"}
   defp normalize_refresh_args(_), do: {:error, "unexpected arguments type"}
+
+  defp normalize_legacy_refresh_args(normalized) do
+    cond do
+      Map.get(normalized, "memory_update") in [nil, ""] ->
+        {:error, "save_memory payload missing memory_update for update"}
+
+      true ->
+        {:ok, Map.put(normalized, "status", "update")}
+    end
+  end
+
+  defp maybe_append_history_entry(normalized, opts) do
+    case Map.get(normalized, "history_entry") do
+      entry when is_binary(entry) and entry != "" -> append_history(entry, opts)
+      _ -> :ok
+    end
+  end
+
+  defp maybe_archive_after_refresh_failure(session, reason, opts) do
+    if Keyword.get(opts, :archive_all, false) and
+         increment_refresh_failure_count(session, opts) >= @raw_archive_failure_threshold do
+      clear_refresh_failure_count(session, opts)
+      archive_pending_messages(session, opts)
+      {:ok, mark_reviewed(session)}
+    else
+      {:error, reason}
+    end
+  end
+
+  defp archive_pending_messages(session, opts) do
+    lines =
+      session
+      |> pending_memory_messages()
+      |> Enum.map(fn message ->
+        role = Map.get(message, "role", "unknown") |> to_string() |> String.upcase()
+        content = Map.get(message, "content", "") |> to_string()
+        "#{role}: #{content}"
+      end)
+
+    append_history("[RAW] #{length(lines)} messages\n" <> Enum.join(lines, "\n"), opts)
+  end
+
+  defp increment_refresh_failure_count(session, opts) do
+    key = refresh_failure_key(session, opts)
+    count = Process.get(key, 0) + 1
+    Process.put(key, count)
+    count
+  end
+
+  defp clear_refresh_failure_count(session, opts) do
+    Process.delete(refresh_failure_key(session, opts))
+    :ok
+  end
+
+  defp refresh_failure_key(session, opts) do
+    {__MODULE__, :refresh_failures, workspace_path(opts), Map.get(session, :key)}
+  end
 
   defp normalize_memory_body(content) do
     content

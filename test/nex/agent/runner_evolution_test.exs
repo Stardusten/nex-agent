@@ -23,7 +23,16 @@ end
 defmodule Nex.Agent.RunnerEvolutionTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{Bus, ContextBuilder, Onboarding, Runner, Session, SessionManager, Skills}
+  alias Nex.Agent.{
+    Bus,
+    ContextBuilder,
+    Onboarding,
+    RequestTrace,
+    Runner,
+    Session,
+    SessionManager,
+    Skills
+  }
 
   setup do
     workspace =
@@ -171,6 +180,102 @@ defmodule Nex.Agent.RunnerEvolutionTest do
            end)
   end
 
+  test "runner records request trace for a plain assistant response", %{workspace: workspace} do
+    llm_client = fn _messages, _opts ->
+      {:ok, %{content: "ok", finish_reason: nil, tool_calls: []}}
+    end
+
+    {:ok, _result, _session} =
+      Runner.run(Session.new("trace-basic"), "show trace",
+        llm_client: llm_client,
+        workspace: workspace,
+        request_trace: %{"enabled" => true},
+        skip_consolidation: true,
+        channel: "telegram",
+        chat_id: "trace"
+      )
+
+    [path] = RequestTrace.list_paths(workspace: workspace, request_trace: %{"enabled" => true})
+
+    events =
+      RequestTrace.read_trace(path, workspace: workspace, request_trace: %{"enabled" => true})
+
+    run_id = hd(events)["run_id"]
+
+    assert Enum.map(events, & &1["type"]) == [
+             "request_started",
+             "llm_request",
+             "llm_response",
+             "request_completed"
+           ]
+
+    assert Enum.all?(events, &(&1["run_id"] == run_id))
+    assert Enum.at(events, 2)["content"] == "ok"
+    assert Enum.at(events, 3)["result"] == "ok"
+  end
+
+  test "runner records tool results and reuses run_id for skill runtime summaries", %{
+    workspace: workspace
+  } do
+    {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+    llm_client = fn _messages, _opts ->
+      turn =
+        Agent.get_and_update(counter, fn current ->
+          {current, current + 1}
+        end)
+
+      case turn do
+        0 ->
+          {:ok,
+           %{
+             content: "",
+             finish_reason: nil,
+             tool_calls: [
+               %{id: "call_1", function: %{name: "list_dir", arguments: %{"path" => "."}}}
+             ]
+           }}
+
+        _ ->
+          {:ok, %{content: "done", finish_reason: nil, tool_calls: []}}
+      end
+    end
+
+    {:ok, _result, _session} =
+      Runner.run(Session.new("trace-tools"), "inspect workspace",
+        llm_client: llm_client,
+        workspace: workspace,
+        request_trace: %{"enabled" => true},
+        skill_runtime: %{"enabled" => true, "post_run_analysis" => false},
+        skip_consolidation: true
+      )
+
+    [trace_path] =
+      RequestTrace.list_paths(workspace: workspace, request_trace: %{"enabled" => true})
+
+    trace_events =
+      RequestTrace.read_trace(trace_path,
+        workspace: workspace,
+        request_trace: %{"enabled" => true}
+      )
+
+    run_id = hd(trace_events)["run_id"]
+
+    assert Enum.count(trace_events, &(&1["type"] == "llm_request")) == 2
+    assert Enum.count(trace_events, &(&1["type"] == "llm_response")) == 2
+    assert Enum.count(trace_events, &(&1["type"] == "tool_result")) == 1
+
+    [runtime_summary_path] = Path.wildcard(Path.join(workspace, "skill_runtime/runs/*.jsonl"))
+
+    runtime_events =
+      runtime_summary_path
+      |> File.read!()
+      |> String.split("\n", trim: true)
+      |> Enum.map(&Jason.decode!/1)
+
+    assert Enum.all?(runtime_events, &(&1["run_id"] == run_id))
+  end
+
   test "runner triggers async memory consolidation in the normal chat flow", %{
     workspace: workspace
   } do
@@ -220,9 +325,12 @@ defmodule Nex.Agent.RunnerEvolutionTest do
       )
 
     history =
-      wait_for_value(fn ->
-        File.read!(Path.join(workspace, "memory/HISTORY.md"))
-      end, fn content -> String.contains?(content, "Auto consolidation ran.") end)
+      wait_for_value(
+        fn ->
+          File.read!(Path.join(workspace, "memory/HISTORY.md"))
+        end,
+        fn content -> String.contains?(content, "Auto consolidation ran.") end
+      )
 
     assert history =~ "Auto consolidation ran."
 

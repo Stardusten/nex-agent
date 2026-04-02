@@ -11,6 +11,7 @@ defmodule Nex.Agent.Config do
             tools: %{},
             defaults: %{},
             skill_runtime: %{},
+            request_trace: %{},
             gateway: %{},
             telegram: %{},
             feishu: %{},
@@ -25,6 +26,7 @@ defmodule Nex.Agent.Config do
           tools: map(),
           defaults: map(),
           skill_runtime: map(),
+          request_trace: map(),
           gateway: map(),
           telegram: map(),
           feishu: map(),
@@ -66,6 +68,8 @@ defmodule Nex.Agent.Config do
             defaults: Map.merge(default_defaults(), Map.get(data, "defaults", %{})),
             skill_runtime:
               Map.merge(default_skill_runtime(), Map.get(data, "skill_runtime", %{})),
+            request_trace:
+              Map.merge(default_request_trace(), Map.get(data, "request_trace", %{})),
             gateway: Map.merge(default_gateway(), Map.get(data, "gateway", %{})),
             telegram: Map.merge(default_telegram(), Map.get(data, "telegram", %{})),
             feishu: Map.merge(default_feishu(), Map.get(data, "feishu", %{})),
@@ -97,6 +101,7 @@ defmodule Nex.Agent.Config do
       "tools" => config.tools,
       "defaults" => config.defaults,
       "skill_runtime" => config.skill_runtime,
+      "request_trace" => config.request_trace,
       "gateway" => config.gateway,
       "telegram" => config.telegram,
       "feishu" => config.feishu,
@@ -119,6 +124,7 @@ defmodule Nex.Agent.Config do
       providers: default_providers(),
       defaults: default_defaults(),
       skill_runtime: default_skill_runtime(),
+      request_trace: default_request_trace(),
       gateway: default_gateway(),
       telegram: default_telegram(),
       feishu: default_feishu(),
@@ -332,6 +338,14 @@ defmodule Nex.Agent.Config do
   @spec skill_runtime(t()) :: map()
   def skill_runtime(%__MODULE__{} = config) do
     Map.merge(default_skill_runtime(), config.skill_runtime || %{})
+  end
+
+  @doc """
+  Get the Request Trace configuration.
+  """
+  @spec request_trace(t()) :: map()
+  def request_trace(%__MODULE__{} = config) do
+    Map.merge(default_request_trace(), config.request_trace || %{})
   end
 
   @doc """
@@ -756,6 +770,13 @@ defmodule Nex.Agent.Config do
       "prefilter_limit" => 20,
       "post_run_analysis" => true,
       "github_indexes" => []
+    }
+  end
+
+  defp default_request_trace do
+    %{
+      "enabled" => false,
+      "dir" => "audit/request_traces"
     }
   end
 

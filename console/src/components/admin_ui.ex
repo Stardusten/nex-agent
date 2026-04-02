@@ -10,7 +10,7 @@ defmodule NexAgentConsole.Components.AdminUI do
     "/memory" => %{name: "认知", group: "六层进化"},
     "/sessions" => %{name: "分流", group: "六层进化"},
     "/tasks" => %{name: "分流", group: "六层进化"},
-    "/runtime" => %{name: "分流", group: "六层进化"},
+    "/runtime" => %{name: "运行时", group: "运行侧"},
     "/code" => %{name: "代码", group: "六层进化"}
   }
 
@@ -648,18 +648,30 @@ defmodule NexAgentConsole.Components.AdminUI do
   end
 
   def runtime_panel(assigns) do
+    assigns = Map.put_new(assigns, :trace_mode, :index)
+
+    ~H"""
+    <%= if @trace_mode == :detail do %>
+      {runtime_trace_focus(%{state: @state})}
+    <% else %>
+      {runtime_index_panel(%{state: @state})}
+    <% end %>
+    """
+  end
+
+  defp runtime_index_panel(assigns) do
     ~H"""
     <div class="stack-layout">
       <section class="section-card section-card--hero">
         <div class="section-head">
           <div>
             <p class="section-kicker">运行时控制</p>
-            <h2>先确认网关，再检查 services 和 heartbeat</h2>
+            <h2>这里只保留运行状态和最近请求索引</h2>
           </div>
         </div>
 
         <p class="section-summary">
-          运行时页只承担操作与健康检查，不再重复任务清单或记忆内容。
+          单条请求详情不再和列表塞在同一页里。这里先看 runtime 是否稳定，再从最近请求里点进单条详情页。
         </p>
 
         <div id="runtime-action-result" class="action-result"></div>
@@ -669,6 +681,8 @@ defmodule NexAgentConsole.Components.AdminUI do
           {detail_item(%{label: "启动时间", value: format_timestamp(@state.gateway.started_at)})}
           {detail_item(%{label: "Provider", value: get_in(@state.gateway, [:config, :provider])})}
           {detail_item(%{label: "Model", value: get_in(@state.gateway, [:config, :model])})}
+          {detail_item(%{label: "Request Trace", value: readable_bool(@state.request_trace_config["enabled"])})}
+          {detail_item(%{label: "最近请求", value: length(@state.recent_request_traces)})}
         </div>
 
         <div class="actions-row">
@@ -710,15 +724,79 @@ defmodule NexAgentConsole.Components.AdminUI do
         </section>
       </div>
 
-      <section class="section-card">
+      <section class="section-card" id="recent-request-list">
         <div class="section-head">
           <div>
-            <p class="section-kicker">workspace</p>
-            <h2>工作目录</h2>
+            <p class="section-kicker">最近请求</p>
+            <h2>点开后直接进入单条请求详情页</h2>
           </div>
         </div>
 
-        {directory_list(%{rows: @state.directories})}
+        <p class="section-summary">
+          <%= if @state.request_trace_config["enabled"] do %>
+            这里只保留请求索引。点击任意一条后，页面会直接切到该请求的详情模式，不再停留在同页深滚动。
+          <% else %>
+            Request trace 当前关闭。把 `request_trace.enabled` 打开后，新请求才会进入索引。
+          <% end %>
+        </p>
+
+        {request_trace_list(%{
+          traces: @state.recent_request_traces,
+          enabled: @state.request_trace_config["enabled"],
+          selected_run_id: nil
+        })}
+      </section>
+    </div>
+    """
+  end
+
+  defp runtime_trace_focus(assigns) do
+    ~H"""
+    <div class="stack-layout">
+      <section class="section-card section-card--hero">
+        <div class="section-head">
+          <div>
+            <p class="section-kicker">当前请求</p>
+            <h2>这一页只看一条 request trace</h2>
+          </div>
+
+          <a class="ghost-link" href="/runtime">返回最近请求</a>
+        </div>
+
+        <%= if @state.selected_request_trace do %>
+          <p class="section-summary">
+            {trace_result_preview(@state.selected_request_trace.prompt)}
+          </p>
+
+          <div class="detail-grid">
+            {detail_item(%{label: "Run ID", value: @state.selected_request_trace.run_id})}
+            {detail_item(%{label: "Status", value: @state.selected_request_trace.status})}
+            {detail_item(%{
+              label: "时间",
+              value: format_timestamp(Map.get(@state.selected_request_trace, :inserted_at))
+            })}
+            {detail_item(%{label: "Channel", value: @state.selected_request_trace.channel || "n/a"})}
+            {detail_item(%{label: "LLM Rounds", value: @state.selected_request_trace.llm_rounds})}
+            {detail_item(%{label: "Tool Calls", value: @state.selected_request_trace.tool_count})}
+          </div>
+        <% else %>
+          {empty_state(%{title: "没有找到这条请求", body: "这条 trace 可能已经不存在，返回最近请求列表重新选择。"})}
+        <% end %>
+      </section>
+
+      <section class="section-card">
+        <div class="section-head">
+          <div>
+            <p class="section-kicker">请求详情</p>
+            <h2>skill 命中、tool 调用、agent 回合</h2>
+          </div>
+        </div>
+
+        {request_trace_detail(%{
+          trace: @state.selected_request_trace,
+          enabled: @state.request_trace_config["enabled"],
+          traces: @state.recent_request_traces
+        })}
       </section>
     </div>
     """
@@ -1168,6 +1246,274 @@ defmodule NexAgentConsole.Components.AdminUI do
     """
   end
 
+  defp request_trace_list(assigns) do
+    ~H"""
+    <%= cond do %>
+      <% @traces == [] and not @enabled -> %>
+        {empty_state(%{title: "Request trace 未开启", body: "先在配置里打开 `request_trace.enabled`，之后的新请求才会落到这里。"})}
+      <% @traces == [] -> %>
+        {empty_state(%{title: "还没有 request trace", body: "先跑一条新请求，运行时页才会出现可查看的轨迹。"})}
+      <% true -> %>
+        <div class="stack-list trace-index">
+          <%= for trace <- @traces do %>
+            <a
+              class={"stack-list__item trace-item #{if @selected_run_id == trace.run_id, do: "is-active", else: ""}"}
+              href={"/runtime?trace=#{URI.encode_www_form(trace.run_id)}"}
+            >
+              <header class="trace-item__head">
+                <div class="trace-item__title">
+                  <strong>{trace.prompt || "No prompt preview"}</strong>
+                  <small>{trace.run_id}</small>
+                </div>
+                <div class="trace-item__status">
+                  <span class={"status-pill #{trace_status_class(trace.status)}"}>{trace.status}</span>
+                  <small>{format_timestamp(Map.get(trace, :inserted_at))}</small>
+                </div>
+              </header>
+              <div class="trace-meta-line">
+                <span>{trace.llm_rounds} rounds</span>
+                <span>{trace.tool_count} tool results</span>
+                <%= if (Map.get(trace, :skill_call_count, 0) || 0) > 0 do %>
+                  <span>{Map.get(trace, :skill_call_count, 0)} skill calls</span>
+                <% end %>
+                <%= if skill_names = request_trace_package_name_list(trace.selected_packages) do %>
+                  <span>{"skills: " <> Enum.join(skill_names, ", ")}</span>
+                <% end %>
+              </div>
+              <p class="trace-item__hint">进入详情页查看 skill 命中、tool 调用和 agent 回合。</p>
+            </a>
+          <% end %>
+        </div>
+    <% end %>
+    """
+  end
+
+  defp request_trace_detail(assigns) do
+    ~H"""
+    <%= cond do %>
+      <% is_nil(@trace) and @traces == [] and not @enabled -> %>
+        {empty_state(%{title: "Trace 当前关闭", body: "首版 trace 默认关闭；打开配置后，这里会开始累积新请求的完整回合。"})}
+      <% is_nil(@trace) -> %>
+        {empty_state(%{title: "选择一条请求 trace", body: "先返回最近请求列表，再进入一条具体请求的详情页。"})}
+      <% true -> %>
+        <div class="stack-layout stack-layout--tight">
+          <div class="detail-grid">
+            {detail_item(%{label: "Run ID", value: @trace.run_id})}
+            {detail_item(%{label: "Status", value: @trace.status})}
+            {detail_item(%{label: "Channel", value: @trace.channel || "n/a"})}
+            {detail_item(%{label: "Chat ID", value: @trace.chat_id || "n/a"})}
+            {detail_item(%{label: "LLM Rounds", value: @trace.llm_rounds})}
+            {detail_item(%{label: "Tool Calls", value: @trace.tool_count})}
+          </div>
+
+          <article class="detail-card">
+            <span class="section-kicker">prompt</span>
+            {code_block(%{content: @trace.prompt || "(empty)"})}
+          </article>
+
+          <%= if @trace.selected_packages != [] do %>
+            <article class="detail-card">
+              <span class="section-kicker">skill 命中</span>
+              {request_trace_package_cards(%{packages: @trace.selected_packages})}
+            </article>
+          <% end %>
+
+          <article class="detail-card">
+            <span class="section-kicker">tool 调用</span>
+            {request_trace_tool_activity(%{
+              available_tools: @trace.available_tools || [],
+              activity: @trace.tool_activity || []
+            })}
+          </article>
+
+          <article class="detail-card">
+            <span class="section-kicker">agent 回合</span>
+            {request_trace_llm_turns(%{turns: @trace.llm_turns || []})}
+          </article>
+
+          <%= if @trace.runtime_system_messages != [] do %>
+            <article class="detail-card">
+              <span class="section-kicker">runtime system messages</span>
+              {code_block(%{content: Enum.join(@trace.runtime_system_messages, "\n\n---\n\n")})}
+            </article>
+          <% end %>
+
+          <article class="detail-card">
+            <span class="section-kicker">原始事件</span>
+
+            <div class="audit-table">
+              <%= for event <- @trace.events do %>
+                <article class="audit-table__row">
+                  <time>{format_timestamp(Map.get(event, "inserted_at"))}</time>
+                  <strong>{request_trace_event_title(event)}</strong>
+                  <p>{request_trace_event_summary(event)}</p>
+                  <details>
+                    <summary>查看原文</summary>
+                    {code_block(%{content: payload_dump(event)})}
+                  </details>
+                </article>
+              <% end %>
+            </div>
+          </article>
+
+          <%= if @trace.result do %>
+            <article class="detail-card">
+              <span class="section-kicker">final result</span>
+              {code_block(%{content: to_string(@trace.result)})}
+            </article>
+          <% end %>
+        </div>
+    <% end %>
+    """
+  end
+
+  defp trace_chip_row(assigns) do
+    ~H"""
+    <div class="trace-chip-row">
+      <span class="trace-chip-row__label">{@label}</span>
+      <div class="trace-chip-row__items">
+        <%= for item <- @items do %>
+          <span class={"trace-chip trace-chip--#{@tone}"}>{item}</span>
+        <% end %>
+      </div>
+    </div>
+    """
+  end
+
+  defp request_trace_package_cards(assigns) do
+    ~H"""
+    <div class="trace-package-grid">
+      <%= for package <- @packages do %>
+        <article class="trace-package-card">
+          <header>
+            <strong>{package["name"] || package[:name] || "unknown skill"}</strong>
+            <span>{package["execution_mode"] || package[:execution_mode] || "knowledge"}</span>
+          </header>
+          <p>
+            <%= if tool_name = package["tool_name"] || package[:tool_name] do %>
+              {"通过 " <> trace_display_tool_name(tool_name) <> " 实际执行"}
+            <% else %>
+              作为提示约束注入当前回合
+            <% end %>
+          </p>
+        </article>
+      <% end %>
+    </div>
+    """
+  end
+
+  defp request_trace_tool_activity(assigns) do
+    ~H"""
+    <div class="stack-layout stack-layout--tight">
+      <%= if @activity == [] do %>
+        {empty_state(%{title: "这条请求没有实际 tool 调用", body: "如果本轮只靠提示词和历史上下文回答，这里会保持为空。"})}
+      <% else %>
+        <div class="stack-list trace-call-list">
+          <%= for activity <- @activity do %>
+            <article class={"stack-list__item trace-call-card #{if activity.kind == :skill, do: "trace-call-card--skill", else: ""}"}>
+              <header>
+                <div class="trace-call-card__title">
+                  <strong>{trace_display_tool_name(activity.name)}</strong>
+                  <small>
+                    {"round " <> to_string(activity.iteration || "?") <> " · " <>
+                       to_string(activity.tool_call_id || "no id")}
+                  </small>
+                </div>
+                <span class={"status-pill #{trace_result_tone(activity.result)}"}>{trace_kind_label(activity.kind)}</span>
+              </header>
+              <p>{trace_result_preview(activity.result)}</p>
+              <details>
+                <summary>查看参数和结果</summary>
+                <%= if activity.arguments do %>
+                  <span class="section-kicker">arguments</span>
+                  {code_block(%{content: payload_dump(activity.arguments)})}
+                <% end %>
+                <span class="section-kicker">result</span>
+                {code_block(%{content: to_string(activity.result || "(no recorded result)")})}
+              </details>
+            </article>
+          <% end %>
+        </div>
+      <% end %>
+
+      <%= if @available_tools != [] do %>
+        <details class="trace-subsection">
+          <summary>{"查看这一轮可用的 tools（" <> to_string(length(@available_tools)) <> "）"}</summary>
+          {trace_chip_row(%{
+            label: "available",
+            items: Enum.map(@available_tools, &trace_display_tool_name(&1.name)),
+            tone: "tool"
+          })}
+
+          <div class="stack-list">
+            <%= for tool <- @available_tools do %>
+              <article class="stack-list__item">
+                <header>
+                  <strong>{trace_display_tool_name(tool.name)}</strong>
+                  <span>{if trace_skill_tool_name?(tool.name), do: "skill", else: "tool"}</span>
+                </header>
+                <p>{tool.description || "No description"}</p>
+                <details>
+                  <summary>查看参数</summary>
+                  {code_block(%{content: payload_dump(tool.parameters)})}
+                </details>
+              </article>
+            <% end %>
+          </div>
+        </details>
+      <% end %>
+    </div>
+    """
+  end
+
+  defp request_trace_llm_turns(assigns) do
+    ~H"""
+    <%= if @turns == [] do %>
+      {empty_state(%{title: "没有 LLM 回合记录", body: "这通常意味着请求还没真正进入模型调用。"})}
+    <% else %>
+      <div class="stack-list trace-turn-list">
+        <%= for turn <- @turns do %>
+          <article class="stack-list__item trace-turn">
+            <header>
+              <div class="trace-turn__title">
+                <strong>{"Round " <> to_string(turn.iteration || "?")}</strong>
+                <small>{format_timestamp(turn.inserted_at)}</small>
+              </div>
+              <span>{trace_turn_meta(turn)}</span>
+            </header>
+
+            <%= if turn.available_tool_names != [] do %>
+              {trace_chip_row(%{
+                label: "visible tools",
+                items: Enum.map(turn.available_tool_names, &trace_display_tool_name/1),
+                tone: "tool"
+              })}
+            <% end %>
+
+            <%= if turn.tool_calls != [] do %>
+              {trace_chip_row(%{
+                label: "requested calls",
+                items: Enum.map(turn.tool_calls, &trace_display_tool_name(&1.name)),
+                tone: "skill"
+              })}
+            <% end %>
+
+            <p>{trace_result_preview(turn.content)}</p>
+
+            <details>
+              <summary>查看本轮 request / response</summary>
+              <span class="section-kicker">request</span>
+              {code_block(%{content: payload_dump(turn.request)})}
+              <span class="section-kicker">response</span>
+              {code_block(%{content: payload_dump(turn.response)})}
+            </details>
+          </article>
+        <% end %>
+      </div>
+    <% end %>
+    """
+  end
+
   defp task_table(assigns) do
     ~H"""
     <%= if @tasks == [] do %>
@@ -1221,22 +1567,6 @@ defmodule NexAgentConsole.Components.AdminUI do
         <% end %>
       </div>
     <% end %>
-    """
-  end
-
-  defp directory_list(assigns) do
-    ~H"""
-    <div class="directory-grid">
-      <%= for row <- @rows do %>
-        <article class="service-chip">
-          <span class="service-chip__label">{row.name}</span>
-
-          <span class={"status-pill #{if row.exists, do: "status-pill--ok", else: "status-pill--dead"}"}>
-            {if row.exists, do: "present", else: "missing"}
-          </span>
-        </article>
-      <% end %>
-    </div>
     """
   end
 
@@ -1305,6 +1635,10 @@ defmodule NexAgentConsole.Components.AdminUI do
     inspect(payload, pretty: true, printable_limit: 4_000, limit: 80)
   end
 
+  defp payload_dump(payload) do
+    inspect(payload, pretty: true, printable_limit: 100_000, limit: :infinity)
+  end
+
   defp payload_summary(payload) when payload in [%{}, nil], do: "没有额外 payload"
 
   defp payload_summary(payload) do
@@ -1347,7 +1681,7 @@ defmodule NexAgentConsole.Components.AdminUI do
     detail
     |> to_string()
     |> String.replace(~r/\s+/, " ")
-        |> String.slice(0, 68)
+    |> String.slice(0, 68)
   end
 
   defp skill_name(skill), do: Map.get(skill, :name) || Map.get(skill, "name")
@@ -1358,6 +1692,130 @@ defmodule NexAgentConsole.Components.AdminUI do
   end
 
   defp skill_draft?(skill), do: Map.get(skill, :draft) == true or Map.get(skill, "draft") == true
+
+  defp request_trace_package_name_list(packages) when is_list(packages) do
+    packages
+    |> Enum.map(fn package -> Map.get(package, "name") || Map.get(package, :name) end)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+    |> case do
+      [] -> nil
+      names -> names
+    end
+  end
+
+  defp request_trace_package_name_list(_), do: nil
+
+  defp trace_status_class("completed"), do: "status-pill--ok"
+  defp trace_status_class("ok"), do: "status-pill--ok"
+  defp trace_status_class("failed"), do: "status-pill--dead"
+  defp trace_status_class("error"), do: "status-pill--dead"
+  defp trace_status_class(_status), do: "status-pill--live"
+
+  defp trace_kind_label(:skill), do: "skill"
+  defp trace_kind_label(_kind), do: "tool"
+
+  defp trace_result_tone(result) when is_binary(result) do
+    if String.starts_with?(result, "Error:"), do: "status-pill--dead", else: "status-pill--live"
+  end
+
+  defp trace_result_tone(_result), do: "status-pill--live"
+
+  defp trace_display_tool_name(name) when is_binary(name) do
+    name
+    |> String.replace_prefix("skill_run__", "skill:")
+  end
+
+  defp trace_display_tool_name(name), do: to_string(name || "unknown")
+
+  defp trace_skill_tool_name?(name) when is_binary(name),
+    do: String.starts_with?(name, "skill_run__")
+
+  defp trace_skill_tool_name?(_name), do: false
+
+  defp trace_result_preview(content) do
+    content
+    |> to_string()
+    |> String.replace(~r/\s+/, " ")
+    |> case do
+      "" -> "没有可展示的文本内容"
+      text -> String.slice(text, 0, 220)
+    end
+  end
+
+  defp trace_turn_meta(turn) do
+    [
+      "#{turn.message_count || 0} messages",
+      "#{length(turn.tool_calls || [])} calls",
+      turn.duration_ms && "#{turn.duration_ms} ms",
+      turn.finish_reason
+    ]
+    |> Enum.reject(&(is_nil(&1) or &1 == ""))
+    |> Enum.join(" · ")
+  end
+
+  defp request_trace_event_title(%{"type" => "request_started"}), do: "Request Started"
+  defp request_trace_event_title(%{"type" => "request_completed"}), do: "Request Completed"
+
+  defp request_trace_event_title(%{"type" => "llm_request"} = event),
+    do: "LLM Request · Round #{Map.get(event, "iteration", "?")}"
+
+  defp request_trace_event_title(%{"type" => "llm_response"} = event),
+    do: "LLM Response · Round #{Map.get(event, "iteration", "?")}"
+
+  defp request_trace_event_title(%{"type" => "tool_result"} = event),
+    do: "Tool Result · #{Map.get(event, "tool", "unknown")}"
+
+  defp request_trace_event_title(event), do: Map.get(event, "type", "trace_event")
+
+  defp request_trace_event_summary(%{"type" => "request_started"} = event) do
+    prompt = Map.get(event, "prompt", "") |> to_string() |> String.slice(0, 180)
+    channel = Map.get(event, "channel") || "unknown"
+    chat_id = Map.get(event, "chat_id") || "n/a"
+    "#{channel} · #{chat_id} · #{prompt}"
+  end
+
+  defp request_trace_event_summary(%{"type" => "llm_request"} = event) do
+    messages = Map.get(event, "messages", [])
+    tools = Map.get(event, "tools", [])
+    "#{length(messages)} messages · #{length(tools)} tools"
+  end
+
+  defp request_trace_event_summary(%{"type" => "llm_response"} = event) do
+    tool_calls = Map.get(event, "tool_calls", [])
+    content = Map.get(event, "content", "") |> to_string() |> String.slice(0, 180)
+
+    cond do
+      is_list(tool_calls) and tool_calls != [] -> "#{length(tool_calls)} tool calls"
+      content != "" -> content
+      true -> "No assistant text content"
+    end
+  end
+
+  defp request_trace_event_summary(%{"type" => "tool_result"} = event) do
+    Map.get(event, "content", "")
+    |> to_string()
+    |> String.replace(~r/\s+/, " ")
+    |> String.slice(0, 180)
+  end
+
+  defp request_trace_event_summary(%{"type" => "request_completed"} = event) do
+    status = Map.get(event, "status", "completed")
+    result = Map.get(event, "result", "") |> to_string() |> String.slice(0, 180)
+
+    if result == "" do
+      status
+    else
+      "#{status} · #{result}"
+    end
+  end
+
+  defp request_trace_event_summary(event) do
+    event
+    |> payload_preview()
+    |> String.replace(~r/\s+/, " ")
+    |> String.slice(0, 180)
+  end
 
   defp actual_hit_runs(runs) do
     runs
