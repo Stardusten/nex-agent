@@ -4,14 +4,25 @@ defmodule NexAgentConsole.Pages.Evolution do
   alias Nex.Agent.Admin
   alias NexAgentConsole.Components.AdminUI
 
-  def mount(_params) do
+  def mount(params) do
+    signal = Map.get(params, "signal")
+
+    panel_path =
+      case signal do
+        signal when is_binary(signal) and signal != "" ->
+          "/api/admin/panels/evolution?signal=" <> URI.encode_www_form(signal)
+
+        _ ->
+          "/api/admin/panels/evolution"
+      end
+
     %{
       title: "NexAgent Console | 分流",
-      subtitle: "分流页先判断变化该落到哪一层，不直接展开认知原文、能力库存或代码编辑。",
+      subtitle: "信号分层判断",
       current_path: "/evolution",
-      panel_path: "/api/admin/panels/evolution",
-      primary_action_label: "查看待分流 signals",
-      primary_action_href: "#pending-signals"
+      panel_path: panel_path,
+      primary_action_label: nil,
+      primary_action_href: nil
     }
   end
 

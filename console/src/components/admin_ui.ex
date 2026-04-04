@@ -4,14 +4,14 @@ defmodule NexAgentConsole.Components.AdminUI do
   alias NexAgentConsole.Components.Nav
 
   @page_meta %{
-    "/" => %{name: "分流", group: "六层进化"},
-    "/evolution" => %{name: "分流", group: "六层进化"},
-    "/skills" => %{name: "能力", group: "六层进化"},
-    "/memory" => %{name: "认知", group: "六层进化"},
-    "/sessions" => %{name: "分流", group: "六层进化"},
-    "/tasks" => %{name: "分流", group: "六层进化"},
-    "/runtime" => %{name: "运行时", group: "运行侧"},
-    "/code" => %{name: "代码", group: "六层进化"}
+    "/" => %{name: "分流", group: "进化层"},
+    "/evolution" => %{name: "分流", group: "进化层"},
+    "/skills" => %{name: "能力", group: "进化层"},
+    "/memory" => %{name: "认知", group: "进化层"},
+    "/code" => %{name: "代码", group: "进化层"},
+    "/sessions" => %{name: "会话", group: "运行侧"},
+    "/tasks" => %{name: "调度", group: "运行侧"},
+    "/runtime" => %{name: "运行时", group: "运行侧"}
   }
 
   def page_shell(assigns) do
@@ -28,15 +28,15 @@ defmodule NexAgentConsole.Components.AdminUI do
     <section class="page-shell">
       <header class="page-header">
         <div class="page-header__main">
-          <p class="page-header__eyebrow">{@page_group}</p>
           <div class="page-header__title-row">
-            <h1>{@page_name}</h1>
+            <p class="page-header__eyebrow">{@page_group}</p>
             <span class="page-header__route">{@current_path}</span>
           </div>
+          <h1>{@page_name}</h1>
           <p class="page-header__subtitle">{@subtitle}</p>
         </div>
 
-        <div class="page-header__meta">
+        <div class="page-statusbar">
           <span class="status-pill status-pill--live">
             <span class="status-pill__dot"></span>
             <span data-live-summary>等待实时事件</span>
@@ -50,7 +50,7 @@ defmodule NexAgentConsole.Components.AdminUI do
             <% end %>
 
             <a class="ghost-link" href="https://github.com/gofenix/nex" target="_blank" rel="noreferrer">
-              基于 Nex
+              Nex Runtime
             </a>
           </div>
         </div>
@@ -84,232 +84,127 @@ defmodule NexAgentConsole.Components.AdminUI do
 
   def overview_panel(assigns) do
     ~H"""
-    <div class="dashboard-layout dashboard-layout--overview">
-      <div class="dashboard-main">
-        <section class="section-card section-card--hero">
-          <div class="section-head">
-            <div>
-              <p class="section-kicker">运行总览</p>
-              <h2>这里不定义进化层，只回答现在系统处于什么状态</h2>
-            </div>
-            <a class="ghost-link" href="/evolution">进入六层总览</a>
+    <div class="stack-layout">
+      <section class="section-card">
+        <div class="section-head">
+          <div>
+            <p class="section-kicker">overview</p>
+            <h2>系统状态</h2>
           </div>
-
-          <p class="section-summary">
-            控制台页只保留当前状态与入口分发。分层判断去 `/evolution`，这里负责告诉你现在该先看哪里。
-          </p>
-
-          <div class="metric-grid">
-            {metric(%{label: "pending signals", value: length(@state.pending_signals), tone: "gold"})}
-            {metric(%{label: "open tasks", value: @state.tasks.open, tone: "green"})}
-            {metric(%{label: "recent sessions", value: length(@state.recent_sessions), tone: "ink"})}
-            {metric(%{label: "gateway services", value: map_size(@state.runtime.gateway.services || %{}), tone: "rust"})}
-          </div>
-        </section>
-
-        <div class="pair-layout">
-          <section class="section-card">
-            <div class="section-head">
-              <div>
-                <p class="section-kicker">当前状态</p>
-                <h2>先确认运行是否稳定</h2>
-              </div>
-            </div>
-
-            <div class="detail-grid">
-              {detail_item(%{label: "网关状态", value: @state.runtime.gateway.status})}
-              {detail_item(%{label: "Provider", value: get_in(@state.runtime.gateway, [:config, :provider])})}
-              {detail_item(%{label: "下一批任务", value: length(@state.tasks.upcoming)})}
-              {detail_item(%{label: "最近变化", value: length(@state.recent_events)})}
-            </div>
-
-            {services_grid(%{services: @state.runtime.gateway.services || %{}})}
-          </section>
-
-          <section class="section-card">
-            <div class="section-head">
-              <div>
-                <p class="section-kicker">建议入口</p>
-                <h2>先进入真正拥有该类信息的页面</h2>
-              </div>
-            </div>
-
-            {workflow_links(%{
-              links: [
-                %{
-                  href: "/evolution",
-                  title: "先看六层分流",
-                  body: "#{length(@state.pending_signals)} 个信号待处理，先判断它们应落到 SOUL、USER、MEMORY、SKILL、TOOL 还是 CODE。"
-                },
-                %{
-                  href: "/memory",
-                  title: "检查认知层",
-                  body: "SOUL、USER 和 MEMORY 放在一起看，先判断这是不是长期认知，而不是方法或实现问题。"
-                },
-                %{
-                  href: "/skills",
-                  title: "检查能力层",
-                  body: "SKILL 和 TOOL 在这里分开看：前者是方法沉淀，后者是确定性能力。"
-                },
-                %{href: "/code", title: "最后才看代码层", body: "只有高层和能力层都不能解决时，才进入 `/code` 做 diff、热更和回滚。"}
-              ]
-            })}
-          </section>
         </div>
 
+        <div class="metric-grid">
+          {metric(%{label: "gateway", value: @state.runtime.gateway.status, tone: "rust"})}
+          {metric(%{label: "pending signals", value: length(@state.pending_signals), tone: "gold"})}
+          {metric(%{label: "open tasks", value: @state.tasks.open, tone: "green"})}
+          {metric(%{label: "cron enabled", value: Map.get(@state.cron, :enabled, 0), tone: "ink"})}
+          {metric(%{label: "sessions", value: length(@state.recent_sessions), tone: "ink"})}
+          {metric(%{label: "recent events", value: length(@state.recent_events), tone: "ink"})}
+        </div>
+      </section>
+
+      <div class="pair-layout">
         <section class="section-card">
           <div class="section-head">
             <div>
-              <p class="section-kicker">最近变化</p>
-              <h2>跨层与运行面的最近记录</h2>
+              <p class="section-kicker">recent</p>
+              <h2>最近事件</h2>
             </div>
           </div>
 
           {event_feed(%{events: Enum.take(@state.recent_events, 6)})}
         </section>
-      </div>
-
-      <aside class="dashboard-rail">
-        <section class="section-card section-card--accent">
-          <div class="section-head">
-            <div>
-              <p class="section-kicker">分层焦点</p>
-              <h2>现在最可能触发进化判断的信号</h2>
-            </div>
-            <a class="ghost-link" href="/evolution">查看分层</a>
-          </div>
-
-          {signal_list(%{signals: Enum.take(@state.pending_signals, 4)})}
-        </section>
 
         <section class="section-card">
           <div class="section-head">
             <div>
-              <p class="section-kicker">最近会话</p>
-              <h2>近期上下文</h2>
+              <p class="section-kicker">signals</p>
+              <h2>待分流</h2>
             </div>
-            <a class="ghost-link" href="/memory">回到认知层</a>
+            <a class="ghost-link" href="/evolution">查看全部</a>
           </div>
 
-          {session_list(%{sessions: Enum.take(@state.recent_sessions, 4), compact: true})}
+          {signal_list(%{signals: Enum.take(@state.pending_signals, 4)})}
         </section>
-      </aside>
+      </div>
     </div>
     """
   end
 
   def evolution_panel(assigns) do
+    assigns =
+      assigns
+      |> Map.put(
+        :selected_signal,
+        selected_or_first_signal(
+          assigns.state.pending_signals,
+          Map.get(assigns, :selected_signal_id)
+        )
+      )
+      |> Map.put(:last_cycle_event, last_cycle_event(assigns.state.recent_events))
+
     ~H"""
     <div class="stack-layout">
-      <section class="section-card section-card--hero">
-        <div class="section-head">
-          <div>
-            <p class="section-kicker">当前判断框架</p>
-            <h2>先把变化送到真正拥有它的那一层，再决定是否需要进一步操作</h2>
-          </div>
-          <span class="status-pill">
-            最近事件：{Map.get(List.first(@state.recent_events) || %{}, "event", "暂无相关记录")}
-          </span>
+      <section class="section-card section-card--toolbar">
+        <div class="detail-grid">
+          {detail_item(%{label: "待处理信号", value: length(@state.pending_signals)})}
+          {detail_item(%{label: "层级目标", value: length(@state.layers)})}
+          {detail_item(%{label: "最近进化事件", value: length(@state.recent_events)})}
+          {detail_item(%{
+            label: "上次 cycle",
+            value: if(@last_cycle_event, do: format_timestamp(Map.get(@last_cycle_event, "timestamp")), else: "n/a")
+          })}
         </div>
-
-        <p class="section-summary">
-          `/evolution` 只负责分流，不负责展开认知原文、能力库存或代码编辑。默认顺序是先稳定高层，再沉淀方法，再扩展能力，最后才修改代码。
-        </p>
-
-        {layer_map(%{layers: @state.layers})}
       </section>
 
-      <div class="pair-layout" id="pending-signals">
-        <section class="section-card section-card--accent">
+      <div class="inspector-layout" id="pending-signals">
+        <section class="section-card inspector-layout__list">
           <div class="section-head">
             <div>
-              <p class="section-kicker">待分流 signals</p>
-              <h2>先看有哪些变化正在请求被整理</h2>
+              <p class="section-kicker">signal inbox</p>
+              <h2>当前待分流</h2>
             </div>
           </div>
 
-          <p class="section-summary">
-            这里是首屏的主证据区。先看信号，再判断它属于认知、能力还是实现问题。
-          </p>
-
-          {signal_list(%{signals: @state.pending_signals})}
+          {signal_selection_list(%{
+            signals: @state.pending_signals,
+            selected_signal_id: signal_id(@selected_signal)
+          })}
         </section>
 
-        <section class="section-card">
+        <section class="section-card inspector-layout__detail">
           <div class="section-head">
             <div>
-              <p class="section-kicker">建议落层</p>
-              <h2>把变化送到真正拥有这类信息的页面</h2>
+              <p class="section-kicker">inspector</p>
+              <h2>当前信号</h2>
             </div>
           </div>
 
-          {workflow_links(%{
-            links: [
-              %{
-                href: "/memory",
-                title: "进入认知层",
-                body: "当变化更像长期原则、用户偏好或项目事实时，落到 SOUL / USER / MEMORY，而不是继续下沉到能力或代码。"
-              },
-              %{
-                href: "/skills",
-                title: "进入能力层",
-                body: "当变化已经超出认知，开始变成可复用流程或确定性能力时，才进入 SKILL / TOOL 库存治理。"
-              },
-              %{
-                href: "/code",
-                title: "最后才进代码层",
-                body: "只有认知层和能力层都不能解决时，才进入 `/code` 做只读审查、diff、热更和回滚。"
-              },
-              %{
-                href: "#manual-cycle",
-                title: "确认后再手动运行",
-                body: "手动 cycle 是次级操作。先完成分流判断，再决定是否需要人工触发一次整理。"
-              }
-            ]
-          })}
+          <div id="evolution-action-result" class="action-result"></div>
+          {signal_inspector(%{signal: @selected_signal})}
         </section>
       </div>
 
       <section class="section-card">
         <div class="section-head">
           <div>
-            <p class="section-kicker">最近结果</p>
-            <h2>最近几次分流与进化的摘要</h2>
+            <p class="section-kicker">layer targets</p>
+            <h2>分流目标</h2>
           </div>
         </div>
 
-        {audit_glance(%{rows: Enum.take(@state.recent_events, 6)})}
+        {layer_map(%{layers: @state.layers})}
       </section>
 
-      <section class="section-card" id="manual-cycle">
+      <section class="section-card">
         <div class="section-head">
           <div>
-            <p class="section-kicker">手动运行</p>
-            <h2>只有看完分层证据后，才建议手动触发 cycle</h2>
+            <p class="section-kicker">last cycle</p>
+            <h2>上次进化</h2>
           </div>
         </div>
 
-        <p class="section-summary">
-          这不是默认动作。先看 `signals` 和最近结果，再决定是否需要人工触发一次分层整理。
-        </p>
-
-        <div class="actions-row">
-          <form hx-post="/trigger_cycle" hx-target="#evolution-action-result" hx-swap="innerHTML">
-            <button class="action-button action-button--primary" type="submit">手动运行 cycle</button>
-          </form>
-          <div id="evolution-action-result" class="action-result"></div>
-        </div>
-      </section>
-
-      <section class="section-card" id="evolution-audit">
-        <div class="section-head">
-          <div>
-            <p class="section-kicker">审计流</p>
-            <h2>完整进化时间线</h2>
-          </div>
-        </div>
-
-        {audit_table(%{rows: @state.recent_events})}
+        {last_cycle_summary(%{events: @state.recent_events})}
       </section>
     </div>
     """
@@ -318,17 +213,13 @@ defmodule NexAgentConsole.Components.AdminUI do
   def skills_panel(assigns) do
     ~H"""
     <div class="stack-layout">
-      <section class="section-card section-card--hero">
+      <section class="section-card">
         <div class="section-head">
           <div>
-            <p class="section-kicker">当前能力版图</p>
-            <h2>这里先只看资产，以及最近实际命中记录</h2>
+            <p class="section-kicker">inventory</p>
+            <h2>能力资产</h2>
           </div>
         </div>
-
-        <p class="section-summary">
-          `/skills` 暂时不展开边界说明、catalog 或 lineage。先回答两件事：现在有哪些能力资产，以及最近哪些 skill 真的被命中过。
-        </p>
 
         <div class="metric-grid">
           {metric(%{label: "本地 skills", value: length(@state.local_skills), tone: "gold"})}
@@ -338,28 +229,12 @@ defmodule NexAgentConsole.Components.AdminUI do
         </div>
       </section>
 
-      <section class="section-card" id="ability-inventory">
-        <div class="section-head">
-          <div>
-            <p class="section-kicker">资产总览</p>
-            <h2>先确认能力资产分布，再往下看具体清单</h2>
-          </div>
-        </div>
-
-        <div class="detail-grid">
-          {detail_item(%{label: "SKILL", value: length(@state.local_skills)})}
-          {detail_item(%{label: "TOOL", value: length(@state.tools.builtin) + length(@state.tools.custom)})}
-          {detail_item(%{label: "builtin tools", value: length(@state.tools.builtin)})}
-          {detail_item(%{label: "实际命中记录", value: length(actual_hit_runs(@state.recent_runs))})}
-        </div>
-      </section>
-
       <div class="pair-layout">
         <section class="section-card">
           <div class="section-head">
             <div>
-              <p class="section-kicker">SKILL</p>
-              <h2>本地方法与流程资产</h2>
+              <p class="section-kicker">skills</p>
+              <h2>本地方法</h2>
             </div>
           </div>
 
@@ -369,8 +244,8 @@ defmodule NexAgentConsole.Components.AdminUI do
         <section class="section-card">
           <div class="section-head">
             <div>
-              <p class="section-kicker">TOOL</p>
-              <h2>当前可调用能力资产</h2>
+              <p class="section-kicker">tools</p>
+              <h2>可调用工具</h2>
             </div>
           </div>
 
@@ -381,8 +256,8 @@ defmodule NexAgentConsole.Components.AdminUI do
       <section class="section-card" id="recent-hits">
         <div class="section-head">
           <div>
-            <p class="section-kicker">最近实际命中</p>
-            <h2>只看真正选中过 skill package 的运行记录</h2>
+            <p class="section-kicker">hits</p>
+            <h2>命中记录</h2>
           </div>
         </div>
 
@@ -398,69 +273,25 @@ defmodule NexAgentConsole.Components.AdminUI do
       <section class="section-card section-card--hero" id="memory-summary">
         <div class="section-head">
           <div>
-            <p class="section-kicker">当前认知摘要</p>
-            <h2>认知页先给判断，再给原文证据</h2>
+            <p class="section-kicker">cognition</p>
+            <h2>认知状态</h2>
           </div>
-          <a class="ghost-link" href="/evolution">回到六层</a>
+          <a class="ghost-link" href="/evolution">回到分流</a>
         </div>
-
-        <p class="section-summary">
-          `/memory` 只处理 SOUL、USER、MEMORY 的长期认知，不负责能力沉淀和实现修改。首屏只看认知结论，原文预览全部降到下半区。
-        </p>
 
         <div class="metric-grid">
           {metric(%{label: "SOUL", value: if(String.trim(@state.soul_preview || "") == "", do: "empty", else: "loaded"), tone: "gold"})}
           {metric(%{label: "USER", value: if(String.trim(@state.user_preview || "") == "", do: "empty", else: "loaded"), tone: "green"})}
-          {metric(%{label: "MEMORY bytes", value: @state.memory_bytes, tone: "ink"})}
-          {metric(%{label: "最近认知事件", value: length(@state.recent_events), tone: "rust"})}
+          {metric(%{label: "MEMORY", value: format_bytes(@state.memory_bytes), tone: "ink"})}
+          {metric(%{label: "认知事件", value: length(@state.recent_events), tone: "rust"})}
         </div>
       </section>
 
       <section class="section-card">
         <div class="section-head">
           <div>
-            <p class="section-kicker">认知结论</p>
-            <h2>先看 SOUL、USER、MEMORY 各自正在定义什么</h2>
-          </div>
-        </div>
-
-        <div class="stack-layout stack-layout--tight">
-          <article class="detail-card detail-card--summary">
-            <span class="section-kicker">SOUL</span>
-            <strong>长期原则</strong>
-            <p>{preview_glance(@state.soul_preview, "SOUL 还没有形成稳定原则。")}</p>
-          </article>
-
-          <article class="detail-card detail-card--summary">
-            <span class="section-kicker">USER</span>
-            <strong>用户画像</strong>
-            <p>{preview_glance(@state.user_preview, "USER 还没有沉淀出稳定协作偏好。")}</p>
-          </article>
-
-          <article class="detail-card detail-card--summary">
-            <span class="section-kicker">MEMORY</span>
-            <strong>长期事实</strong>
-            <p>{preview_glance(@state.memory_preview, "MEMORY 还没有积累出明确项目事实。")}</p>
-          </article>
-        </div>
-      </section>
-
-      <section class="section-card">
-        <div class="section-head">
-          <div>
-            <p class="section-kicker">最近变化</p>
-            <h2>与认知层相关的最近记录</h2>
-          </div>
-        </div>
-
-        {audit_glance(%{rows: Enum.take(@state.recent_events, 8)})}
-      </section>
-
-      <section class="section-card">
-        <div class="section-head">
-          <div>
-            <p class="section-kicker">原文证据</p>
-            <h2>SOUL、USER、MEMORY 原文按层级顺序展开</h2>
+            <p class="section-kicker">evidence</p>
+            <h2>原文预览</h2>
           </div>
         </div>
 
@@ -485,17 +316,12 @@ defmodule NexAgentConsole.Components.AdminUI do
       <section class="section-card">
         <div class="section-head">
           <div>
-            <p class="section-kicker">下一步</p>
-            <h2>继续分流或进入能力层</h2>
+            <p class="section-kicker">changes</p>
+            <h2>认知变更记录</h2>
           </div>
         </div>
 
-        {workflow_links(%{
-          links: [
-            %{href: "/evolution", title: "回到分层总览", body: "如果你在判断这条变化该落在哪一层，直接回 `/evolution` 看六层地图。"},
-            %{href: "/skills", title: "继续看能力层", body: "如果这不是长期认知，而是可复用的方法或能力，再进入 `/skills`。"}
-          ]
-        })}
+        {cognition_changelog(%{events: Enum.take(@state.recent_events, 12)})}
       </section>
     </div>
     """
@@ -507,8 +333,8 @@ defmodule NexAgentConsole.Components.AdminUI do
       <section class="section-card split-sidebar">
         <div class="section-head">
           <div>
-            <p class="section-kicker">会话目录</p>
-            <h2>按 session 进入检查</h2>
+            <p class="section-kicker">directory</p>
+            <h2>会话列表</h2>
           </div>
         </div>
 
@@ -520,14 +346,10 @@ defmodule NexAgentConsole.Components.AdminUI do
           <section class="section-card section-card--hero">
             <div class="section-head">
               <div>
-                <p class="section-kicker">当前会话</p>
+                <p class="section-kicker">session</p>
                 <h2>{@state.selected_session.key}</h2>
               </div>
             </div>
-
-            <p class="section-summary">
-              先确认消息规模与未 consolidation 数量，再决定是整理记忆还是直接清空这个 session。
-            </p>
 
             <div id="sessions-action-result" class="action-result"></div>
 
@@ -538,9 +360,10 @@ defmodule NexAgentConsole.Components.AdminUI do
             </div>
 
             <div class="actions-row">
-              <form hx-post="/consolidate" hx-target="#sessions-action-result" hx-swap="innerHTML">
+              <form hx-post="/consolidate" hx-target="#sessions-action-result" hx-swap="innerHTML" hx-indicator="#consolidate-spinner">
                 <input type="hidden" name="session_key" value={@state.selected_session.key} />
                 <button class="action-button action-button--primary" type="submit">运行 consolidation</button>
+                <span id="consolidate-spinner" class="htmx-indicator">执行中...</span>
               </form>
 
               <form
@@ -558,8 +381,8 @@ defmodule NexAgentConsole.Components.AdminUI do
           <section class="section-card">
             <div class="section-head">
               <div>
-                <p class="section-kicker">消息</p>
-                <h2>当前会话内容</h2>
+                <p class="section-kicker">messages</p>
+                <h2>会话消息</h2>
               </div>
             </div>
 
@@ -586,122 +409,162 @@ defmodule NexAgentConsole.Components.AdminUI do
   end
 
   def tasks_panel(assigns) do
+    assigns =
+      assigns
+      |> Map.put(
+        :selected_job,
+        selected_or_first_job(assigns.state.cron_jobs, Map.get(assigns, :selected_job_id))
+      )
+
     ~H"""
     <div class="stack-layout">
-      <section class="section-card section-card--hero">
-        <div class="section-head">
-          <div>
-            <p class="section-kicker">scheduled tasks</p>
-            <h2>围绕 cron 和任务结果做调度管理</h2>
-          </div>
-        </div>
-
-        <p class="section-summary">
-          任务页只看调度和执行，不再重复展示运行时健康；先看下一批任务，再决定启停或手动触发。
-        </p>
-
+      <section class="section-card section-card--toolbar">
         <div class="metric-grid">
           {metric(%{label: "待处理任务", value: @state.summary.open, tone: "gold"})}
           {metric(%{label: "已完成任务", value: @state.summary.completed, tone: "green"})}
           {metric(%{label: "cron jobs", value: length(@state.cron_jobs), tone: "ink"})}
           {metric(%{label: "已启用 cron", value: @state.cron_status.enabled, tone: "rust"})}
+          {metric(%{label: "下次唤醒", value: format_relative_time(Map.get(@state.cron_status, :next_wakeup_in) || Map.get(@state.cron_status, "next_wakeup_in")), tone: "ink"})}
         </div>
       </section>
+
+      <div class="inspector-layout">
+        <section class="section-card inspector-layout__list">
+          <div class="section-head">
+            <div>
+              <p class="section-kicker">job list</p>
+              <h2>计划任务</h2>
+            </div>
+          </div>
+
+          {job_selection_list(%{
+            jobs: @state.cron_jobs,
+            selected_job_id: job_field(@selected_job, :id)
+          })}
+        </section>
+
+        <section class="section-card inspector-layout__detail">
+          <div class="section-head">
+            <div>
+              <p class="section-kicker">inspector</p>
+              <h2>当前任务</h2>
+            </div>
+          </div>
+
+          <div id="tasks-action-result" class="action-result"></div>
+          {job_inspector(%{job: @selected_job})}
+        </section>
+      </div>
 
       <div class="pair-layout">
         <section class="section-card">
           <div class="section-head">
             <div>
-              <p class="section-kicker">cron 状态</p>
-              <h2>计划任务与启停</h2>
-            </div>
-          </div>
-
-          <div id="tasks-action-result" class="action-result"></div>
-          {cron_table(%{jobs: @state.cron_jobs})}
-        </section>
-
-        <section class="section-card">
-          <div class="section-head">
-            <div>
-              <p class="section-kicker">next runs</p>
-              <h2>即将到来的任务</h2>
+              <p class="section-kicker">upcoming</p>
+              <h2>即将执行</h2>
             </div>
           </div>
 
           {upcoming_list(%{rows: @state.summary.upcoming})}
         </section>
-      </div>
 
-      <section class="section-card">
-        <div class="section-head">
-          <div>
-            <p class="section-kicker">执行结果</p>
-            <h2>最近任务记录</h2>
+        <section class="section-card">
+          <div class="section-head">
+            <div>
+              <p class="section-kicker">results</p>
+              <h2>执行记录</h2>
+            </div>
           </div>
-        </div>
 
-        {task_table(%{tasks: @state.tasks})}
-      </section>
+          {task_table(%{tasks: @state.tasks})}
+        </section>
+      </div>
     </div>
     """
   end
 
   def runtime_panel(assigns) do
-    assigns = Map.put_new(assigns, :trace_mode, :index)
+    assigns =
+      assigns
+      |> Map.put(:selected_trace, selected_or_first_trace(assigns.state))
 
-    ~H"""
-    <%= if @trace_mode == :detail do %>
-      {runtime_trace_focus(%{state: @state})}
-    <% else %>
-      {runtime_index_panel(%{state: @state})}
-    <% end %>
-    """
+    runtime_index_panel(assigns)
   end
 
   defp runtime_index_panel(assigns) do
     ~H"""
     <div class="stack-layout">
-      <section class="section-card section-card--hero">
-        <div class="section-head">
-          <div>
-            <p class="section-kicker">运行时控制</p>
-            <h2>这里只保留运行状态和最近请求索引</h2>
-          </div>
-        </div>
-
-        <p class="section-summary">
-          单条请求详情不再和列表塞在同一页里。这里先看 runtime 是否稳定，再从最近请求里点进单条详情页。
-        </p>
-
+      <section class="section-card section-card--toolbar">
         <div id="runtime-action-result" class="action-result"></div>
 
-        <div class="detail-grid">
-          {detail_item(%{label: "状态", value: @state.gateway.status})}
-          {detail_item(%{label: "启动时间", value: format_timestamp(@state.gateway.started_at)})}
-          {detail_item(%{label: "Provider", value: get_in(@state.gateway, [:config, :provider])})}
-          {detail_item(%{label: "Model", value: get_in(@state.gateway, [:config, :model])})}
-          {detail_item(%{label: "Request Trace", value: readable_bool(@state.request_trace_config["enabled"])})}
-          {detail_item(%{label: "最近请求", value: length(@state.recent_request_traces)})}
+        <div class="metric-grid">
+          {metric(%{label: "gateway", value: gateway_status_label(@state.gateway), tone: "ink"})}
+          {metric(%{label: "provider", value: get_in(@state.gateway, [:config, :provider]) || "n/a", tone: "ink"})}
+          {metric(%{label: "model", value: get_in(@state.gateway, [:config, :model]) || "n/a", tone: "ink"})}
+          {metric(%{label: "request trace", value: readable_bool(@state.request_trace_config["enabled"]), tone: "gold"})}
+          {metric(%{label: "最近请求", value: length(@state.recent_request_traces), tone: "green"})}
+          {metric(%{label: "启动时间", value: format_timestamp(@state.gateway.started_at), tone: "ink"})}
         </div>
 
-        <div class="actions-row">
-          <form hx-post="/start_gateway" hx-target="#runtime-action-result" hx-swap="innerHTML">
-            <button class="action-button action-button--primary" type="submit">启动网关</button>
-          </form>
-
-          <form hx-post="/stop_gateway" hx-target="#runtime-action-result" hx-swap="innerHTML">
-            <button class="action-button action-button--danger" type="submit">停止网关</button>
-          </form>
-        </div>
+        <%= if Map.get(@state.gateway, :external) do %>
+          <p class="section-summary">网关通过独立进程运行，在此控制台无法启停</p>
+        <% else %>
+          <div class="actions-row">
+            <%= if @state.gateway.status != :running do %>
+              <form hx-post="/start_gateway" hx-target="#runtime-action-result" hx-swap="innerHTML">
+                <button class="action-button action-button--primary" type="submit">启动网关</button>
+              </form>
+            <% else %>
+              <form hx-post="/stop_gateway" hx-target="#runtime-action-result" hx-swap="innerHTML">
+                <button class="action-button action-button--danger" type="submit">停止网关</button>
+              </form>
+            <% end %>
+          </div>
+        <% end %>
       </section>
+
+      <div class="inspector-layout" id="recent-request-list">
+        <section class="section-card inspector-layout__list">
+          <div class="section-head">
+            <div>
+              <p class="section-kicker">traces</p>
+              <h2>请求列表</h2>
+            </div>
+          </div>
+
+          <%= if not @state.request_trace_config["enabled"] do %>
+            <p class="section-summary">Request trace 当前关闭</p>
+          <% end %>
+
+          {request_trace_list(%{
+            traces: @state.recent_request_traces,
+            enabled: @state.request_trace_config["enabled"],
+            selected_run_id: @selected_trace && @selected_trace.run_id
+          })}
+        </section>
+
+        <section class="section-card inspector-layout__detail">
+          <div class="section-head">
+            <div>
+              <p class="section-kicker">inspector</p>
+              <h2>当前请求</h2>
+            </div>
+          </div>
+
+          {request_trace_detail(%{
+            trace: @selected_trace,
+            enabled: @state.request_trace_config["enabled"],
+            traces: @state.recent_request_traces
+          })}
+        </section>
+      </div>
 
       <div class="pair-layout">
         <section class="section-card">
           <div class="section-head">
             <div>
               <p class="section-kicker">services</p>
-              <h2>运行时服务</h2>
+              <h2>注册服务</h2>
             </div>
           </div>
 
@@ -723,81 +586,6 @@ defmodule NexAgentConsole.Components.AdminUI do
           </div>
         </section>
       </div>
-
-      <section class="section-card" id="recent-request-list">
-        <div class="section-head">
-          <div>
-            <p class="section-kicker">最近请求</p>
-            <h2>点开后直接进入单条请求详情页</h2>
-          </div>
-        </div>
-
-        <p class="section-summary">
-          <%= if @state.request_trace_config["enabled"] do %>
-            这里只保留请求索引。点击任意一条后，页面会直接切到该请求的详情模式，不再停留在同页深滚动。
-          <% else %>
-            Request trace 当前关闭。把 `request_trace.enabled` 打开后，新请求才会进入索引。
-          <% end %>
-        </p>
-
-        {request_trace_list(%{
-          traces: @state.recent_request_traces,
-          enabled: @state.request_trace_config["enabled"],
-          selected_run_id: nil
-        })}
-      </section>
-    </div>
-    """
-  end
-
-  defp runtime_trace_focus(assigns) do
-    ~H"""
-    <div class="stack-layout">
-      <section class="section-card section-card--hero">
-        <div class="section-head">
-          <div>
-            <p class="section-kicker">当前请求</p>
-            <h2>这一页只看一条 request trace</h2>
-          </div>
-
-          <a class="ghost-link" href="/runtime">返回最近请求</a>
-        </div>
-
-        <%= if @state.selected_request_trace do %>
-          <p class="section-summary">
-            {trace_result_preview(@state.selected_request_trace.prompt)}
-          </p>
-
-          <div class="detail-grid">
-            {detail_item(%{label: "Run ID", value: @state.selected_request_trace.run_id})}
-            {detail_item(%{label: "Status", value: @state.selected_request_trace.status})}
-            {detail_item(%{
-              label: "时间",
-              value: format_timestamp(Map.get(@state.selected_request_trace, :inserted_at))
-            })}
-            {detail_item(%{label: "Channel", value: @state.selected_request_trace.channel || "n/a"})}
-            {detail_item(%{label: "LLM Rounds", value: @state.selected_request_trace.llm_rounds})}
-            {detail_item(%{label: "Tool Calls", value: @state.selected_request_trace.tool_count})}
-          </div>
-        <% else %>
-          {empty_state(%{title: "没有找到这条请求", body: "这条 trace 可能已经不存在，返回最近请求列表重新选择。"})}
-        <% end %>
-      </section>
-
-      <section class="section-card">
-        <div class="section-head">
-          <div>
-            <p class="section-kicker">请求详情</p>
-            <h2>skill 命中、tool 调用、agent 回合</h2>
-          </div>
-        </div>
-
-        {request_trace_detail(%{
-          trace: @state.selected_request_trace,
-          enabled: @state.request_trace_config["enabled"],
-          traces: @state.recent_request_traces
-        })}
-      </section>
     </div>
     """
   end
@@ -806,28 +594,11 @@ defmodule NexAgentConsole.Components.AdminUI do
     ~H"""
     <div class="split-layout split-layout--code">
       <aside class="split-sidebar">
-        <section class="section-card section-card--accent">
-          <div class="section-head">
-            <div>
-              <p class="section-kicker">为什么会走到代码层</p>
-              <h2>只有认知层和能力层都不能解决时，才进入这里</h2>
-            </div>
-          </div>
-
-          {rule_list(%{
-            rules: [
-              "代码层是最后一层，默认先审查，不默认直接编辑。",
-              "如果问题还能被 SOUL / USER / MEMORY 或 SKILL / TOOL 解决，就不应先改实现。",
-              "这里的变更操作都属于次级动作，先看源码与版本轨迹，再决定是否动手。"
-            ]
-          })}
-        </section>
-
         <section class="section-card">
           <div class="section-head">
             <div>
-              <p class="section-kicker">模块选择</p>
-              <h2>先定位当前要审查的模块</h2>
+              <p class="section-kicker">module</p>
+              <h2>选择模块</h2>
             </div>
           </div>
 
@@ -845,8 +616,8 @@ defmodule NexAgentConsole.Components.AdminUI do
         <section class="section-card">
           <div class="section-head">
             <div>
-              <p class="section-kicker">版本轨迹</p>
-              <h2>历史版本与回滚点</h2>
+              <p class="section-kicker">versions</p>
+              <h2>版本轨迹</h2>
             </div>
           </div>
 
@@ -858,14 +629,10 @@ defmodule NexAgentConsole.Components.AdminUI do
         <section class="section-card section-card--hero" id="source-preview">
           <div class="section-head">
             <div>
-              <p class="section-kicker">只读审查</p>
-              <h2>先确认为什么必须落到代码层，再查看当前源码</h2>
+              <p class="section-kicker">source</p>
+              <h2>当前源码</h2>
             </div>
           </div>
-
-          <p class="section-summary">
-            这里先回答两件事：当前模块是什么、它最近怎么变过。当前源码只在这里只读展示，不再把编辑器当成默认首屏。
-          </p>
 
           <div class="detail-grid">
             {detail_item(%{label: "当前模块", value: @state.selected_module})}
@@ -879,8 +646,8 @@ defmodule NexAgentConsole.Components.AdminUI do
         <section class="section-card">
           <div class="section-head">
             <div>
-              <p class="section-kicker">最近 code events</p>
-              <h2>先看这层最近发生过什么</h2>
+              <p class="section-kicker">events</p>
+              <h2>代码变更记录</h2>
             </div>
           </div>
 
@@ -890,14 +657,10 @@ defmodule NexAgentConsole.Components.AdminUI do
         <section class="section-card section-card--editor">
           <div class="section-head">
             <div>
-              <p class="section-kicker">变更操作</p>
-              <h2>这是次级区，只有确认必须下沉到实现后才使用</h2>
+              <p class="section-kicker">editor</p>
+              <h2>热更与回滚</h2>
             </div>
           </div>
-
-          <p class="section-summary">
-            先在上方只读查看当前源码。这里只有当你已经准备好候选实现时，才粘贴新源码做 diff、热更或回滚。
-          </p>
 
           <div id="code-action-result" class="action-result"></div>
 
@@ -995,18 +758,6 @@ defmodule NexAgentConsole.Components.AdminUI do
     """
   end
 
-  defp rule_list(assigns) do
-    ~H"""
-    <div class="rule-list">
-      <%= for rule <- @rules do %>
-        <article class="rule-list__item">
-          <strong>{rule}</strong>
-        </article>
-      <% end %>
-    </div>
-    """
-  end
-
   defp tool_inventory_list(assigns) do
     ~H"""
     <div class="tool-clusters">
@@ -1049,18 +800,65 @@ defmodule NexAgentConsole.Components.AdminUI do
     """
   end
 
-  defp workflow_links(assigns) do
+  defp last_cycle_summary(assigns) do
+    completed =
+      Enum.find(assigns.events, fn e ->
+        Map.get(e, "event") == "evolution.cycle_completed"
+      end)
+
+    assigns = Map.put(assigns, :completed, completed)
+
     ~H"""
-    <div class="workflow-grid">
-      <%= for link <- @links do %>
-        <a class="workflow-link" href={link.href}>
-          <strong class="workflow-link__title">{link.title}</strong>
-          <p>{link.body}</p>
-        </a>
-      <% end %>
-    </div>
+    <%= if @completed do %>
+      <div class="detail-grid">
+        {detail_item(%{label: "时间", value: format_timestamp(Map.get(@completed, "timestamp"))})}
+        {detail_item(%{label: "触发方式", value: get_in(@completed, ["payload", "trigger"]) || "n/a"})}
+        {detail_item(%{label: "Soul 更新", value: get_in(@completed, ["payload", "soul_updates"]) || 0})}
+        {detail_item(%{label: "Memory 更新", value: get_in(@completed, ["payload", "memory_updates"]) || 0})}
+        {detail_item(%{label: "Skill 候选", value: get_in(@completed, ["payload", "skill_candidates"]) || 0})}
+      </div>
+    <% else %>
+      {empty_state(%{title: "还没有执行过 cycle", body: "点击上方按钮手动触发一次进化。"})}
+    <% end %>
     """
   end
+
+  defp cognition_changelog(assigns) do
+    assigns = Map.put(assigns, :events, assigns.events |> Enum.map(&classify_cognition_event/1))
+
+    ~H"""
+    <%= if @events == [] do %>
+      {empty_state(%{title: "暂无认知变更", body: "进化 cycle 执行后，这里会按层显示变更记录。"})}
+    <% else %>
+      <div class="stack-list">
+        <%= for {layer, event} <- @events do %>
+          <article class="stack-list__item">
+            <header>
+              <span class={"status-pill status-pill--#{layer_tone(layer)}"}>{layer}</span>
+              <span>{format_timestamp(Map.get(event, "timestamp"))}</span>
+            </header>
+            <p>{get_in(event, ["payload", "content"]) || payload_summary(Map.get(event, "payload", %{}))}</p>
+          </article>
+        <% end %>
+      </div>
+    <% end %>
+    """
+  end
+
+  defp classify_cognition_event(event) do
+    case Map.get(event, "event", "") do
+      "evolution.soul_updated" -> {"SOUL", event}
+      "evolution.user_updated" -> {"USER", event}
+      "evolution.memory_updated" -> {"MEMORY", event}
+      "memory." <> _ -> {"MEMORY", event}
+      _ -> {"OTHER", event}
+    end
+  end
+
+  defp layer_tone("SOUL"), do: "gold"
+  defp layer_tone("USER"), do: "green"
+  defp layer_tone("MEMORY"), do: "ink"
+  defp layer_tone(_), do: "ink"
 
   defp audit_glance(assigns) do
     ~H"""
@@ -1104,6 +902,156 @@ defmodule NexAgentConsole.Components.AdminUI do
         </article>
       <% end %>
     </div>
+    """
+  end
+
+  defp job_selection_list(assigns) do
+    ~H"""
+    <%= if @jobs == [] do %>
+      {empty_state(%{title: "没有 cron jobs", body: "定时任务创建后，这里会出现可选中的任务对象。"})}
+    <% else %>
+      <div class="selection-list">
+        <%= for job <- @jobs do %>
+          <% job_id = job |> job_field(:id) |> to_string() %>
+          <a
+            class={"selection-card #{if @selected_job_id == job_id, do: "is-active", else: ""}"}
+            href={"/tasks?job=#{URI.encode_www_form(job_id)}"}
+          >
+            <header class="selection-card__header">
+              <div class="selection-card__main">
+                <strong>{clamp_text(to_string(job_field(job, :name) || ""), 56)}</strong>
+                <div class="selection-card__meta">
+                  <span>{format_schedule(job_field(job, :schedule) || %{})}</span>
+                  <span>{job_field(job, :channel) || "default"}</span>
+                  <span>next {format_timestamp(job_field(job, :next_run))}</span>
+                </div>
+              </div>
+              <span class={"status-pill #{if job_field(job, :enabled), do: "status-pill--ok", else: "status-pill--ink"}"}>
+                {if job_field(job, :enabled), do: "enabled", else: "disabled"}
+              </span>
+            </header>
+          </a>
+        <% end %>
+      </div>
+    <% end %>
+    """
+  end
+
+  defp job_inspector(assigns) do
+    ~H"""
+    <%= if is_nil(@job) do %>
+      {empty_state(%{title: "没有可检查的任务", body: "先创建或启用一个 cron job，再从左侧列表里选中它。"})}
+    <% else %>
+      <div class="stack-layout stack-layout--tight">
+        <div class="detail-grid">
+          {detail_item(%{label: "状态", value: job_status_label(@job)})}
+          {detail_item(%{label: "Schedule", value: format_schedule(job_field(@job, :schedule) || %{})})}
+          {detail_item(%{label: "Channel", value: job_field(@job, :channel) || "default"})}
+          {detail_item(%{label: "下次执行", value: format_timestamp(job_field(@job, :next_run))})}
+          {detail_item(%{label: "最近执行", value: format_timestamp(job_field(@job, :last_run))})}
+          {detail_item(%{label: "最近结果", value: job_field(@job, :last_status) || "n/a"})}
+        </div>
+
+        <article class="detail-card">
+          <span class="section-kicker">message</span>
+          <p>{to_string(job_field(@job, :message) || "(empty)")}</p>
+        </article>
+
+        <div class="actions-row">
+          <form hx-post="/run_job" hx-target="#tasks-action-result" hx-swap="innerHTML">
+            <input type="hidden" name="job_id" value={job_field(@job, :id)} />
+            <button class="action-button action-button--primary" type="submit">Run Now</button>
+          </form>
+
+          <%= if job_field(@job, :enabled) do %>
+            <form hx-post="/disable_job" hx-target="#tasks-action-result" hx-swap="innerHTML">
+              <input type="hidden" name="job_id" value={job_field(@job, :id)} />
+              <button class="action-button action-button--danger" type="submit">Disable</button>
+            </form>
+          <% else %>
+            <form hx-post="/enable_job" hx-target="#tasks-action-result" hx-swap="innerHTML">
+              <input type="hidden" name="job_id" value={job_field(@job, :id)} />
+              <button class="action-button action-button--secondary" type="submit">Enable</button>
+            </form>
+          <% end %>
+        </div>
+      </div>
+    <% end %>
+    """
+  end
+
+  defp signal_selection_list(assigns) do
+    ~H"""
+    <%= if @signals == [] do %>
+      {empty_state(%{title: "目前没有 pending signals", body: "这通常意味着最近的自我修正已被整理进记忆或进化流程。"})}
+    <% else %>
+      <div class="selection-list">
+        <%= for signal <- @signals do %>
+          <% current_signal_id = signal_id(signal) %>
+          <a
+            class={"selection-card #{if @selected_signal_id == current_signal_id, do: "is-active", else: ""}"}
+            href={"/evolution?signal=#{URI.encode_www_form(current_signal_id)}"}
+          >
+            <header class="selection-card__header">
+              <div class="selection-card__main">
+                <strong>{Map.get(signal, "source", "unknown")}</strong>
+                <p>{clamp_text(Map.get(signal, "signal", ""), 96)}</p>
+              </div>
+              <span class={"status-pill status-pill--#{signal_layer_tone(signal)}"}>{signal_layer_label(signal)}</span>
+            </header>
+            <div class="selection-card__meta">
+              <span>{format_timestamp(Map.get(signal, "timestamp"))}</span>
+            </div>
+          </a>
+        <% end %>
+      </div>
+    <% end %>
+    """
+  end
+
+  defp signal_inspector(assigns) do
+    ~H"""
+    <%= if is_nil(@signal) do %>
+      {empty_state(%{title: "当前没有待处理信号", body: "如果你仍想主动整理一次，可以直接手动运行 cycle。"})}
+      <div class="actions-row">
+        <form hx-post="/trigger_cycle" hx-target="#evolution-action-result" hx-swap="innerHTML" hx-indicator="#cycle-spinner">
+          <button class="action-button action-button--primary" type="submit">手动运行 cycle</button>
+          <span id="cycle-spinner" class="htmx-indicator">执行中...</span>
+        </form>
+      </div>
+    <% else %>
+      <div class="stack-layout stack-layout--tight">
+        <div class="detail-grid">
+          {detail_item(%{label: "来源", value: Map.get(@signal, "source", "unknown")})}
+          {detail_item(%{label: "时间", value: format_timestamp(Map.get(@signal, "timestamp"))})}
+          {detail_item(%{label: "建议落层", value: signal_layer_label(@signal)})}
+          {detail_item(%{label: "目标页", value: signal_target_label(@signal)})}
+        </div>
+
+        <article class="detail-card">
+          <span class="section-kicker">signal</span>
+          <p>{Map.get(@signal, "signal", "")}</p>
+        </article>
+
+        <%= if signal_context_present?(@signal) do %>
+          <article class="detail-card">
+            <span class="section-kicker">context</span>
+            {code_block(%{content: payload_dump(Map.get(@signal, "context", %{}))})}
+          </article>
+        <% end %>
+
+        <div class="actions-row">
+          <form hx-post="/trigger_cycle" hx-target="#evolution-action-result" hx-swap="innerHTML" hx-indicator="#cycle-spinner">
+            <button class="action-button action-button--primary" type="submit">Run Cycle</button>
+            <span id="cycle-spinner" class="htmx-indicator">执行中...</span>
+          </form>
+
+          <%= if href = signal_target_href(@signal) do %>
+            <a class="action-button action-button--secondary" href={href}>打开目标层</a>
+          <% end %>
+        </div>
+      </div>
+    <% end %>
     """
   end
 
@@ -1187,24 +1135,6 @@ defmodule NexAgentConsole.Components.AdminUI do
     """
   end
 
-  defp audit_table(assigns) do
-    ~H"""
-    <%= if @rows == [] do %>
-      {empty_state(%{title: "暂无审计事件", body: "相关动作发生后会在这里出现。"})}
-    <% else %>
-      <div class="audit-table">
-        <%= for row <- @rows do %>
-          <article class="audit-table__row">
-            <time>{format_timestamp(Map.get(row, "timestamp"))}</time>
-            <strong>{Map.get(row, "event")}</strong>
-            <pre class="audit-table__payload"><code>{payload_preview(Map.get(row, "payload", %{}))}</code></pre>
-          </article>
-        <% end %>
-      </div>
-    <% end %>
-    """
-  end
-
   defp local_skills(assigns) do
     ~H"""
     <%= if @skills == [] do %>
@@ -1262,7 +1192,7 @@ defmodule NexAgentConsole.Components.AdminUI do
             >
               <header class="trace-item__head">
                 <div class="trace-item__title">
-                  <strong>{trace.prompt || "No prompt preview"}</strong>
+                  <strong>{clamp_text(trace.prompt || "No prompt preview", 72)}</strong>
                   <small>{trace.run_id}</small>
                 </div>
                 <div class="trace-item__status">
@@ -1280,7 +1210,6 @@ defmodule NexAgentConsole.Components.AdminUI do
                   <span>{"skills: " <> Enum.join(skill_names, ", ")}</span>
                 <% end %>
               </div>
-              <p class="trace-item__hint">进入详情页查看 skill 命中、tool 调用和 agent 回合。</p>
             </a>
           <% end %>
         </div>
@@ -1294,47 +1223,47 @@ defmodule NexAgentConsole.Components.AdminUI do
       <% is_nil(@trace) and @traces == [] and not @enabled -> %>
         {empty_state(%{title: "Trace 当前关闭", body: "首版 trace 默认关闭；打开配置后，这里会开始累积新请求的完整回合。"})}
       <% is_nil(@trace) -> %>
-        {empty_state(%{title: "选择一条请求 trace", body: "先返回最近请求列表，再进入一条具体请求的详情页。"})}
+        {empty_state(%{title: "选择一条请求 trace", body: "从左侧请求列表中选中一条记录，再在这里查看细节。"})}
       <% true -> %>
         <div class="stack-layout stack-layout--tight">
           <div class="detail-grid">
-            {detail_item(%{label: "Run ID", value: @trace.run_id})}
-            {detail_item(%{label: "Status", value: @trace.status})}
-            {detail_item(%{label: "Channel", value: @trace.channel || "n/a"})}
-            {detail_item(%{label: "Chat ID", value: @trace.chat_id || "n/a"})}
-            {detail_item(%{label: "LLM Rounds", value: @trace.llm_rounds})}
-            {detail_item(%{label: "Tool Calls", value: @trace.tool_count})}
+            {detail_item(%{label: "Run ID", value: Map.get(@trace, :run_id)})}
+            {detail_item(%{label: "Status", value: Map.get(@trace, :status)})}
+            {detail_item(%{label: "Channel", value: Map.get(@trace, :channel) || "n/a"})}
+            {detail_item(%{label: "Chat ID", value: Map.get(@trace, :chat_id) || "n/a"})}
+            {detail_item(%{label: "LLM Rounds", value: Map.get(@trace, :llm_rounds)})}
+            {detail_item(%{label: "Tool Calls", value: Map.get(@trace, :tool_count)})}
           </div>
 
           <article class="detail-card">
             <span class="section-kicker">prompt</span>
-            {code_block(%{content: @trace.prompt || "(empty)"})}
+            {code_block(%{content: Map.get(@trace, :prompt) || "(empty)"})}
           </article>
 
-          <%= if @trace.selected_packages != [] do %>
+          <%= if Map.get(@trace, :selected_packages, []) != [] do %>
             <article class="detail-card">
               <span class="section-kicker">skill 命中</span>
-              {request_trace_package_cards(%{packages: @trace.selected_packages})}
+              {request_trace_package_cards(%{packages: Map.get(@trace, :selected_packages, [])})}
             </article>
           <% end %>
 
           <article class="detail-card">
             <span class="section-kicker">tool 调用</span>
             {request_trace_tool_activity(%{
-              available_tools: @trace.available_tools || [],
-              activity: @trace.tool_activity || []
+              available_tools: Map.get(@trace, :available_tools, []),
+              activity: Map.get(@trace, :tool_activity, [])
             })}
           </article>
 
           <article class="detail-card">
             <span class="section-kicker">agent 回合</span>
-            {request_trace_llm_turns(%{turns: @trace.llm_turns || []})}
+            {request_trace_llm_turns(%{turns: Map.get(@trace, :llm_turns, [])})}
           </article>
 
-          <%= if @trace.runtime_system_messages != [] do %>
+          <%= if Map.get(@trace, :runtime_system_messages, []) != [] do %>
             <article class="detail-card">
               <span class="section-kicker">runtime system messages</span>
-              {code_block(%{content: Enum.join(@trace.runtime_system_messages, "\n\n---\n\n")})}
+              {code_block(%{content: Enum.join(Map.get(@trace, :runtime_system_messages, []), "\n\n---\n\n")})}
             </article>
           <% end %>
 
@@ -1342,7 +1271,7 @@ defmodule NexAgentConsole.Components.AdminUI do
             <span class="section-kicker">原始事件</span>
 
             <div class="audit-table">
-              <%= for event <- @trace.events do %>
+              <%= for event <- Map.get(@trace, :events, []) do %>
                 <article class="audit-table__row">
                   <time>{format_timestamp(Map.get(event, "inserted_at"))}</time>
                   <strong>{request_trace_event_title(event)}</strong>
@@ -1356,10 +1285,10 @@ defmodule NexAgentConsole.Components.AdminUI do
             </div>
           </article>
 
-          <%= if @trace.result do %>
+          <%= if Map.get(@trace, :result) do %>
             <article class="detail-card">
               <span class="section-kicker">final result</span>
-              {code_block(%{content: to_string(@trace.result)})}
+              {code_block(%{content: to_string(Map.get(@trace, :result))})}
             </article>
           <% end %>
         </div>
@@ -1532,44 +1461,6 @@ defmodule NexAgentConsole.Components.AdminUI do
     """
   end
 
-  defp cron_table(assigns) do
-    ~H"""
-    <%= if @jobs == [] do %>
-      {empty_state(%{title: "没有 cron jobs", body: "定时任务创建后，这里会出现启停和手动执行入口。"})}
-    <% else %>
-      <div class="cron-table">
-        <%= for job <- @jobs do %>
-          <article class="cron-table__row">
-            <div>
-              <strong>{job.name}</strong>
-              <p>{inspect(job.schedule)}</p>
-            </div>
-
-            <div class="actions-row">
-              <form hx-post="/run_job" hx-target="#tasks-action-result" hx-swap="innerHTML">
-                <input type="hidden" name="job_id" value={job.id} />
-                <button class="micro-button" type="submit">Run</button>
-              </form>
-
-              <%= if job.enabled do %>
-                <form hx-post="/disable_job" hx-target="#tasks-action-result" hx-swap="innerHTML">
-                  <input type="hidden" name="job_id" value={job.id} />
-                  <button class="micro-button micro-button--danger" type="submit">Disable</button>
-                </form>
-              <% else %>
-                <form hx-post="/enable_job" hx-target="#tasks-action-result" hx-swap="innerHTML">
-                  <input type="hidden" name="job_id" value={job.id} />
-                  <button class="micro-button micro-button--ok" type="submit">Enable</button>
-                </form>
-              <% end %>
-            </div>
-          </article>
-        <% end %>
-      </div>
-    <% end %>
-    """
-  end
-
   defp version_list(assigns) do
     ~H"""
     <%= if @versions == [] do %>
@@ -1615,21 +1506,7 @@ defmodule NexAgentConsole.Components.AdminUI do
   defp page_name(path), do: path |> page_meta() |> Map.get(:name)
   defp page_group(path), do: path |> page_meta() |> Map.get(:group)
 
-  defp page_meta(path), do: Map.get(@page_meta, path, %{name: "分流", group: "六层进化"})
-
-  defp preview_glance(content, fallback) do
-    content
-    |> to_string()
-    |> String.split("\n")
-    |> Enum.map(&String.trim/1)
-    |> Enum.reject(&(&1 == "" or String.starts_with?(&1, "#")))
-    |> Enum.take(3)
-    |> Enum.join(" · ")
-    |> case do
-      "" -> fallback
-      preview -> String.slice(preview, 0, 220)
-    end
-  end
+  defp page_meta(path), do: Map.get(@page_meta, path, %{name: "分流", group: "进化层"})
 
   defp payload_preview(payload) do
     inspect(payload, pretty: true, printable_limit: 4_000, limit: 80)
@@ -1676,6 +1553,158 @@ defmodule NexAgentConsole.Components.AdminUI do
   defp readable_bool(false), do: "no"
   defp readable_bool(nil), do: "n/a"
   defp readable_bool(value), do: to_string(value)
+
+  defp format_schedule(%{type: :every, seconds: s}) when s < 60, do: "every #{s}s"
+  defp format_schedule(%{type: :every, seconds: s}) when s < 3600, do: "every #{div(s, 60)}m"
+  defp format_schedule(%{type: :every, seconds: s}), do: "every #{div(s, 3600)}h"
+  defp format_schedule(%{type: :cron, expr: expr}), do: expr
+  defp format_schedule(%{type: :at, timestamp: ts}), do: "once at #{format_timestamp(ts)}"
+  defp format_schedule(%{"type" => "every", "seconds" => s}) when s < 60, do: "every #{s}s"
+
+  defp format_schedule(%{"type" => "every", "seconds" => s}) when s < 3600,
+    do: "every #{div(s, 60)}m"
+
+  defp format_schedule(%{"type" => "every", "seconds" => s}), do: "every #{div(s, 3600)}h"
+  defp format_schedule(%{"type" => "cron", "expr" => expr}), do: expr
+
+  defp format_schedule(%{"type" => "at", "timestamp" => ts}),
+    do: "once at #{format_timestamp(ts)}"
+
+  defp format_schedule(other), do: inspect(other)
+
+  defp clamp_text(nil, _), do: ""
+  defp clamp_text(s, max) when byte_size(s) <= max, do: s
+  defp clamp_text(s, max), do: String.slice(s, 0, max) <> "..."
+
+  defp format_relative_time(nil), do: "n/a"
+  defp format_relative_time(seconds) when is_number(seconds) and seconds < 60, do: "#{seconds}s"
+
+  defp format_relative_time(seconds) when is_number(seconds) and seconds < 3600,
+    do: "#{div(trunc(seconds), 60)}m"
+
+  defp format_relative_time(seconds) when is_number(seconds),
+    do: "#{div(trunc(seconds), 3600)}h #{rem(div(trunc(seconds), 60), 60)}m"
+
+  defp format_relative_time(_), do: "n/a"
+
+  defp format_bytes(nil), do: "n/a"
+  defp format_bytes(bytes) when is_number(bytes) and bytes < 1024, do: "#{bytes} B"
+
+  defp format_bytes(bytes) when is_number(bytes) and bytes < 1_048_576,
+    do: "#{Float.round(bytes / 1024, 1)} KB"
+
+  defp format_bytes(bytes) when is_number(bytes), do: "#{Float.round(bytes / 1_048_576, 1)} MB"
+  defp format_bytes(_), do: "n/a"
+
+  defp gateway_status_label(%{external: true, status: status}), do: "#{status} (独立进程)"
+  defp gateway_status_label(%{status: status}), do: status
+
+  defp job_field(%{__struct__: _} = job, key), do: Map.get(job, key)
+  defp job_field(job, key) when is_map(job), do: Map.get(job, key) || Map.get(job, to_string(key))
+
+  defp selected_or_first_job(jobs, selected_job_id) do
+    jobs
+    |> Enum.find(fn job -> to_string(job_field(job, :id)) == to_string(selected_job_id || "") end)
+    |> case do
+      nil -> List.first(jobs)
+      job -> job
+    end
+  end
+
+  defp selected_or_first_signal(signals, selected_signal_id) do
+    signals
+    |> Enum.find(fn signal -> signal_id(signal) == to_string(selected_signal_id || "") end)
+    |> case do
+      nil -> List.first(signals)
+      signal -> signal
+    end
+  end
+
+  defp selected_or_first_trace(state) do
+    Map.get(state, :selected_request_trace) ||
+      List.first(Map.get(state, :recent_request_traces, []))
+  end
+
+  defp last_cycle_event(events) do
+    Enum.find(events, fn event ->
+      Map.get(event, "event") == "evolution.cycle_completed"
+    end)
+  end
+
+  defp job_status_label(job) do
+    enabled = job_field(job, :enabled)
+    last_status = job_field(job, :last_status)
+
+    cond do
+      enabled && is_binary(last_status) && last_status != "" -> "enabled · #{last_status}"
+      enabled -> "enabled"
+      is_binary(last_status) && last_status != "" -> "disabled · #{last_status}"
+      true -> "disabled"
+    end
+  end
+
+  defp signal_id(nil), do: nil
+
+  defp signal_id(signal) do
+    timestamp = Map.get(signal, "timestamp", "")
+    source = Map.get(signal, "source", "unknown")
+    "#{timestamp}:#{source}"
+  end
+
+  defp signal_layer(signal) do
+    signal
+    |> Map.get("context", %{})
+    |> case do
+      %{} = context -> Map.get(context, "layer") || Map.get(context, :layer)
+      _ -> nil
+    end
+    |> case do
+      nil -> nil
+      layer -> layer |> to_string() |> String.upcase()
+    end
+  end
+
+  defp signal_layer_label(signal), do: signal_layer(signal) || "待判断"
+
+  defp signal_layer_tone(signal) do
+    case signal_layer(signal) do
+      "SOUL" -> "gold"
+      "USER" -> "green"
+      "MEMORY" -> "ink"
+      "SKILL" -> "live"
+      "TOOL" -> "live"
+      "CODE" -> "dead"
+      _ -> "ink"
+    end
+  end
+
+  defp signal_target_href(signal) do
+    case signal_layer(signal) do
+      "SOUL" -> "/memory"
+      "USER" -> "/memory"
+      "MEMORY" -> "/memory"
+      "SKILL" -> "/skills"
+      "TOOL" -> "/skills"
+      "CODE" -> "/code"
+      _ -> nil
+    end
+  end
+
+  defp signal_target_label(signal) do
+    case signal_target_href(signal) do
+      "/memory" -> "认知"
+      "/skills" -> "能力"
+      "/code" -> "代码"
+      _ -> "待判断"
+    end
+  end
+
+  defp signal_context_present?(signal) do
+    case Map.get(signal, "context") do
+      %{} = context -> map_size(context) > 0
+      _ -> false
+    end
+  end
 
   defp compress_layer_detail(detail) do
     detail

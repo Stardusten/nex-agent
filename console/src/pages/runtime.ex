@@ -16,27 +16,14 @@ defmodule NexAgentConsole.Pages.Runtime do
           "/api/admin/panels/runtime"
       end
 
-    case trace do
-      trace when is_binary(trace) and trace != "" ->
-        %{
-          title: "NexAgent Console | 请求 Trace",
-          subtitle: "当前只看这一条请求的 trace，返回列表后再切换别的请求。",
-          current_path: "/runtime",
-          panel_path: panel_path,
-          primary_action_label: "返回最近请求",
-          primary_action_href: "/runtime"
-        }
-
-      _ ->
-        %{
-          title: "NexAgent Console | 运行时",
-          subtitle: "运行时页只保留运行状态和最近请求索引；单条请求详情改成独立查看。",
-          current_path: "/runtime",
-          panel_path: panel_path,
-          primary_action_label: "查看最近请求",
-          primary_action_href: "#recent-request-list"
-        }
-    end
+    %{
+      title: "NexAgent Console | 运行时",
+      subtitle: "网关状态与请求追踪",
+      current_path: "/runtime",
+      panel_path: panel_path,
+      primary_action_label: nil,
+      primary_action_href: nil
+    }
   end
 
   def render(assigns), do: AdminUI.page_shell(assigns)

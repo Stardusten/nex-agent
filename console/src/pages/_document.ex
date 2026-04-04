@@ -9,9 +9,6 @@ defmodule NexAgentConsole.Pages.Document do
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>{@title}</title>
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-        <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,600;6..72,700&display=swap" rel="stylesheet" />
         <link rel="stylesheet" href="/static/app.css" />
         <script src="https://unpkg.com/htmx.org@2.0.4"></script>
       </head>

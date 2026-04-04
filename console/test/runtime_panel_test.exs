@@ -33,15 +33,16 @@ defmodule NexAgentConsole.RuntimePanelTest do
           }
         ]
       })
-      |> then(&AdminUI.runtime_panel(%{state: &1, trace_mode: :index}))
+      |> then(&AdminUI.runtime_panel(%{state: &1}))
       |> View.render()
 
     assert html =~ "run_trace_1"
     assert html =~ "show me the trace"
     assert html =~ "3 rounds"
     assert html =~ "agent-browser"
-    assert html =~ "进入详情页查看"
-    refute html =~ "当前请求"
+    assert html =~ "请求列表"
+    assert html =~ "completed"
+    assert html =~ "当前请求"
   end
 
   test "runtime panel renders selected trace detail" do
@@ -140,10 +141,11 @@ defmodule NexAgentConsole.RuntimePanelTest do
           ]
         }
       })
-      |> then(&AdminUI.runtime_panel(%{state: &1, trace_mode: :detail}))
+      |> then(&AdminUI.runtime_panel(%{state: &1}))
       |> View.render()
 
-    assert html =~ "这一页只看一条 request trace"
+    assert html =~ "请求列表"
+    assert html =~ "当前请求"
     assert html =~ "detail prompt"
     assert html =~ "skill 命中"
     assert html =~ "tool 调用"
