@@ -66,6 +66,10 @@ defmodule Nex.Agent.PersonalSummary do
     :ok
   end
 
+  @spec default_message(String.t()) :: String.t()
+  def default_message("daily"), do: daily_message()
+  def default_message("weekly"), do: weekly_message()
+
   defp ensure_job(name, cron_expr, message, channel, chat_id, workspace_opts) do
     _ =
       Nex.Agent.Cron.upsert_job(

@@ -1,7 +1,7 @@
 defmodule Nex.SkillRuntimeTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{Runner, Session}
+  alias Nex.Agent.{RequestTrace, Runner, Session}
   alias Nex.Agent.Tool.Registry
   alias Nex.SkillRuntime
 
@@ -217,7 +217,9 @@ defmodule Nex.SkillRuntimeTest do
     assert [_ | _] = Path.wildcard(Path.join(runs_dir, "*.jsonl"))
   end
 
-  test "draft runtime packages are not selected or exposed as ephemeral tools", %{workspace: workspace} do
+  test "draft runtime packages are not selected or exposed as ephemeral tools", %{
+    workspace: workspace
+  } do
     package_dir = Path.join(workspace, "skills/rt__draft_widget_ops")
     File.mkdir_p!(Path.join(package_dir, "scripts"))
 
@@ -307,7 +309,9 @@ defmodule Nex.SkillRuntimeTest do
     assert first.name == "article-poster"
   end
 
-  test "runner adds authoritative guard when a knowledge skill is selected", %{workspace: workspace} do
+  test "runner adds authoritative guard when a knowledge skill is selected", %{
+    workspace: workspace
+  } do
     package_dir = Path.join(workspace, "skills/rt__article_poster")
     File.mkdir_p!(package_dir)
 
@@ -348,6 +352,69 @@ defmodule Nex.SkillRuntimeTest do
                  "Selected skill packages for this turn are authoritative: article-poster"
                )
            end)
+  end
+
+  test "runner skips runtime skill selection entirely when skip_skills is true", %{
+    workspace: workspace
+  } do
+    package_dir = Path.join(workspace, "skills/rt__legacy_summary_helper")
+    File.mkdir_p!(package_dir)
+
+    File.write!(
+      Path.join(package_dir, "SKILL.md"),
+      """
+      ---
+      name: legacy-summary-helper
+      description: Use when the prompt says "legacy summary" or asks for a scheduled summary.
+      ---
+
+      Handle legacy summary prompts.
+      """
+    )
+
+    assert {:ok, prepared_run} =
+             SkillRuntime.prepare_run("legacy summary",
+               workspace: workspace,
+               cwd: workspace,
+               skill_runtime: %{"enabled" => true}
+             )
+
+    assert Enum.any?(prepared_run.selected_packages, &(&1.name == "legacy-summary-helper"))
+
+    parent = self()
+
+    llm_client = fn messages, _opts ->
+      send(parent, {:messages, messages})
+      {:ok, %{content: "ok", finish_reason: nil, tool_calls: []}}
+    end
+
+    assert {:ok, "ok", _session} =
+             Runner.run(Session.new("skip-runtime-skills"), "legacy summary",
+               llm_client: llm_client,
+               workspace: workspace,
+               cwd: workspace,
+               skill_runtime: %{"enabled" => true},
+               request_trace: %{"enabled" => true},
+               skip_skills: true,
+               skip_consolidation: true
+             )
+
+    assert_receive {:messages, messages}
+
+    refute Enum.any?(messages, fn message ->
+             message["role"] == "system" and
+               String.contains?(message["content"], "Selected skill packages for this turn")
+           end)
+
+    [trace_path] =
+      RequestTrace.list_paths(workspace: workspace, request_trace: %{"enabled" => true})
+
+    started =
+      trace_path
+      |> RequestTrace.read_trace(workspace: workspace, request_trace: %{"enabled" => true})
+      |> Enum.find(&(&1["type"] == "request_started"))
+
+    assert started["selected_packages"] == []
   end
 
   defp fake_http_get(skill_md, script, entry) do

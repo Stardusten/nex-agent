@@ -16,7 +16,7 @@ defmodule NexAgentConsole.Pages.Code do
 
     %{
       title: "NexAgent Console | 代码",
-      subtitle: "代码页默认只读审查；变更操作退到次级区，只有确认必须下沉到实现时才使用。",
+      subtitle: "只读审查与变更操作",
       current_path: "/code",
       panel_path: panel_path,
       primary_action_label: "查看源码预览",

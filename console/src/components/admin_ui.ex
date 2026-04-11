@@ -28,7 +28,7 @@ defmodule NexAgentConsole.Components.AdminUI do
     <section class="page-shell">
       <header class="page-header">
         <div class="page-header__main">
-          <div class="page-header__title-row">
+          <div class="page-header__crumbs">
             <p class="page-header__eyebrow">{@page_group}</p>
             <span class="page-header__route">{@current_path}</span>
           </div>
@@ -36,23 +36,15 @@ defmodule NexAgentConsole.Components.AdminUI do
           <p class="page-header__subtitle">{@subtitle}</p>
         </div>
 
-        <div class="page-statusbar">
-          <span class="status-pill status-pill--live">
-            <span class="status-pill__dot"></span>
+        <div class="page-header__meta">
+          <div class="page-live-status">
+            <span class="page-live-status__dot"></span>
             <span data-live-summary>等待实时事件</span>
-          </span>
-
-          <div class="page-header__actions">
-            <%= if @primary_action_href do %>
-              <a class="action-button action-button--primary" href={@primary_action_href}>
-                {@primary_action_label}
-              </a>
-            <% end %>
-
-            <a class="ghost-link" href="https://github.com/gofenix/nex" target="_blank" rel="noreferrer">
-              Nex Runtime
-            </a>
           </div>
+
+          <%= if @primary_action_href do %>
+            <a class="toolbar-link" href={@primary_action_href}>{@primary_action_label}</a>
+          <% end %>
         </div>
       </header>
 
@@ -213,14 +205,7 @@ defmodule NexAgentConsole.Components.AdminUI do
   def skills_panel(assigns) do
     ~H"""
     <div class="stack-layout">
-      <section class="section-card">
-        <div class="section-head">
-          <div>
-            <p class="section-kicker">inventory</p>
-            <h2>能力资产</h2>
-          </div>
-        </div>
-
+      <section class="section-card section-card--toolbar">
         <div class="metric-grid">
           {metric(%{label: "本地 skills", value: length(@state.local_skills), tone: "gold"})}
           {metric(%{label: "可用 tools", value: length(@state.tools.builtin) + length(@state.tools.custom), tone: "ink"})}
@@ -229,40 +214,44 @@ defmodule NexAgentConsole.Components.AdminUI do
         </div>
       </section>
 
-      <div class="pair-layout">
-        <section class="section-card">
-          <div class="section-head">
-            <div>
-              <p class="section-kicker">skills</p>
-              <h2>本地方法</h2>
+      <div class="split-layout split-layout--skills">
+        <aside class="split-sidebar">
+          <section class="section-card">
+            <div class="section-head">
+              <div>
+                <p class="section-kicker">inventory</p>
+                <h2>本地 skills</h2>
+              </div>
             </div>
-          </div>
 
-          {local_skills(%{skills: @state.local_skills})}
-        </section>
+            {local_skills(%{skills: @state.local_skills})}
+          </section>
+        </aside>
 
-        <section class="section-card">
-          <div class="section-head">
-            <div>
-              <p class="section-kicker">tools</p>
-              <h2>可调用工具</h2>
+        <div class="split-main">
+          <section class="section-card">
+            <div class="section-head">
+              <div>
+                <p class="section-kicker">tools</p>
+                <h2>可调用工具</h2>
+              </div>
             </div>
-          </div>
 
-          {tool_inventory_list(%{tools: @state.tools})}
-        </section>
-      </div>
+            {tool_inventory_list(%{tools: @state.tools})}
+          </section>
 
-      <section class="section-card" id="recent-hits">
-        <div class="section-head">
-          <div>
-            <p class="section-kicker">hits</p>
-            <h2>命中记录</h2>
-          </div>
+          <section class="section-card" id="recent-hits">
+            <div class="section-head">
+              <div>
+                <p class="section-kicker">hits</p>
+                <h2>命中记录</h2>
+              </div>
+            </div>
+
+            {run_list(%{runs: actual_hit_runs(@state.recent_runs)})}
+          </section>
         </div>
-
-        {run_list(%{runs: actual_hit_runs(@state.recent_runs)})}
-      </section>
+      </div>
     </div>
     """
   end
@@ -270,15 +259,7 @@ defmodule NexAgentConsole.Components.AdminUI do
   def memory_panel(assigns) do
     ~H"""
     <div class="stack-layout">
-      <section class="section-card section-card--hero" id="memory-summary">
-        <div class="section-head">
-          <div>
-            <p class="section-kicker">cognition</p>
-            <h2>认知状态</h2>
-          </div>
-          <a class="ghost-link" href="/evolution">回到分流</a>
-        </div>
-
+      <section class="section-card section-card--toolbar" id="memory-summary">
         <div class="metric-grid">
           {metric(%{label: "SOUL", value: if(String.trim(@state.soul_preview || "") == "", do: "empty", else: "loaded"), tone: "gold"})}
           {metric(%{label: "USER", value: if(String.trim(@state.user_preview || "") == "", do: "empty", else: "loaded"), tone: "green"})}
@@ -287,42 +268,90 @@ defmodule NexAgentConsole.Components.AdminUI do
         </div>
       </section>
 
-      <section class="section-card">
-        <div class="section-head">
-          <div>
-            <p class="section-kicker">evidence</p>
-            <h2>原文预览</h2>
-          </div>
-        </div>
+      <div class="split-layout split-layout--memory">
+        <aside class="split-sidebar">
+          <section class="section-card">
+            <div class="section-head">
+              <div>
+                <p class="section-kicker">layers</p>
+                <h2>认知目录</h2>
+              </div>
+            </div>
 
-        <div class="stack-layout stack-layout--tight">
-          <article class="detail-card">
-            <span class="section-kicker">SOUL.md</span>
+            <div class="stack-list">
+              <a class="stack-list__item" href="#memory-soul">
+                <header>
+                  <strong>SOUL.md</strong>
+                  <span>{memory_load_label(@state.soul_preview)}</span>
+                </header>
+                <p>{preview_excerpt(@state.soul_preview, "身份、价值观与长期原则")}</p>
+              </a>
+
+              <a class="stack-list__item" href="#memory-user">
+                <header>
+                  <strong>USER.md</strong>
+                  <span>{memory_load_label(@state.user_preview)}</span>
+                </header>
+                <p>{preview_excerpt(@state.user_preview, "用户画像、偏好与协作方式")}</p>
+              </a>
+
+              <a class="stack-list__item" href="#memory-store">
+                <header>
+                  <strong>MEMORY.md</strong>
+                  <span>{format_bytes(@state.memory_bytes)}</span>
+                </header>
+                <p>{preview_excerpt(@state.memory_preview, "长期事实、项目经验与已确认信息")}</p>
+              </a>
+            </div>
+          </section>
+
+          <section class="section-card">
+            <div class="section-head">
+              <div>
+                <p class="section-kicker">changes</p>
+                <h2>认知变更记录</h2>
+              </div>
+            </div>
+
+            {cognition_changelog(%{events: Enum.take(@state.recent_events, 12)})}
+          </section>
+        </aside>
+
+        <div class="split-main">
+          <section class="section-card" id="memory-soul">
+            <div class="section-head">
+              <div>
+                <p class="section-kicker">document</p>
+                <h2>SOUL.md</h2>
+              </div>
+            </div>
+
             {code_block(%{content: @state.soul_preview})}
-          </article>
+          </section>
 
-          <article class="detail-card">
-            <span class="section-kicker">USER.md</span>
+          <section class="section-card" id="memory-user">
+            <div class="section-head">
+              <div>
+                <p class="section-kicker">document</p>
+                <h2>USER.md</h2>
+              </div>
+            </div>
+
             {code_block(%{content: @state.user_preview})}
-          </article>
+          </section>
 
-          <article class="detail-card">
-            <span class="section-kicker">MEMORY.md</span>
+          <section class="section-card" id="memory-store">
+            <div class="section-head">
+              <div>
+                <p class="section-kicker">document</p>
+                <h2>MEMORY.md</h2>
+              </div>
+            </div>
+
             {code_block(%{content: @state.memory_preview})}
-          </article>
+          </section>
         </div>
-      </section>
-
-      <section class="section-card">
-        <div class="section-head">
-          <div>
-            <p class="section-kicker">changes</p>
-            <h2>认知变更记录</h2>
-          </div>
-        </div>
-
-        {cognition_changelog(%{events: Enum.take(@state.recent_events, 12)})}
-      </section>
+      </div>
     </div>
     """
   end
@@ -338,12 +367,16 @@ defmodule NexAgentConsole.Components.AdminUI do
           </div>
         </div>
 
-        {session_list(%{sessions: @state.sessions, compact: false})}
+        {session_list(%{
+          sessions: @state.sessions,
+          compact: false,
+          selected_session_key: @state.selected_session && @state.selected_session.key
+        })}
       </section>
 
       <div class="split-main">
         <%= if @state.selected_session do %>
-          <section class="section-card section-card--hero">
+          <section class="section-card section-card--toolbar">
             <div class="section-head">
               <div>
                 <p class="section-kicker">session</p>
@@ -626,11 +659,11 @@ defmodule NexAgentConsole.Components.AdminUI do
       </aside>
 
       <div class="split-main">
-        <section class="section-card section-card--hero" id="source-preview">
+        <section class="section-card section-card--toolbar" id="source-preview">
           <div class="section-head">
             <div>
-              <p class="section-kicker">source</p>
-              <h2>当前源码</h2>
+              <p class="section-kicker">source state</p>
+              <h2>当前模块概览</h2>
             </div>
           </div>
 
@@ -639,79 +672,90 @@ defmodule NexAgentConsole.Components.AdminUI do
             {detail_item(%{label: "版本数", value: length(@state.versions)})}
             {detail_item(%{label: "最近代码事件", value: length(@state.recent_events)})}
           </div>
-
-          {code_block(%{content: @state.current_source})}
         </section>
 
         <section class="section-card">
           <div class="section-head">
             <div>
-              <p class="section-kicker">events</p>
-              <h2>代码变更记录</h2>
+              <p class="section-kicker">source preview</p>
+              <h2>源码预览</h2>
             </div>
           </div>
 
-          {audit_glance(%{rows: Enum.take(@state.recent_events, 8)})}
+          {code_block(%{content: @state.current_source})}
         </section>
 
-        <section class="section-card section-card--editor">
-          <div class="section-head">
-            <div>
-              <p class="section-kicker">editor</p>
-              <h2>热更与回滚</h2>
+        <div class="pair-layout">
+          <section class="section-card">
+            <div class="section-head">
+              <div>
+                <p class="section-kicker">events</p>
+                <h2>代码变更记录</h2>
+              </div>
             </div>
-          </div>
 
-          <div id="code-action-result" class="action-result"></div>
+            {audit_glance(%{rows: Enum.take(@state.recent_events, 8)})}
+          </section>
 
-          <form class="editor-form editor-form--candidate">
-            <input type="hidden" name="module" value={@state.selected_module} />
-
-            <label for="reason">变更原因</label>
-            <input id="reason" type="text" name="reason" value="Console hot upgrade" />
-
-            <label for="code">候选新源码</label>
-            <textarea
-              id="code"
-              name="code"
-              placeholder="把候选源码粘贴到这里，再预览 diff 或应用热更。当前源码请看上方只读预览。"
-            ></textarea>
-
-            <div class="actions-row">
-              <button
-                type="submit"
-                class="action-button"
-                hx-post="/preview"
-                hx-target="#code-action-result"
-                hx-swap="innerHTML"
-              >
-                预览 diff
-              </button>
-
-              <button
-                type="submit"
-                class="action-button action-button--primary"
-                hx-post="/hot_upgrade"
-                hx-target="#code-action-result"
-                hx-swap="innerHTML"
-              >
-                应用热更
-              </button>
+          <section class="section-card section-card--editor">
+            <div class="section-head">
+              <div>
+                <p class="section-kicker">editor</p>
+                <h2>热更与回滚</h2>
+              </div>
             </div>
-          </form>
 
-          <form class="inline-form" hx-post="/rollback" hx-target="#code-action-result" hx-swap="innerHTML">
-            <input type="hidden" name="module" value={@state.selected_module} />
-            <label for="version_id">回滚目标</label>
-            <select id="version_id" name="version_id">
-              <option value="">最近一个历史版本</option>
-              <%= for version <- @state.versions do %>
-                <option value={version.id}>{version.id}</option>
-              <% end %>
-            </select>
-            <button class="action-button action-button--danger" type="submit">回滚</button>
-          </form>
-        </section>
+            <div id="code-action-result" class="action-result"></div>
+
+            <form class="editor-form editor-form--candidate">
+              <input type="hidden" name="module" value={@state.selected_module} />
+
+              <label for="reason">变更原因</label>
+              <input id="reason" type="text" name="reason" value="Console hot upgrade" />
+
+              <label for="code">候选新源码</label>
+              <textarea
+                id="code"
+                name="code"
+                placeholder="把候选源码粘贴到这里，再预览 diff 或应用热更。当前源码请看上方只读预览。"
+              ></textarea>
+
+              <div class="actions-row">
+                <button
+                  type="submit"
+                  class="action-button"
+                  hx-post="/preview"
+                  hx-target="#code-action-result"
+                  hx-swap="innerHTML"
+                >
+                  预览 diff
+                </button>
+
+                <button
+                  type="submit"
+                  class="action-button action-button--primary"
+                  hx-post="/hot_upgrade"
+                  hx-target="#code-action-result"
+                  hx-swap="innerHTML"
+                >
+                  应用热更
+                </button>
+              </div>
+            </form>
+
+            <form class="inline-form" hx-post="/rollback" hx-target="#code-action-result" hx-swap="innerHTML">
+              <input type="hidden" name="module" value={@state.selected_module} />
+              <label for="version_id">回滚目标</label>
+              <select id="version_id" name="version_id">
+                <option value="">最近一个历史版本</option>
+                <%= for version <- @state.versions do %>
+                  <option value={version.id}>{version.id}</option>
+                <% end %>
+              </select>
+              <button class="action-button action-button--danger" type="submit">回滚</button>
+            </form>
+          </section>
+        </div>
       </div>
     </div>
     """
@@ -743,15 +787,15 @@ defmodule NexAgentConsole.Components.AdminUI do
 
   defp layer_map(assigns) do
     ~H"""
-    <div class="layer-grid">
+    <div class="stack-list layer-directory">
       <%= for layer <- @layers do %>
-        <a class="layer-card" href={layer.href}>
-          <header class="layer-card__head">
+        <a class="stack-list__item layer-directory__item" href={layer.href}>
+          <header class="layer-directory__head">
             <strong>{layer.key}</strong>
             <span>进入</span>
           </header>
-          <p class="layer-card__summary">{layer.summary}</p>
-          <small class="layer-card__meta">{compress_layer_detail(layer.detail)}</small>
+          <p>{layer.summary}</p>
+          <small class="layer-directory__meta">{compress_layer_detail(layer.detail)}</small>
         </a>
       <% end %>
     </div>
@@ -792,7 +836,7 @@ defmodule NexAgentConsole.Components.AdminUI do
               <strong>{entry["name"]}</strong>
               <span>{Enum.map_join(entry["layers"] || ["tool"], " / ", &String.upcase/1)}</span>
             </header>
-            <p>{entry["description"] || entry["module"] || entry["origin"] || "No description"}</p>
+            <p>{preview_excerpt(entry["description"] || entry["module"] || entry["origin"] || "No description", "No description")}</p>
           </article>
         <% end %>
       </div>
@@ -1079,14 +1123,23 @@ defmodule NexAgentConsole.Components.AdminUI do
     <%= if @sessions == [] do %>
       {empty_state(%{title: "还没有 session", body: "先通过聊天入口或手工 prompt 跑一次 agent。"})}
     <% else %>
-      <div class="stack-list">
+      <div class="selection-list">
         <%= for session <- @sessions do %>
-          <a class="stack-list__item" href={"/sessions?session_key=#{URI.encode(session.key)}"}>
-            <header>
-              <strong>{session.key}</strong>
-              <span>{session.total_messages} msgs</span>
+          <a
+            class={"selection-card #{if @selected_session_key == session.key, do: "is-active", else: ""}"}
+            href={"/sessions?session_key=#{URI.encode(session.key)}"}
+          >
+            <header class="selection-card__header">
+              <div class="selection-card__main">
+                <strong>{session.key}</strong>
+                <p>{session.last_message || "No messages yet"}</p>
+              </div>
+              <span class="status-pill status-pill--ink">{session.total_messages} msgs</span>
             </header>
-            <p>{session.last_message || "No messages yet"}</p>
+            <div class="selection-card__meta">
+              <span>{session_unconsolidated_count(session)} unconsolidated</span>
+              <span>{format_timestamp(session.updated_at)}</span>
+            </div>
           </a>
         <% end %>
       </div>
@@ -1147,7 +1200,7 @@ defmodule NexAgentConsole.Components.AdminUI do
               <strong>{skill_name(skill)}</strong>
               <span>{if skill_draft?(skill), do: "draft", else: "published"}</span>
             </header>
-            <p>{skill_description(skill)}</p>
+            <p>{preview_excerpt(skill_description(skill), "No description")}</p>
           </article>
         <% end %>
       </div>
@@ -1595,6 +1648,24 @@ defmodule NexAgentConsole.Components.AdminUI do
 
   defp format_bytes(bytes) when is_number(bytes), do: "#{Float.round(bytes / 1_048_576, 1)} MB"
   defp format_bytes(_), do: "n/a"
+
+  defp memory_load_label(content) do
+    case content |> to_string() |> String.trim() do
+      "" -> "empty"
+      _ -> "loaded"
+    end
+  end
+
+  defp preview_excerpt(content, fallback) do
+    case content |> to_string() |> String.replace(~r/\s+/, " ") |> String.trim() do
+      "" -> fallback
+      text -> clamp_text(text, 110)
+    end
+  end
+
+  defp session_unconsolidated_count(session) do
+    Map.get(session, :unconsolidated_messages) || Map.get(session, "unconsolidated_messages") || 0
+  end
 
   defp gateway_status_label(%{external: true, status: status}), do: "#{status} (独立进程)"
   defp gateway_status_label(%{status: status}), do: status

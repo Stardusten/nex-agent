@@ -35,8 +35,8 @@ defmodule NexAgentConsole.Components.Nav do
       <div class="console-nav__rail">
         <div class="console-nav__brand">
           <span class="console-nav__eyebrow">NexAgent Console</span>
-          <strong>控制台</strong>
-          <p>Runtime Inspector</p>
+          <strong>Runtime Inspector</strong>
+          <p>Elixir-native operations console</p>
         </div>
 
         <div class="console-nav__groups">
@@ -64,9 +64,7 @@ defmodule NexAgentConsole.Components.Nav do
         </div>
 
         <div class="console-nav__footer">
-          <span>单实例</span>
-          <span>判断优先</span>
-          <span>实时检查</span>
+          <span>LiveDashboard / ExDoc 工具语气</span>
         </div>
       </div>
     </nav>

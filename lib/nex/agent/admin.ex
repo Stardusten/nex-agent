@@ -84,7 +84,8 @@ defmodule Nex.Agent.Admin do
       skills: skills_summary(opts),
       tasks: tasks_summary(opts),
       recent_sessions: Enum.take(list_sessions(opts), 6),
-      code: code_summary(opts)
+      code: code_summary(opts),
+      cron: cron_status(opts)
     }
   end
 
@@ -134,10 +135,8 @@ defmodule Nex.Agent.Admin do
       workspace: workspace,
       soul_preview: file_preview(Path.join(workspace, "SOUL.md"), 40),
       memory_preview: file_preview(Path.join(memory_dir, "MEMORY.md"), 80),
-      history_preview: file_preview(Path.join(memory_dir, "HISTORY.md"), 80),
       user_preview: file_preview(Path.join(workspace, "USER.md"), 60),
       memory_bytes: file_size(Path.join(memory_dir, "MEMORY.md")),
-      history_bytes: file_size(Path.join(memory_dir, "HISTORY.md")),
       recent_events:
         Audit.recent(Keyword.put(workspace_opts(opts), :limit, 20))
         |> Enum.filter(fn entry ->
@@ -180,15 +179,28 @@ defmodule Nex.Agent.Admin do
     trace_opts = [workspace: workspace, request_trace: request_trace_config]
 
     gateway =
-      if Process.whereis(Gateway) do
-        Gateway.status()
-      else
-        %{
-          status: :stopped,
-          started_at: nil,
-          config: %{},
-          services: %{}
-        }
+      cond do
+        Process.whereis(Gateway) && Gateway.status().status == :running ->
+          Gateway.status()
+
+        external_gateway_running?(opts) ->
+          config = Config.load(config_path: Keyword.get(opts, :config_path))
+
+          %{
+            status: :running,
+            started_at: nil,
+            config: %{provider: config.provider, model: config.model},
+            services: %{},
+            external: true
+          }
+
+        true ->
+          %{
+            status: :stopped,
+            started_at: nil,
+            config: %{},
+            services: %{}
+          }
       end
 
     heartbeat =
@@ -636,6 +648,9 @@ defmodule Nex.Agent.Admin do
       session = load_session_from_path(path)
 
       if session do
+        last_consolidated = session.last_consolidated || 0
+        unconsolidated = max(length(session.messages) - last_consolidated, 0)
+
         last_message =
           case List.last(session.messages) do
             %{} = message -> Map.get(message, "content")
@@ -647,6 +662,8 @@ defmodule Nex.Agent.Admin do
           created_at: session.created_at,
           updated_at: session.updated_at,
           total_messages: length(session.messages),
+          last_consolidated: last_consolidated,
+          unconsolidated_messages: unconsolidated,
           last_message: truncate_text(last_message, 120)
         }
       end
@@ -1061,6 +1078,24 @@ defmodule Nex.Agent.Admin do
 
   defp workspace_opts(opts) do
     [workspace: workspace(opts)]
+  end
+
+  defp external_gateway_running?(opts) do
+    config = Config.load(config_path: Keyword.get(opts, :config_path))
+
+    pid_path =
+      Path.join(
+        Path.dirname(Config.config_path(config_path: Keyword.get(opts, :config_path))),
+        "gateway.pid"
+      )
+
+    with {:ok, pid_string} <- File.read(pid_path),
+         pid_string <- String.trim(pid_string),
+         {_pid, 0} <- System.cmd("kill", ["-0", pid_string], stderr_to_stdout: true) do
+      true
+    else
+      _ -> false
+    end
   end
 
   defp normalize_skill_record(skill) when is_map(skill) do

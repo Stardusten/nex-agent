@@ -1,7 +1,7 @@
 defmodule Nex.Agent.OnboardingMigrationTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.Onboarding
+  alias Nex.Agent.{Onboarding, PersonalSummary}
 
   setup do
     base_dir =
@@ -121,6 +121,9 @@ defmodule Nex.Agent.OnboardingMigrationTest do
     assert Enum.any?(cron_jobs, &(&1["name"] == "legacy-daily-summary"))
     assert Enum.any?(cron_jobs, &(&1["name"] == "current-weekly-summary"))
 
+    legacy_job = Enum.find(cron_jobs, &(&1["name"] == "legacy-daily-summary"))
+    assert legacy_job["message"] == PersonalSummary.default_message("daily")
+
     memory_template = File.read!(Path.join(workspace, "memory/MEMORY.md"))
     assert memory_template =~ "## Environment Facts"
     assert memory_template =~ "## Project Conventions"
@@ -157,7 +160,7 @@ defmodule Nex.Agent.OnboardingMigrationTest do
     assert agents_content =~ "Six-Layer Evolution"
     assert agents_content =~ "SOUL: values, personality"
     assert agents_content =~ "memory_consolidate"
-    assert agents_content =~ "trigger memory consolidation now"
+    assert agents_content =~ "trigger memory refresh now"
     assert agents_content =~ "重建记忆"
 
     refute soul_content =~ "all capabilities are skills"
@@ -172,7 +175,7 @@ defmodule Nex.Agent.OnboardingMigrationTest do
     assert tools_content =~ "memory_consolidate"
     assert tools_content =~ "memory_status"
     assert tools_content =~ "memory_rebuild"
-    assert tools_content =~ "触发记忆整理"
+    assert tools_content =~ "立即刷新记忆"
   end
 
   test "existing customized user files are preserved during initialization", %{

@@ -3,7 +3,7 @@ defmodule Nex.Agent.Onboarding do
   Automatically initializes the system by creating directories and workspace templates on first run.
   """
 
-  alias Nex.Agent.{Config, Workspace}
+  alias Nex.Agent.{Config, PersonalSummary, Workspace}
 
   require Logger
 
@@ -194,7 +194,8 @@ defmodule Nex.Agent.Onboarding do
     templates = [
       {Path.join(w, "SOUL.md"), soul_template()},
       {Path.join(w, "USER.md"), user_template()},
-      {Path.join(w, "memory/MEMORY.md"), memory_template()}
+      {Path.join(w, "memory/MEMORY.md"), memory_template()},
+      {Path.join(w, "memory/HISTORY.md"), history_template()}
     ]
 
     Enum.each(managed_templates, fn {path, key, content} ->
@@ -207,8 +208,62 @@ defmodule Nex.Agent.Onboarding do
       end
     end)
 
+    normalize_workspace_cron_jobs(Path.join([w, "tasks", "cron_jobs.json"]))
     init_executor_templates(w)
     init_bundled_skills(w)
+  end
+
+  defp normalize_workspace_cron_jobs(path) do
+    case read_json_array(path) do
+      {:ok, entries} ->
+        normalized = Enum.map(entries, &normalize_cron_job/1)
+
+        if normalized != entries do
+          File.write!(path, Jason.encode!(normalized, pretty: true))
+
+          Logger.info(
+            "[Onboarding] Normalized legacy cron jobs in workspace/tasks/cron_jobs.json"
+          )
+        end
+
+      {:error, :enoent} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("[Onboarding] Failed to normalize workspace cron jobs: #{inspect(reason)}")
+    end
+  end
+
+  defp normalize_cron_job(entry) when is_map(entry) do
+    case legacy_summary_scope(entry) do
+      nil -> entry
+      scope -> Map.put(entry, "message", PersonalSummary.default_message(scope))
+    end
+  end
+
+  defp legacy_summary_scope(entry) do
+    name = Map.get(entry, "name", "") |> to_string()
+    message = Map.get(entry, "message", "") |> to_string() |> String.trim()
+    expr = get_in(entry, ["schedule", "expr"]) |> to_string()
+
+    cond do
+      not legacy_summary_job?(name, message) ->
+        nil
+
+      String.contains?(name, "weekly-summary") or expr == "0 9 * * 1" ->
+        "weekly"
+
+      String.contains?(name, "daily-summary") or expr == "0 21 * * *" ->
+        "daily"
+
+      true ->
+        "daily"
+    end
+  end
+
+  defp legacy_summary_job?(name, message) do
+    message == "legacy summary" or
+      (String.starts_with?(name, "legacy-") and String.contains?(name, "summary"))
   end
 
   defp init_executor_templates(workspace) do
@@ -564,4 +619,9 @@ defmodule Nex.Agent.Onboarding do
     """
   end
 
+  defp history_template do
+    """
+    # History
+    """
+  end
 end

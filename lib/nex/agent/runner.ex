@@ -150,29 +150,34 @@ defmodule Nex.Agent.Runner do
   end
 
   defp prepare_skill_runtime_turn(session, prompt, runtime_system_messages, opts) do
-    case SkillRuntime.prepare_run(prompt, opts) do
-      {:ok, prepared_run} ->
-        metadata =
-          Map.put(session.metadata || %{}, "skill_runtime", %{
-            "selected_packages" => Enum.map(prepared_run.selected_packages, &package_metadata/1),
-            "ephemeral_tools" => Enum.map(prepared_run.ephemeral_tools, &Map.get(&1, "name"))
-          })
+    if Keyword.get(opts, :skip_skills, false) do
+      {session, runtime_system_messages, %Nex.SkillRuntime.PreparedRun{}}
+    else
+      case SkillRuntime.prepare_run(prompt, opts) do
+        {:ok, prepared_run} ->
+          metadata =
+            Map.put(session.metadata || %{}, "skill_runtime", %{
+              "selected_packages" =>
+                Enum.map(prepared_run.selected_packages, &package_metadata/1),
+              "ephemeral_tools" => Enum.map(prepared_run.ephemeral_tools, &Map.get(&1, "name"))
+            })
 
-        skill_guard = selected_skill_guard(prepared_run.selected_packages)
+          skill_guard = selected_skill_guard(prepared_run.selected_packages)
 
-        warnings =
-          case prepared_run.availability_warnings do
-            [] -> []
-            list -> ["[Skill Runtime] Warnings: " <> Enum.join(list, "; ")]
-          end
+          warnings =
+            case prepared_run.availability_warnings do
+              [] -> []
+              list -> ["[Skill Runtime] Warnings: " <> Enum.join(list, "; ")]
+            end
 
-        {%{session | metadata: metadata},
-         runtime_system_messages ++ skill_guard ++ prepared_run.prompt_fragments ++ warnings,
-         prepared_run}
+          {%{session | metadata: metadata},
+           runtime_system_messages ++ skill_guard ++ prepared_run.prompt_fragments ++ warnings,
+           prepared_run}
 
-      {:error, reason} ->
-        Logger.warning("[Runner] SkillRuntime prepare_run failed: #{reason}")
-        {session, runtime_system_messages, %Nex.SkillRuntime.PreparedRun{}}
+        {:error, reason} ->
+          Logger.warning("[Runner] SkillRuntime prepare_run failed: #{reason}")
+          {session, runtime_system_messages, %Nex.SkillRuntime.PreparedRun{}}
+      end
     end
   end
 

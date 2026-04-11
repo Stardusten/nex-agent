@@ -21,6 +21,14 @@ For manual GitHub issue work in this repository:
 
 Keep changes small, run the narrowest useful verification first, and do not open a PR until the work is verified.
 
+## Git Workflow
+
+This repository is developed directly on `main`.
+
+- Do not create or switch to a feature/topic branch unless the user explicitly asks for a branch or PR workflow.
+- If the user asks to commit or push without naming a branch, do that work on `main`.
+- Treat an unprompted branch switch in this repo as a mistake to avoid repeating.
+
 ## LLM API Conventions
 
 This project uses Anthropic-compatible APIs (including kimi etc.). When constructing LLM request options:

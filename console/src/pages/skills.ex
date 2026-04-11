@@ -7,7 +7,7 @@ defmodule NexAgentConsole.Pages.Skills do
   def mount(_params) do
     %{
       title: "NexAgent Console | 能力",
-      subtitle: "能力页先看能力资产，再看最近实际命中记录。",
+      subtitle: "SKILL / TOOL 资产与命中记录",
       current_path: "/skills",
       panel_path: "/api/admin/panels/skills",
       primary_action_label: "查看最近命中",

@@ -4,7 +4,27 @@ defmodule NexAgentConsole.Pages.Sessions do
   alias Nex.Agent.Admin
   alias NexAgentConsole.Components.AdminUI
 
-  def mount(_params), do: {:redirect, "/evolution"}
+  def mount(params) do
+    session_key = Map.get(params, "session_key")
+
+    panel_path =
+      case session_key do
+        key when is_binary(key) and key != "" ->
+          "/api/admin/panels/sessions?session_key=" <> URI.encode_www_form(key)
+
+        _ ->
+          "/api/admin/panels/sessions"
+      end
+
+    %{
+      title: "NexAgent Console | 会话",
+      subtitle: "活跃会话与记忆整理",
+      current_path: "/sessions",
+      panel_path: panel_path,
+      primary_action_label: nil,
+      primary_action_href: nil
+    }
+  end
 
   def render(assigns), do: AdminUI.page_shell(assigns)
 
