@@ -40,4 +40,42 @@ defmodule Nex.Agent.LLM.ReqLLMTest do
     assert opts[:api_key] == "ollama"
     assert opts[:base_url] == "http://localhost:11434/v1"
   end
+
+  test "openai-codex requests use oauth access token and codex responses endpoint base url" do
+    parent = self()
+
+    generate_text_fun = fn model_spec, messages, opts ->
+      send(parent, {:req_llm_call, model_spec, messages, opts})
+      {:ok, %{content: "ok", finish_reason: :stop, tool_calls: []}}
+    end
+
+    assert {:ok, response} =
+             AgentReqLLM.chat(
+               [
+                 %{"role" => "system", "content" => "You are the project copilot."},
+                 %{"role" => "user", "content" => "hello from codex"}
+               ],
+               provider: :openai_codex,
+               model: "gpt-5.3-codex",
+               api_key: "oauth-access-token",
+               req_llm_generate_text_fun: generate_text_fun
+             )
+
+    assert response.content == "ok"
+
+    assert_receive {:req_llm_call, model_spec, messages, opts}
+
+    assert model_spec == %{
+             id: "gpt-5.3-codex",
+             provider: :openai,
+             base_url: "https://chatgpt.com/backend-api/codex"
+           }
+
+    assert [%Message{role: :user}] = messages
+    assert opts[:api_key] == nil
+    assert opts[:base_url] == "https://chatgpt.com/backend-api/codex"
+    assert opts[:provider_options][:instructions] == "You are the project copilot."
+    assert opts[:provider_options][:auth_mode] == :oauth
+    assert opts[:provider_options][:access_token] == "oauth-access-token"
+  end
 end

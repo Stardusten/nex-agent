@@ -1,6 +1,7 @@
 defmodule Nex.Agent do
   @moduledoc false
 
+  alias Nex.Agent.Auth.Codex
   alias Nex.Agent.{
     MemoryUpdater,
     Onboarding,
@@ -46,7 +47,7 @@ defmodule Nex.Agent do
     provider = Keyword.get(opts, :provider, :anthropic)
     model = Keyword.get(opts, :model, default_model(provider))
     api_key = Keyword.get(opts, :api_key) || default_api_key(provider)
-    base_url = Keyword.get(opts, :base_url)
+    base_url = Keyword.get(opts, :base_url, default_base_url(provider))
     max_iterations = Keyword.get(opts, :max_iterations, 10)
     cwd = Keyword.get(opts, :cwd, File.cwd!())
     channel = Keyword.get(opts, :channel, "telegram")
@@ -80,7 +81,7 @@ defmodule Nex.Agent do
     provider = Keyword.get(opts, :provider, agent.provider)
     model = Keyword.get(opts, :model, agent.model)
     api_key = Keyword.get(opts, :api_key) || agent.api_key || default_api_key(provider)
-    base_url = Keyword.get(opts, :base_url, agent.base_url)
+    base_url = Keyword.get(opts, :base_url, agent.base_url || default_base_url(provider))
     workspace = Keyword.get(opts, :workspace, agent.workspace || Workspace.root())
     cwd = Keyword.get(opts, :cwd, agent.cwd || File.cwd!())
     max_iterations = Keyword.get(opts, :max_iterations, agent.max_iterations)
@@ -167,17 +168,35 @@ defmodule Nex.Agent do
 
   defp default_model(:anthropic), do: "claude-sonnet-4-20250514"
   defp default_model(:openai), do: "gpt-4o"
+  defp default_model(:openai_codex), do: "gpt-5.3-codex"
   defp default_model(:ollama), do: "llama3.1"
   defp default_model(_), do: "claude-sonnet-4-20250514"
 
   defp default_api_key(:anthropic), do: System.get_env("ANTHROPIC_API_KEY")
   defp default_api_key(:openai), do: System.get_env("OPENAI_API_KEY")
+  defp default_api_key(:openai_codex) do
+    case System.get_env("OPENAI_CODEX_ACCESS_TOKEN") do
+      token when is_binary(token) and token != "" ->
+        token
+
+      _ ->
+        case Codex.resolve_access_token() do
+          {:ok, token} -> token
+          _ -> nil
+        end
+    end
+  end
+
   defp default_api_key(:ollama), do: nil
   defp default_api_key(_), do: nil
 
   defp env_var_name(:anthropic), do: "ANTHROPIC_API_KEY"
   defp env_var_name(:openai), do: "OPENAI_API_KEY"
+  defp env_var_name(:openai_codex), do: "OPENAI_CODEX_ACCESS_TOKEN or ~/.codex/auth.json"
   defp env_var_name(_), do: "API_KEY"
+
+  defp default_base_url(:openai_codex), do: Codex.default_base_url()
+  defp default_base_url(_), do: nil
 
   defp parse_session_key(nil), do: {"telegram", "default"}
 

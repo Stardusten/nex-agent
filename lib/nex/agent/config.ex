@@ -3,6 +3,8 @@ defmodule Nex.Agent.Config do
   Configuration management - loads config from ~/.nex/agent/config.json.
   """
 
+  alias Nex.Agent.Auth.Codex
+
   @default_config_path Path.join(System.get_env("HOME", "~"), ".nex/agent/config.json")
 
   defstruct provider: "openai",
@@ -289,7 +291,7 @@ defmodule Nex.Agent.Config do
   def get_base_url(%__MODULE__{} = config, provider) do
     case Map.get(config.providers, provider) do
       %{"base_url" => url} when is_binary(url) and url != "" -> url
-      _ -> nil
+      _ -> provider_default_base_url(provider)
     end
   end
 
@@ -668,6 +670,7 @@ defmodule Nex.Agent.Config do
     case provider do
       "anthropic" -> :anthropic
       "openai" -> :openai
+      "openai-codex" -> :openai_codex
       "openrouter" -> :openrouter
       "ollama" -> :ollama
       _ -> :openai
@@ -693,8 +696,26 @@ defmodule Nex.Agent.Config do
 
   defp provider_env_api_key("anthropic"), do: System.get_env("ANTHROPIC_API_KEY")
   defp provider_env_api_key("openai"), do: System.get_env("OPENAI_API_KEY")
+  defp provider_env_api_key("openai-codex") do
+    case System.get_env("OPENAI_CODEX_ACCESS_TOKEN") do
+      token when is_binary(token) and token != "" ->
+        token
+
+      _ ->
+        case Codex.resolve_access_token() do
+          {:ok, token} -> token
+          _ -> nil
+        end
+    end
+  end
+
   defp provider_env_api_key("ollama"), do: nil
   defp provider_env_api_key(_), do: nil
+
+  defp provider_default_base_url("openai-codex"), do: Codex.default_base_url()
+  defp provider_default_base_url("openrouter"), do: "https://openrouter.ai/api/v1"
+  defp provider_default_base_url("ollama"), do: "http://localhost:11434"
+  defp provider_default_base_url(_), do: nil
 
   defp telegram_valid?(%__MODULE__{} = config) do
     if telegram_enabled?(config) do
@@ -747,6 +768,7 @@ defmodule Nex.Agent.Config do
     %{
       "anthropic" => %{"api_key" => nil, "base_url" => nil},
       "openai" => %{"api_key" => nil, "base_url" => nil},
+      "openai-codex" => %{"api_key" => nil, "base_url" => Codex.default_base_url()},
       "openrouter" => %{"api_key" => nil, "base_url" => "https://openrouter.ai/api/v1"},
       "ollama" => %{"api_key" => nil, "base_url" => "http://localhost:11434"}
     }

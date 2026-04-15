@@ -43,14 +43,21 @@ defmodule Nex.Agent.Runner do
     model = Keyword.get(opts, :model, "claude-sonnet-4-20250514")
     workspace = Keyword.get(opts, :workspace)
     run_id = generate_run_id()
+    request_trace_config = RequestTrace.config(opts)
 
     Logger.info("[Runner] Starting provider=#{provider} model=#{model}")
+    Logger.info(
+      "[Runner] Run context run_id=#{run_id} workspace=#{workspace || "-"} " <>
+        "channel=#{Keyword.get(opts, :channel) || "-"} chat_id=#{Keyword.get(opts, :chat_id) || "-"} " <>
+        "base_url=#{Keyword.get(opts, :base_url) || "-"} api_key_present=#{value_present?(Keyword.get(opts, :api_key))} " <>
+        "request_trace_enabled=#{request_trace_config["enabled"] == true}"
+    )
 
     opts =
       opts
       |> Keyword.put(:workspace, workspace)
       |> Keyword.put(:run_id, run_id)
-      |> Keyword.put(:request_trace, RequestTrace.config(opts))
+      |> Keyword.put(:request_trace, request_trace_config)
       |> Keyword.put(:skill_runtime, SkillRuntime.config(opts))
       |> Keyword.put_new(:_evolution_signals, default_evolution_signals())
 
@@ -80,7 +87,13 @@ defmodule Nex.Agent.Runner do
     session =
       Session.add_message(session, "user", prompt, project: Keyword.get(opts, :project))
 
-    Logger.info("[Runner] LLM request: history=#{length(history)} messages=#{length(messages)}")
+    Logger.info(
+      "[Runner] LLM request prepared run_id=#{run_id} history=#{length(history)} " <>
+        "messages=#{length(messages)} message_stats=#{message_stats_log(messages)} " <>
+        "runtime_system_messages=#{length(runtime_system_messages)} " <>
+        "selected_skill_packages=#{length(prepared_run.selected_packages)}"
+    )
+
     opts = Keyword.put(opts, :skill_runtime_prepared_run, prepared_run)
 
     case run_loop(session, messages, 0, max_iterations, opts) do
@@ -634,6 +647,11 @@ defmodule Nex.Agent.Runner do
     error_msg = extract_error_message(reason)
     status = extract_error_status(reason)
 
+    Logger.warning(
+      "[Runner] Recovery analysis run_id=#{Keyword.get(opts, :run_id)} status=#{inspect(status)} " <>
+        "message_count=#{length(messages)} error=#{inspect(String.slice(to_string(error_msg), 0, 300))}"
+    )
+
     cond do
       # 400: context too long → trim older messages
       status == 400 and context_length_error?(error_msg) ->
@@ -756,6 +774,14 @@ defmodule Nex.Agent.Runner do
       end
 
     opts = Keyword.put(opts, :tools, tools)
+    Logger.info(
+      "[Runner] Dispatching LLM call run_id=#{Keyword.get(opts, :run_id)} " <>
+        "iteration=#{Keyword.get(opts, :trace_iteration)} provider=#{Keyword.get(opts, :provider)} " <>
+        "model=#{Keyword.get(opts, :model)} base_url=#{Keyword.get(opts, :base_url) || "-"} " <>
+        "tool_count=#{length(tools)} tool_choice=#{inspect(Keyword.get(opts, :tool_choice))} " <>
+        "message_stats=#{message_stats_log(messages)}"
+    )
+
     trace_llm_request(Keyword.get(opts, :trace_iteration), messages, tools, opts)
 
     if opts[:llm_client] do
@@ -839,9 +865,16 @@ defmodule Nex.Agent.Runner do
         fn {tool_call_id, tool_name, args} ->
           parsed_args = parse_args(args)
           Logger.info("[Runner] Executing tool: #{tool_name}(#{inspect(parsed_args)})")
+          tool_started_at = System.monotonic_time(:millisecond)
 
           result = execute_tool(tool_name, parsed_args, ctx)
           truncated = truncate_result(result)
+          tool_duration_ms = System.monotonic_time(:millisecond) - tool_started_at
+
+          Logger.info(
+            "[Runner] Tool completed: #{tool_name} duration_ms=#{tool_duration_ms} " <>
+              "result_preview=#{inspect(String.slice(render_text(truncated), 0, 160))}"
+          )
 
           {tool_call_id, tool_name, truncated, parsed_args}
         end,
@@ -1444,6 +1477,35 @@ defmodule Nex.Agent.Runner do
 
     :ok
   end
+
+  defp message_stats_log(messages) when is_list(messages) do
+    counts =
+      Enum.reduce(messages, %{"system" => 0, "user" => 0, "assistant" => 0, "tool" => 0}, fn msg, acc ->
+        role = Map.get(msg, "role", "unknown")
+        Map.update(acc, role, 1, &(&1 + 1))
+      end)
+
+    content_chars =
+      Enum.reduce(messages, 0, fn msg, acc ->
+        acc + (msg |> Map.get("content") |> render_text() |> byte_size())
+      end)
+
+    tool_call_messages =
+      Enum.count(messages, fn msg ->
+        tool_calls = Map.get(msg, "tool_calls")
+        is_list(tool_calls) and tool_calls != []
+      end)
+
+    inspect(%{
+      total: length(messages),
+      role_counts: counts,
+      content_chars: content_chars,
+      tool_call_messages: tool_call_messages
+    })
+  end
+
+  defp value_present?(value) when value in [nil, "", []], do: false
+  defp value_present?(_), do: true
 
   defp trace_tool_definition(tool) when is_map(tool) do
     function = Map.get(tool, "function") || Map.get(tool, :function) || %{}

@@ -16,30 +16,79 @@ defmodule Nex.Agent.LLM.ReqLLM do
   @openrouter_title "Nex Agent"
   @chat_timeout 180_000
   @ollama_placeholder_api_key "ollama"
+  @codex_base_url "https://chatgpt.com/backend-api/codex"
+  @codex_fallback_instructions "You are a helpful coding assistant."
 
   def chat(messages, options) do
+    provider = Keyword.get(options, :provider, :anthropic)
     model_spec = resolve_model(options)
-    req_messages = messages |> sanitize_messages() |> transform_messages()
-    req_options = build_req_llm_options(options)
+    {req_messages, prepared_options} =
+      messages
+      |> sanitize_messages()
+      |> prepare_messages_and_options(provider, options)
+
+    req_options = build_req_llm_options(prepared_options)
+    started_at = System.monotonic_time(:millisecond)
 
     generate_text_fun =
       Keyword.get(options, :req_llm_generate_text_fun) || (&ReqLLM.generate_text/3)
 
+    Logger.info(
+      "[ReqLLM] chat start model=#{model_spec_log(model_spec)} " <>
+        "messages=#{req_message_stats(req_messages)} options=#{req_options_log(req_options)}"
+    )
+
     try do
       case generate_text_fun.(model_spec, req_messages, req_options) do
-        {:ok, response} -> {:ok, parse_response(response)}
-        {:error, reason} -> {:error, normalize_error(reason)}
+        {:ok, response} ->
+          parsed = parse_response(response)
+          duration_ms = System.monotonic_time(:millisecond) - started_at
+
+          Logger.info(
+            "[ReqLLM] chat success duration_ms=#{duration_ms} response=#{response_log(parsed)}"
+          )
+
+          {:ok, parsed}
+
+        {:error, reason} ->
+          normalized = normalize_error(reason)
+          duration_ms = System.monotonic_time(:millisecond) - started_at
+
+          Logger.error(
+            "[ReqLLM] chat error duration_ms=#{duration_ms} reason=#{error_log(normalized)}"
+          )
+
+          {:error, normalized}
       end
     rescue
-      error -> {:error, normalize_error(error)}
+      error ->
+        normalized = normalize_error(error)
+        duration_ms = System.monotonic_time(:millisecond) - started_at
+
+        Logger.error(
+          "[ReqLLM] chat rescue duration_ms=#{duration_ms} reason=#{error_log(normalized)}"
+        )
+
+        {:error, normalized}
     end
   end
 
   def stream(messages, options, callback) do
+    provider = Keyword.get(options, :provider, :anthropic)
     model_spec = resolve_model(options)
-    req_messages = messages |> sanitize_messages() |> transform_messages()
-    req_options = build_req_llm_options(options)
+    {req_messages, prepared_options} =
+      messages
+      |> sanitize_messages()
+      |> prepare_messages_and_options(provider, options)
+
+    req_options = build_req_llm_options(prepared_options)
     stream_text_fun = Keyword.get(options, :req_llm_stream_text_fun) || (&ReqLLM.stream_text/3)
+    started_at = System.monotonic_time(:millisecond)
+
+    Logger.info(
+      "[ReqLLM] stream start model=#{model_spec_log(model_spec)} " <>
+        "messages=#{req_message_stats(req_messages)} options=#{req_options_log(req_options)}"
+    )
 
     try do
       case stream_text_fun.(model_spec, req_messages, req_options) do
@@ -54,6 +103,13 @@ defmodule Nex.Agent.LLM.ReqLLM do
             usage: StreamResponse.usage(response),
             model: extract_stream_model(response)
           })
+
+          duration_ms = System.monotonic_time(:millisecond) - started_at
+
+          Logger.info(
+            "[ReqLLM] stream success duration_ms=#{duration_ms} tool_calls=#{length(state.tool_calls)} " <>
+              "model=#{inspect(extract_stream_model(response))}"
+          )
 
           :ok
 
@@ -76,22 +132,53 @@ defmodule Nex.Agent.LLM.ReqLLM do
             model: extract_stream_model(response)
           })
 
+          duration_ms = System.monotonic_time(:millisecond) - started_at
+
+          Logger.info(
+            "[ReqLLM] stream success duration_ms=#{duration_ms} tool_calls=#{length(state.tool_calls)} " <>
+              "model=#{inspect(extract_stream_model(response))}"
+          )
+
           :ok
 
         {:error, reason} ->
           error = normalize_error(reason)
+          duration_ms = System.monotonic_time(:millisecond) - started_at
+          Logger.error("[ReqLLM] stream error duration_ms=#{duration_ms} reason=#{error_log(error)}")
           callback.({:error, error})
           {:error, error}
       end
     rescue
       error ->
         normalized = normalize_error(error)
+        duration_ms = System.monotonic_time(:millisecond) - started_at
+        Logger.error(
+          "[ReqLLM] stream rescue duration_ms=#{duration_ms} reason=#{error_log(normalized)}"
+        )
         callback.({:error, normalized})
         {:error, normalized}
     end
   end
 
   def tools, do: []
+
+  defp prepare_messages_and_options(messages, :openai_codex, options) do
+    {instructions, filtered_messages} = extract_codex_instructions(messages)
+    provider_options = Keyword.get(options, :provider_options, [])
+
+    prepared_options =
+      Keyword.put(
+        options,
+        :provider_options,
+        Keyword.put(provider_options, :instructions, instructions)
+      )
+
+    {transform_messages(filtered_messages), prepared_options}
+  end
+
+  defp prepare_messages_and_options(messages, _provider, options) do
+    {transform_messages(messages), options}
+  end
 
   defp sanitize_messages(messages) do
     Enum.map(messages, fn message ->
@@ -135,6 +222,45 @@ defmodule Nex.Agent.LLM.ReqLLM do
     end)
   end
 
+  defp extract_codex_instructions(messages) do
+    {system_messages, other_messages} =
+      Enum.split_with(messages, fn message -> message["role"] == "system" end)
+
+    instructions =
+      system_messages
+      |> Enum.map(&message_content_to_text/1)
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.join("\n\n")
+      |> case do
+        "" -> @codex_fallback_instructions
+        text -> text
+      end
+
+    {instructions, other_messages}
+  end
+
+  defp message_content_to_text(%{"content" => content}), do: content_to_text(content)
+  defp message_content_to_text(_), do: ""
+
+  defp content_to_text(content) when is_binary(content), do: String.trim(content)
+
+  defp content_to_text(content) when is_list(content) do
+    content
+    |> Enum.map(&content_part_to_text/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.join("\n")
+    |> String.trim()
+  end
+
+  defp content_to_text(_), do: ""
+
+  defp content_part_to_text(%{"type" => "text", "text" => text}) when is_binary(text), do: text
+  defp content_part_to_text(%{type: "text", text: text}) when is_binary(text), do: text
+  defp content_part_to_text(%{"text" => text}) when is_binary(text), do: text
+  defp content_part_to_text(%{text: text}) when is_binary(text), do: text
+  defp content_part_to_text(part) when is_binary(part), do: part
+  defp content_part_to_text(_), do: ""
+
   defp build_req_llm_options(options) do
     provider = Keyword.get(options, :provider, :anthropic)
     resolved_provider = resolve_provider(options)
@@ -147,6 +273,7 @@ defmodule Nex.Agent.LLM.ReqLLM do
         # request ever reaches the local Ollama base_url, so use a stable
         # placeholder credential instead.
         :ollama -> {@ollama_placeholder_api_key, true}
+        :openai_codex -> {nil, false}
         _ -> {options[:api_key], present?(options[:api_key])}
       end
 
@@ -162,7 +289,11 @@ defmodule Nex.Agent.LLM.ReqLLM do
       normalize_tool_choice(options[:tool_choice])
     )
     |> maybe_put_keyword(:receive_timeout, true, @chat_timeout)
-    |> maybe_put_keyword(:provider_options, true, provider_options(resolved_provider))
+    |> maybe_put_keyword(
+      :provider_options,
+      true,
+      provider_options(provider, resolved_provider, options)
+    )
   end
 
   defp transform_tools(tools) do
@@ -223,6 +354,7 @@ defmodule Nex.Agent.LLM.ReqLLM do
 
   defp resolve_provider(options) do
     case Keyword.get(options, :provider, :anthropic) do
+      :openai_codex -> :openai
       :ollama -> :openai
       provider -> provider
     end
@@ -234,22 +366,35 @@ defmodule Nex.Agent.LLM.ReqLLM do
     model = Keyword.get(options, :model) || default_model(provider)
     base_url = effective_base_url(provider, Keyword.get(options, :base_url))
 
-    if present?(base_url) or provider in [:openrouter, :ollama] do
+    if present?(base_url) or provider in [:openrouter, :ollama, :openai_codex] do
       %{id: model, provider: resolved_provider, base_url: base_url}
     else
       "#{resolved_provider}:#{model}"
     end
   end
 
+  defp effective_base_url(:openai_codex, nil), do: @codex_base_url
+  defp effective_base_url(:openai_codex, base_url), do: String.trim_trailing(base_url, "/")
   defp effective_base_url(:openrouter, nil), do: "https://openrouter.ai/api/v1"
   defp effective_base_url(:ollama, nil), do: "http://localhost:11434/v1"
   defp effective_base_url(:ollama, base_url), do: normalize_ollama_base_url(base_url)
   defp effective_base_url(_provider, base_url), do: base_url
 
-  defp provider_options(:openrouter),
+  defp provider_options(:openai_codex, :openai, options) do
+    base = Keyword.get(options, :provider_options, [])
+    access_token = Keyword.get(options, :api_key)
+    instructions = Keyword.get(base, :instructions, @codex_fallback_instructions)
+
+    base
+    |> Keyword.put(:instructions, instructions)
+    |> Keyword.put(:auth_mode, :oauth)
+    |> maybe_put_keyword(:access_token, present?(access_token), access_token)
+  end
+
+  defp provider_options(_provider, :openrouter, _options),
     do: [app_referer: @openrouter_referer, app_title: @openrouter_title]
 
-  defp provider_options(_), do: []
+  defp provider_options(_provider, _resolved_provider, _options), do: []
 
   defp parse_response(%Response{} = response) do
     classified = Response.classify(response)
@@ -453,6 +598,102 @@ defmodule Nex.Agent.LLM.ReqLLM do
   defp normalize_error(error) when is_binary(error), do: error
   defp normalize_error(error), do: inspect(error)
 
+  defp model_spec_log(%{id: id, provider: provider, base_url: base_url}) do
+    inspect(%{id: id, provider: provider, base_url: base_url})
+  end
+
+  defp model_spec_log(other), do: inspect(other)
+
+  defp req_message_stats(messages) when is_list(messages) do
+    counts =
+      Enum.reduce(messages, %{}, fn msg, acc ->
+        role =
+          cond do
+            is_map(msg) and Map.has_key?(msg, :role) -> Map.get(msg, :role)
+            is_map(msg) and Map.has_key?(msg, "role") -> Map.get(msg, "role")
+            true -> "unknown"
+          end
+
+        Map.update(acc, role, 1, &(&1 + 1))
+      end)
+
+    content_chars =
+      Enum.reduce(messages, 0, fn msg, acc ->
+        acc + message_content_chars(msg)
+      end)
+
+    inspect(%{total: length(messages), role_counts: counts, content_chars: content_chars})
+  end
+
+  defp req_options_log(options) when is_list(options) do
+    inspect(%{
+      base_url: options[:base_url],
+      api_key_present: present?(options[:api_key]),
+      temperature: options[:temperature],
+      max_tokens: options[:max_tokens],
+      tool_count: length(options[:tools] || []),
+      tool_choice: options[:tool_choice],
+      receive_timeout: options[:receive_timeout],
+      provider_options: redact_provider_options(options[:provider_options])
+    })
+  end
+
+  defp response_log(response) when is_map(response) do
+    content = Map.get(response, :content) || Map.get(response, "content") || ""
+    reasoning = Map.get(response, :reasoning_content) || Map.get(response, "reasoning_content") || ""
+    tool_calls = Map.get(response, :tool_calls) || Map.get(response, "tool_calls") || []
+    usage = Map.get(response, :usage) || Map.get(response, "usage")
+
+    inspect(%{
+      model: Map.get(response, :model) || Map.get(response, "model"),
+      finish_reason: Map.get(response, :finish_reason) || Map.get(response, "finish_reason"),
+      content_chars: byte_size(to_text(content)),
+      reasoning_chars: byte_size(to_text(reasoning)),
+      tool_call_count: if(is_list(tool_calls), do: length(tool_calls), else: 0),
+      usage: usage,
+      preview: String.slice(to_text(content), 0, 160)
+    })
+  end
+
+  defp error_log(error) when is_map(error) do
+    inspect(Map.take(error, [:message, :status, :reason, "message", "status", "reason"]))
+  end
+
+  defp error_log(error), do: inspect(error)
+
+  defp message_content_chars(%{content: content}), do: byte_size(to_text(content))
+  defp message_content_chars(%{"content" => content}), do: byte_size(to_text(content))
+  defp message_content_chars(_), do: 0
+
+  defp redact_provider_options(options) when is_list(options) do
+    Enum.map(options, fn
+      {key, _value} when key in [:access_token, :api_key, :refresh_token, :authorization] ->
+        {key, "[REDACTED]"}
+
+      {key, value} ->
+        {key, redact_provider_options(value)}
+
+      other ->
+        redact_provider_options(other)
+    end)
+  end
+
+  defp redact_provider_options(options) when is_map(options) do
+    Map.new(options, fn
+      {key, _value} when key in [:access_token, :api_key, :refresh_token, :authorization] ->
+        {key, "[REDACTED]"}
+
+      {key, _value}
+      when key in ["access_token", "api_key", "refresh_token", "authorization"] ->
+        {key, "[REDACTED]"}
+
+      {key, value} ->
+        {key, redact_provider_options(value)}
+    end)
+  end
+
+  defp redact_provider_options(value), do: value
+
   defp extract_model(%Response{model: model}), do: model
   defp extract_model(%{model: model}), do: model
   defp extract_model(%{"model" => model}), do: model
@@ -598,6 +839,7 @@ defmodule Nex.Agent.LLM.ReqLLM do
 
   defp default_model(:anthropic), do: "claude-sonnet-4-20250514"
   defp default_model(:openai), do: "gpt-4o"
+  defp default_model(:openai_codex), do: "gpt-5.3-codex"
   defp default_model(:openrouter), do: "anthropic/claude-3.5-sonnet"
   defp default_model(:ollama), do: "llama3.1"
   defp default_model(_), do: "gpt-4o"
