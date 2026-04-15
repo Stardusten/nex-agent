@@ -1,7 +1,6 @@
 defmodule Nex.Agent do
   @moduledoc false
 
-  alias Nex.Agent.Auth.Codex
   alias Nex.Agent.{
     MemoryUpdater,
     Onboarding,
@@ -9,6 +8,7 @@ defmodule Nex.Agent do
     Session,
     SessionManager,
     Skills,
+    LLM.ProviderProfile,
     Workspace
   }
 
@@ -174,19 +174,7 @@ defmodule Nex.Agent do
 
   defp default_api_key(:anthropic), do: System.get_env("ANTHROPIC_API_KEY")
   defp default_api_key(:openai), do: System.get_env("OPENAI_API_KEY")
-  defp default_api_key(:openai_codex) do
-    case System.get_env("OPENAI_CODEX_ACCESS_TOKEN") do
-      token when is_binary(token) and token != "" ->
-        token
-
-      _ ->
-        case Codex.resolve_access_token() do
-          {:ok, token} -> token
-          _ -> nil
-        end
-    end
-  end
-
+  defp default_api_key(:openai_codex), do: ProviderProfile.default_api_key(:openai_codex)
   defp default_api_key(:ollama), do: nil
   defp default_api_key(_), do: nil
 
@@ -195,7 +183,7 @@ defmodule Nex.Agent do
   defp env_var_name(:openai_codex), do: "OPENAI_CODEX_ACCESS_TOKEN or ~/.codex/auth.json"
   defp env_var_name(_), do: "API_KEY"
 
-  defp default_base_url(:openai_codex), do: Codex.default_base_url()
+  defp default_base_url(:openai_codex), do: ProviderProfile.default_base_url(:openai_codex)
   defp default_base_url(_), do: nil
 
   defp parse_session_key(nil), do: {"telegram", "default"}

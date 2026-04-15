@@ -11,21 +11,18 @@ defmodule Nex.Agent.LLM.ReqLLM do
   alias ReqLLM.StreamResponse
   alias ReqLLM.Tool
   alias ReqLLM.ToolCall
+  alias Nex.Agent.LLM.ProviderProfile
 
-  @openrouter_referer "https://nex.dev"
-  @openrouter_title "Nex Agent"
   @chat_timeout 180_000
-  @ollama_placeholder_api_key "ollama"
-  @codex_base_url "https://chatgpt.com/backend-api/codex"
-  @codex_fallback_instructions "You are a helpful coding assistant."
 
   def chat(messages, options) do
     provider = Keyword.get(options, :provider, :anthropic)
-    model_spec = resolve_model(options)
+    profile = ProviderProfile.for(provider, options)
+    model_spec = resolve_model(profile, options)
     {req_messages, prepared_options} =
       messages
       |> sanitize_messages()
-      |> prepare_messages_and_options(provider, options)
+      |> prepare_messages_and_options(profile, options)
 
     req_options = build_req_llm_options(prepared_options)
     started_at = System.monotonic_time(:millisecond)
@@ -75,11 +72,12 @@ defmodule Nex.Agent.LLM.ReqLLM do
 
   def stream(messages, options, callback) do
     provider = Keyword.get(options, :provider, :anthropic)
-    model_spec = resolve_model(options)
+    profile = ProviderProfile.for(provider, options)
+    model_spec = resolve_model(profile, options)
     {req_messages, prepared_options} =
       messages
       |> sanitize_messages()
-      |> prepare_messages_and_options(provider, options)
+      |> prepare_messages_and_options(profile, options)
 
     req_options = build_req_llm_options(prepared_options)
     stream_text_fun = Keyword.get(options, :req_llm_stream_text_fun) || (&ReqLLM.stream_text/3)
@@ -162,29 +160,11 @@ defmodule Nex.Agent.LLM.ReqLLM do
 
   def tools, do: []
 
-  defp prepare_messages_and_options(messages, :openai_codex, options) do
-    {instructions, filtered_messages} = extract_codex_instructions(messages)
-    provider_options = Keyword.get(options, :provider_options, [])
-    base_url = effective_base_url(:openai_codex, Keyword.get(options, :base_url))
+  defp prepare_messages_and_options(messages, profile, options) do
+    {prepared_messages, prepared_options} =
+      ProviderProfile.prepare_messages_and_options(messages, profile, options)
 
-    prepared_options =
-      if codex_auth_mode(base_url) == :oauth do
-        Keyword.put(
-          options,
-          :provider_options,
-          Keyword.put(provider_options, :instructions, instructions)
-        )
-      else
-        options
-        |> Keyword.put(:system_prompt, instructions)
-        |> Keyword.put(:provider_options, provider_options)
-      end
-
-    {transform_messages(filtered_messages), prepared_options}
-  end
-
-  defp prepare_messages_and_options(messages, _provider, options) do
-    {transform_messages(messages), options}
+    {transform_messages(prepared_messages), prepared_options}
   end
 
   defp sanitize_messages(messages) do
@@ -229,66 +209,14 @@ defmodule Nex.Agent.LLM.ReqLLM do
     end)
   end
 
-  defp extract_codex_instructions(messages) do
-    {system_messages, other_messages} =
-      Enum.split_with(messages, fn message -> message["role"] == "system" end)
-
-    instructions =
-      system_messages
-      |> Enum.map(&message_content_to_text/1)
-      |> Enum.reject(&(&1 == ""))
-      |> Enum.join("\n\n")
-      |> case do
-        "" -> @codex_fallback_instructions
-        text -> text
-      end
-
-    {instructions, other_messages}
-  end
-
-  defp message_content_to_text(%{"content" => content}), do: content_to_text(content)
-  defp message_content_to_text(_), do: ""
-
-  defp content_to_text(content) when is_binary(content), do: String.trim(content)
-
-  defp content_to_text(content) when is_list(content) do
-    content
-    |> Enum.map(&content_part_to_text/1)
-    |> Enum.reject(&(&1 == ""))
-    |> Enum.join("\n")
-    |> String.trim()
-  end
-
-  defp content_to_text(_), do: ""
-
-  defp content_part_to_text(%{"type" => "text", "text" => text}) when is_binary(text), do: text
-  defp content_part_to_text(%{type: "text", text: text}) when is_binary(text), do: text
-  defp content_part_to_text(%{"text" => text}) when is_binary(text), do: text
-  defp content_part_to_text(%{text: text}) when is_binary(text), do: text
-  defp content_part_to_text(part) when is_binary(part), do: part
-  defp content_part_to_text(_), do: ""
-
   defp build_req_llm_options(options) do
     provider = Keyword.get(options, :provider, :anthropic)
-    resolved_provider = resolve_provider(options)
-    base_url = effective_base_url(provider, options[:base_url])
-    codex_auth_mode = codex_auth_mode(base_url)
-
-    {api_key, should_include_api_key} =
-      case provider do
-        # ReqLLM resolves Ollama through its OpenAI-compatible provider path.
-        # Passing an empty string triggers OPENAI_API_KEY validation before the
-        # request ever reaches the local Ollama base_url, so use a stable
-        # placeholder credential instead.
-        :ollama -> {@ollama_placeholder_api_key, true}
-        :openai_codex when codex_auth_mode == :oauth -> {nil, false}
-        :openai_codex -> {options[:api_key], present?(options[:api_key])}
-        _ -> {options[:api_key], present?(options[:api_key])}
-      end
+    profile = ProviderProfile.for(provider, options)
+    {api_key, should_include_api_key} = ProviderProfile.api_key_config(profile, options)
 
     []
     |> maybe_put_keyword(:api_key, should_include_api_key, api_key)
-    |> maybe_put_keyword(:base_url, present?(base_url), base_url)
+    |> maybe_put_keyword(:base_url, present?(profile.base_url), profile.base_url)
     |> maybe_put_keyword(:temperature, is_number(options[:temperature]), options[:temperature])
     |> maybe_put_keyword(:max_tokens, is_integer(options[:max_tokens]), options[:max_tokens])
     |> maybe_put_keyword(:tools, true, transform_tools(options[:tools] || []))
@@ -301,7 +229,7 @@ defmodule Nex.Agent.LLM.ReqLLM do
     |> maybe_put_keyword(
       :provider_options,
       true,
-      provider_options(provider, resolved_provider, options)
+      ProviderProfile.provider_options(profile, options)
     )
   end
 
@@ -361,59 +289,11 @@ defmodule Nex.Agent.LLM.ReqLLM do
   defp normalize_parameter_schema(schema) when is_map(schema), do: schema
   defp normalize_parameter_schema(_), do: %{}
 
-  defp resolve_provider(options) do
-    case Keyword.get(options, :provider, :anthropic) do
-      :openai_codex -> :openai
-      :ollama -> :openai
-      provider -> provider
-    end
-  end
-
-  defp resolve_model(options) do
+  defp resolve_model(profile, options) do
     provider = Keyword.get(options, :provider, :anthropic)
-    resolved_provider = resolve_provider(options)
     model = Keyword.get(options, :model) || default_model(provider)
-    base_url = effective_base_url(provider, Keyword.get(options, :base_url))
-
-    if present?(base_url) or provider in [:openrouter, :ollama, :openai_codex] do
-      %{id: model, provider: resolved_provider, base_url: base_url}
-    else
-      "#{resolved_provider}:#{model}"
-    end
+    ProviderProfile.model_spec(profile, model)
   end
-
-  defp effective_base_url(:openai_codex, nil), do: @codex_base_url
-  defp effective_base_url(:openai_codex, base_url), do: String.trim_trailing(base_url, "/")
-  defp effective_base_url(:openrouter, nil), do: "https://openrouter.ai/api/v1"
-  defp effective_base_url(:ollama, nil), do: "http://localhost:11434/v1"
-  defp effective_base_url(:ollama, base_url), do: normalize_ollama_base_url(base_url)
-  defp effective_base_url(_provider, base_url), do: base_url
-
-  defp provider_options(:openai_codex, :openai, options) do
-    base = Keyword.get(options, :provider_options, [])
-    base_url = effective_base_url(:openai_codex, Keyword.get(options, :base_url))
-    access_token = Keyword.get(options, :api_key)
-    auth_mode = codex_auth_mode(base_url)
-
-    if auth_mode == :oauth do
-      instructions = Keyword.get(base, :instructions, @codex_fallback_instructions)
-
-      base
-      |> Keyword.put(:instructions, instructions)
-      |> Keyword.put(:auth_mode, :oauth)
-      |> maybe_put_keyword(:access_token, present?(access_token), access_token)
-    else
-      base
-      |> Keyword.delete(:instructions)
-      |> Keyword.put(:auth_mode, :api_key)
-      |> Keyword.delete(:access_token)
-    end
-  end
-
-  defp provider_options(_provider, :openrouter, _options),
-    do: [app_referer: @openrouter_referer, app_title: @openrouter_title]
-
-  defp provider_options(_provider, _resolved_provider, _options), do: []
 
   defp parse_response(%Response{} = response) do
     classified = Response.classify(response)
@@ -684,16 +564,6 @@ defmodule Nex.Agent.LLM.ReqLLM do
   defp message_content_chars(%{"content" => content}), do: byte_size(to_text(content))
   defp message_content_chars(_), do: 0
 
-  defp codex_auth_mode(base_url) when is_binary(base_url) do
-    if String.trim_trailing(base_url, "/") == @codex_base_url do
-      :oauth
-    else
-      :api_key
-    end
-  end
-
-  defp codex_auth_mode(_), do: :oauth
-
   defp redact_provider_options(options) when is_list(options) do
     Enum.map(options, fn
       {key, _value} when key in [:access_token, :api_key, :refresh_token, :authorization] ->
@@ -855,16 +725,6 @@ defmodule Nex.Agent.LLM.ReqLLM do
   end
 
   defp extract_think_block(_), do: ""
-
-  defp normalize_ollama_base_url(nil), do: "http://localhost:11434/v1"
-
-  defp normalize_ollama_base_url(base_url) do
-    if String.ends_with?(base_url, "/v1") do
-      base_url
-    else
-      String.trim_trailing(base_url, "/") <> "/v1"
-    end
-  end
 
   defp default_model(:anthropic), do: "claude-sonnet-4-20250514"
   defp default_model(:openai), do: "gpt-4o"
