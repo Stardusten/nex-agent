@@ -265,6 +265,7 @@ defmodule Nex.Agent.LLM.ReqLLM do
     provider = Keyword.get(options, :provider, :anthropic)
     resolved_provider = resolve_provider(options)
     base_url = effective_base_url(provider, options[:base_url])
+    codex_auth_mode = codex_auth_mode(base_url)
 
     {api_key, should_include_api_key} =
       case provider do
@@ -273,7 +274,8 @@ defmodule Nex.Agent.LLM.ReqLLM do
         # request ever reaches the local Ollama base_url, so use a stable
         # placeholder credential instead.
         :ollama -> {@ollama_placeholder_api_key, true}
-        :openai_codex -> {nil, false}
+        :openai_codex when codex_auth_mode == :oauth -> {nil, false}
+        :openai_codex -> {options[:api_key], present?(options[:api_key])}
         _ -> {options[:api_key], present?(options[:api_key])}
       end
 
@@ -382,13 +384,15 @@ defmodule Nex.Agent.LLM.ReqLLM do
 
   defp provider_options(:openai_codex, :openai, options) do
     base = Keyword.get(options, :provider_options, [])
+    base_url = effective_base_url(:openai_codex, Keyword.get(options, :base_url))
     access_token = Keyword.get(options, :api_key)
     instructions = Keyword.get(base, :instructions, @codex_fallback_instructions)
+    auth_mode = codex_auth_mode(base_url)
 
     base
     |> Keyword.put(:instructions, instructions)
-    |> Keyword.put(:auth_mode, :oauth)
-    |> maybe_put_keyword(:access_token, present?(access_token), access_token)
+    |> Keyword.put(:auth_mode, auth_mode)
+    |> maybe_put_keyword(:access_token, auth_mode == :oauth and present?(access_token), access_token)
   end
 
   defp provider_options(_provider, :openrouter, _options),
@@ -664,6 +668,16 @@ defmodule Nex.Agent.LLM.ReqLLM do
   defp message_content_chars(%{content: content}), do: byte_size(to_text(content))
   defp message_content_chars(%{"content" => content}), do: byte_size(to_text(content))
   defp message_content_chars(_), do: 0
+
+  defp codex_auth_mode(base_url) when is_binary(base_url) do
+    if String.trim_trailing(base_url, "/") == @codex_base_url do
+      :oauth
+    else
+      :api_key
+    end
+  end
+
+  defp codex_auth_mode(_), do: :oauth
 
   defp redact_provider_options(options) when is_list(options) do
     Enum.map(options, fn

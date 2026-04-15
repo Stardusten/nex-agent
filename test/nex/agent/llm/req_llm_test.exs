@@ -78,4 +78,45 @@ defmodule Nex.Agent.LLM.ReqLLMTest do
     assert opts[:provider_options][:auth_mode] == :oauth
     assert opts[:provider_options][:access_token] == "oauth-access-token"
   end
+
+  test "openai-codex requests use regular api key auth for third-party codex-compatible base urls" do
+    parent = self()
+
+    generate_text_fun = fn model_spec, messages, opts ->
+      send(parent, {:req_llm_call, model_spec, messages, opts})
+      {:ok, %{content: "ok", finish_reason: :stop, tool_calls: []}}
+    end
+
+    third_party_base_url = "https://api.aicodemirror.com/api/codex/backend-api/codex"
+
+    assert {:ok, response} =
+             AgentReqLLM.chat(
+               [
+                 %{"role" => "system", "content" => "You are the project copilot."},
+                 %{"role" => "user", "content" => "hello from codex"}
+               ],
+               provider: :openai_codex,
+               model: "gpt-5.3-codex",
+               api_key: "third-party-api-key",
+               base_url: third_party_base_url,
+               req_llm_generate_text_fun: generate_text_fun
+             )
+
+    assert response.content == "ok"
+
+    assert_receive {:req_llm_call, model_spec, messages, opts}
+
+    assert model_spec == %{
+             id: "gpt-5.3-codex",
+             provider: :openai,
+             base_url: third_party_base_url
+           }
+
+    assert [%Message{role: :user}] = messages
+    assert opts[:api_key] == "third-party-api-key"
+    assert opts[:base_url] == third_party_base_url
+    assert opts[:provider_options][:instructions] == "You are the project copilot."
+    assert opts[:provider_options][:auth_mode] == :api_key
+    refute Keyword.has_key?(opts[:provider_options], :access_token)
+  end
 end
