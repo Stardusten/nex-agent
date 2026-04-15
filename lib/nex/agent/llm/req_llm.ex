@@ -165,13 +165,20 @@ defmodule Nex.Agent.LLM.ReqLLM do
   defp prepare_messages_and_options(messages, :openai_codex, options) do
     {instructions, filtered_messages} = extract_codex_instructions(messages)
     provider_options = Keyword.get(options, :provider_options, [])
+    base_url = effective_base_url(:openai_codex, Keyword.get(options, :base_url))
 
     prepared_options =
-      Keyword.put(
-        options,
-        :provider_options,
-        Keyword.put(provider_options, :instructions, instructions)
-      )
+      if codex_auth_mode(base_url) == :oauth do
+        Keyword.put(
+          options,
+          :provider_options,
+          Keyword.put(provider_options, :instructions, instructions)
+        )
+      else
+        options
+        |> Keyword.put(:system_prompt, instructions)
+        |> Keyword.put(:provider_options, provider_options)
+      end
 
     {transform_messages(filtered_messages), prepared_options}
   end
@@ -386,13 +393,21 @@ defmodule Nex.Agent.LLM.ReqLLM do
     base = Keyword.get(options, :provider_options, [])
     base_url = effective_base_url(:openai_codex, Keyword.get(options, :base_url))
     access_token = Keyword.get(options, :api_key)
-    instructions = Keyword.get(base, :instructions, @codex_fallback_instructions)
     auth_mode = codex_auth_mode(base_url)
 
-    base
-    |> Keyword.put(:instructions, instructions)
-    |> Keyword.put(:auth_mode, auth_mode)
-    |> maybe_put_keyword(:access_token, auth_mode == :oauth and present?(access_token), access_token)
+    if auth_mode == :oauth do
+      instructions = Keyword.get(base, :instructions, @codex_fallback_instructions)
+
+      base
+      |> Keyword.put(:instructions, instructions)
+      |> Keyword.put(:auth_mode, :oauth)
+      |> maybe_put_keyword(:access_token, present?(access_token), access_token)
+    else
+      base
+      |> Keyword.delete(:instructions)
+      |> Keyword.put(:auth_mode, :api_key)
+      |> Keyword.delete(:access_token)
+    end
   end
 
   defp provider_options(_provider, :openrouter, _options),

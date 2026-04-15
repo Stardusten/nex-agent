@@ -115,8 +115,8 @@ defmodule Nex.Agent.LLM.ReqLLMTest do
     assert [%Message{role: :user}] = messages
     assert opts[:api_key] == "third-party-api-key"
     assert opts[:base_url] == third_party_base_url
-    assert opts[:provider_options][:instructions] == "You are the project copilot."
     assert opts[:provider_options][:auth_mode] == :api_key
+    refute Keyword.has_key?(opts[:provider_options], :instructions)
     refute Keyword.has_key?(opts[:provider_options], :access_token)
   end
 end
