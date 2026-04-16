@@ -3,6 +3,8 @@ defmodule Nex.Agent.ContextBuilder do
   Builds context for LLM calls - system prompt + messages.
   """
 
+  require Logger
+
   alias Nex.Agent.{ContextDiagnostics, Skills, Workspace}
 
   @bootstrap_layer_order [
@@ -337,13 +339,26 @@ defmodule Nex.Agent.ContextBuilder do
         [%{"type" => "text", "text" => runtime_ctx} | user_content]
       end
 
+    system_prompt =
+      case Keyword.get(opts, :system_prompt) do
+        prompt when is_binary(prompt) and prompt != "" ->
+          prompt
+
+        _ ->
+          Logger.warning(
+            "[ContextBuilder] Missing :system_prompt in build_messages/6; falling back to live prompt build"
+          )
+
+          build_system_prompt(opts)
+      end
+
     system_content =
       case runtime_system_messages do
         [] ->
-          build_system_prompt(opts)
+          system_prompt
 
         messages when is_list(messages) ->
-          build_system_prompt(opts) <> "\n\n---\n\n" <> Enum.join(messages, "\n\n")
+          system_prompt <> "\n\n---\n\n" <> Enum.join(messages, "\n\n")
       end
 
     [

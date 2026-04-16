@@ -5,6 +5,7 @@ defmodule Nex.Agent do
     MemoryUpdater,
     Onboarding,
     Runner,
+    Runtime,
     Session,
     SessionManager,
     Skills,
@@ -22,7 +23,8 @@ defmodule Nex.Agent do
           tools: map(),
           workspace: String.t(),
           cwd: String.t(),
-          max_iterations: pos_integer()
+          max_iterations: pos_integer(),
+          runtime_version: pos_integer() | nil
         }
 
   defstruct [
@@ -35,24 +37,51 @@ defmodule Nex.Agent do
     :tools,
     :workspace,
     :cwd,
+    :runtime_version,
     max_iterations: 10
   ]
 
   def start(opts \\ []) do
     :ok = Onboarding.ensure_initialized()
-    workspace = Keyword.get(opts, :workspace, Workspace.root())
+    runtime_snapshot = runtime_snapshot_for_opts(opts)
+    runtime_config = if runtime_snapshot, do: runtime_snapshot.config
+
+    workspace =
+      Keyword.get(opts, :workspace) ||
+        if(runtime_snapshot, do: runtime_snapshot.workspace, else: Workspace.root())
+
     :ok = Onboarding.ensure_workspace_initialized(workspace)
     :ok = Skills.load()
 
-    provider = Keyword.get(opts, :provider, :anthropic)
-    model = Keyword.get(opts, :model, default_model(provider))
-    api_key = Keyword.get(opts, :api_key) || default_api_key(provider)
-    base_url = Keyword.get(opts, :base_url, default_base_url(provider))
-    max_iterations = Keyword.get(opts, :max_iterations, 10)
+    provider =
+      Keyword.get(opts, :provider) ||
+        if(runtime_config,
+          do: Nex.Agent.Config.provider_to_atom(runtime_config.provider),
+          else: :anthropic
+        )
+
+    model =
+      Keyword.get(opts, :model) ||
+        if(runtime_config, do: runtime_config.model, else: default_model(provider))
+
+    api_key =
+      Keyword.get(opts, :api_key) ||
+        if(runtime_config, do: Nex.Agent.Config.get_current_api_key(runtime_config), else: nil) ||
+        default_api_key(provider)
+
+    base_url =
+      Keyword.get(opts, :base_url) ||
+        if(runtime_config, do: Nex.Agent.Config.get_current_base_url(runtime_config), else: nil) ||
+        default_base_url(provider)
+
+    max_iterations =
+      Keyword.get(opts, :max_iterations) ||
+        if(runtime_config, do: Nex.Agent.Config.get_max_iterations(runtime_config), else: 10)
+
     cwd = Keyword.get(opts, :cwd, File.cwd!())
     channel = Keyword.get(opts, :channel, "telegram")
     chat_id = Keyword.get(opts, :chat_id, "default")
-    tools = Keyword.get(opts, :tools, %{})
+    tools = Keyword.get(opts, :tools, if(runtime_config, do: runtime_config.tools, else: %{}))
 
     session_key = "#{channel}:#{chat_id}"
 
@@ -72,12 +101,16 @@ defmodule Nex.Agent do
          tools: tools,
          workspace: workspace,
          cwd: cwd,
-         max_iterations: max_iterations
+         max_iterations: max_iterations,
+         runtime_version: runtime_snapshot && runtime_snapshot.version
        }}
     end
   end
 
   def prompt(agent, prompt, opts \\ []) do
+    runtime_snapshot =
+      runtime_snapshot_for_opts(Keyword.put_new(opts, :workspace, agent.workspace))
+
     provider = Keyword.get(opts, :provider, agent.provider)
     model = Keyword.get(opts, :model, agent.model)
     api_key = Keyword.get(opts, :api_key) || agent.api_key || default_api_key(provider)
@@ -123,6 +156,8 @@ defmodule Nex.Agent do
         workspace: workspace,
         metadata: metadata
       ]
+      |> maybe_put(:runtime_snapshot, runtime_snapshot)
+      |> maybe_put(:runtime_version, runtime_snapshot && runtime_snapshot.version)
       |> maybe_put(:project, project)
       |> maybe_put(:on_progress, on_progress)
       |> maybe_put(:tools_filter, tools_filter)
@@ -137,13 +172,41 @@ defmodule Nex.Agent do
     case Runner.run(session, prompt, runner_opts) do
       {:ok, result, session} ->
         unless skip_consolidation, do: SessionManager.save(session, workspace: workspace)
-        maybe_enqueue_memory_refresh(session, schedule_memory_refresh, skip_consolidation, runner_opts)
-        {:ok, result, %{agent | session: session, workspace: workspace, cwd: cwd}}
+
+        maybe_enqueue_memory_refresh(
+          session,
+          schedule_memory_refresh,
+          skip_consolidation,
+          runner_opts
+        )
+
+        {:ok, result,
+         %{
+           agent
+           | session: session,
+             workspace: workspace,
+             cwd: cwd,
+             runtime_version: runtime_snapshot && runtime_snapshot.version
+         }}
 
       {:error, reason, session} ->
         unless skip_consolidation, do: SessionManager.save(session, workspace: workspace)
-        maybe_enqueue_memory_refresh(session, schedule_memory_refresh, skip_consolidation, runner_opts)
-        {:error, reason, %{agent | session: session, workspace: workspace, cwd: cwd}}
+
+        maybe_enqueue_memory_refresh(
+          session,
+          schedule_memory_refresh,
+          skip_consolidation,
+          runner_opts
+        )
+
+        {:error, reason,
+         %{
+           agent
+           | session: session,
+             workspace: workspace,
+             cwd: cwd,
+             runtime_version: runtime_snapshot && runtime_snapshot.version
+         }}
     end
   end
 
@@ -197,6 +260,46 @@ defmodule Nex.Agent do
 
   defp maybe_put(opts, _key, nil), do: opts
   defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
+
+  defp runtime_snapshot_for_opts(opts) do
+    case Keyword.get(opts, :runtime_snapshot) do
+      %Nex.Agent.Runtime.Snapshot{} = snapshot ->
+        snapshot
+
+      _ ->
+        load_runtime_snapshot(Keyword.get(opts, :workspace))
+    end
+  end
+
+  defp load_runtime_snapshot(nil) do
+    case Runtime.current() do
+      {:ok, %Nex.Agent.Runtime.Snapshot{} = snapshot} -> snapshot
+      _ -> nil
+    end
+  end
+
+  defp load_runtime_snapshot(workspace) when is_binary(workspace) do
+    expanded_workspace = Path.expand(workspace)
+
+    case Runtime.current() do
+      {:ok, %Nex.Agent.Runtime.Snapshot{workspace: snapshot_workspace} = snapshot}
+      when is_binary(snapshot_workspace) ->
+        if Path.expand(snapshot_workspace) == expanded_workspace do
+          snapshot
+        else
+          case Runtime.reload(workspace: workspace) do
+            {:ok, %Nex.Agent.Runtime.Snapshot{} = snapshot} -> snapshot
+            _ -> snapshot
+          end
+        end
+
+      {:ok, %Nex.Agent.Runtime.Snapshot{} = snapshot} ->
+        snapshot
+
+      _ ->
+        nil
+    end
+  end
 
   defp maybe_enqueue_memory_refresh(_session, false, _skip_consolidation, _runner_opts), do: :ok
   defp maybe_enqueue_memory_refresh(_session, _schedule, true, _runner_opts), do: :ok

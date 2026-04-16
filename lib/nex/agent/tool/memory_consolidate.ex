@@ -11,11 +11,13 @@ defmodule Nex.Agent.Tool.MemoryConsolidate do
 
   def description do
     """
-    Immediately run a memory refresh for the current session.
+    Immediately run a memory refresh for the current session to trigger memory consolidation.
 
     Use this when the user explicitly asks to trigger memory refresh now:
     - "trigger memory refresh" / "refresh memory now"
+    - "trigger memory consolidation"
     - "立即更新记忆" / "现在刷新记忆"
+    - "触发记忆整理"
 
     This is not a full rebuild. Use `memory_status` to only check status.
     Use `memory_rebuild` only for a full rebuild of MEMORY.md from the full session history.

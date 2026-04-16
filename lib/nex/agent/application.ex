@@ -6,7 +6,6 @@ defmodule Nex.Agent.Application do
 
       Application Supervisor
       ├── Finch (HTTP client)
-      ├── SystemPrompt (cache)
       ├── Skills
       ├── SessionManager
       ├── MessageBus
@@ -16,6 +15,9 @@ defmodule Nex.Agent.Application do
       │   ├── Tool.Registry
       │   ├── Cron
       │   └── Heartbeat
+      ├── Runtime
+      ├── Runtime.Watcher
+      ├── Runtime.Reconciler
       ├── WorkerSupervisor (:one_for_one)
       │   ├── InboundWorker
       │   └── Subagent
@@ -33,12 +35,14 @@ defmodule Nex.Agent.Application do
     children =
       maybe_finch() ++
         [
-          Nex.Agent.SystemPrompt,
           Nex.Agent.Skills,
           Nex.Agent.SessionManager,
           Nex.Agent.MessageBus,
           {Task.Supervisor, name: Nex.Agent.TaskSupervisor},
           Nex.Agent.InfrastructureSupervisor,
+          Nex.Agent.Runtime,
+          Nex.Agent.Runtime.Watcher,
+          Nex.Agent.Runtime.Reconciler,
           Nex.Agent.WorkerSupervisor,
           {DynamicSupervisor, name: Nex.Agent.ChannelSupervisor, strategy: :one_for_one},
           Nex.Agent.Gateway

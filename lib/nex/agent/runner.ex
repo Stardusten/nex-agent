@@ -12,6 +12,7 @@ defmodule Nex.Agent.Runner do
     Session
   }
 
+  alias Nex.Agent.Runtime.Snapshot
   alias Nex.Agent.Tool.Registry, as: ToolRegistry
   alias Nex.SkillRuntime
 
@@ -38,14 +39,28 @@ defmodule Nex.Agent.Runner do
   Run agent loop with session and prompt.
   """
   def run(session, prompt, opts \\ []) do
-    max_iterations = Keyword.get(opts, :max_iterations, @default_max_iterations)
-    provider = Keyword.get(opts, :provider, :anthropic)
-    model = Keyword.get(opts, :model, "claude-sonnet-4-20250514")
     workspace = Keyword.get(opts, :workspace)
+    runtime_snapshot = runtime_snapshot_from_opts(opts)
+    runtime_config = if runtime_snapshot, do: runtime_snapshot.config
+
+    max_iterations = Keyword.get(opts, :max_iterations, @default_max_iterations)
+
+    provider =
+      Keyword.get(opts, :provider) ||
+        if(runtime_config,
+          do: Nex.Agent.Config.provider_to_atom(runtime_config.provider),
+          else: :anthropic
+        )
+
+    model =
+      Keyword.get(opts, :model) ||
+        if(runtime_config, do: runtime_config.model, else: "claude-sonnet-4-20250514")
+
     run_id = generate_run_id()
     request_trace_config = RequestTrace.config(opts)
 
     Logger.info("[Runner] Starting provider=#{provider} model=#{model}")
+
     Logger.info(
       "[Runner] Run context run_id=#{run_id} workspace=#{workspace || "-"} " <>
         "channel=#{Keyword.get(opts, :channel) || "-"} chat_id=#{Keyword.get(opts, :chat_id) || "-"} " <>
@@ -56,7 +71,11 @@ defmodule Nex.Agent.Runner do
     opts =
       opts
       |> Keyword.put(:workspace, workspace)
+      |> Keyword.put(:provider, provider)
+      |> Keyword.put(:model, model)
       |> Keyword.put(:run_id, run_id)
+      |> maybe_put_opt(:runtime_snapshot, runtime_snapshot)
+      |> maybe_put_opt(:runtime_version, runtime_snapshot && runtime_snapshot.version)
       |> Keyword.put(:request_trace, request_trace_config)
       |> Keyword.put(:skill_runtime, SkillRuntime.config(opts))
       |> Keyword.put_new(:_evolution_signals, default_evolution_signals())
@@ -78,6 +97,7 @@ defmodule Nex.Agent.Runner do
 
     messages =
       ContextBuilder.build_messages(history, prompt, channel, chat_id, media,
+        system_prompt: runtime_system_prompt(runtime_snapshot),
         skip_skills: Keyword.get(opts, :skip_skills, false),
         workspace: workspace,
         runtime_system_messages: runtime_system_messages,
@@ -774,6 +794,7 @@ defmodule Nex.Agent.Runner do
       end
 
     opts = Keyword.put(opts, :tools, tools)
+
     Logger.info(
       "[Runner] Dispatching LLM call run_id=#{Keyword.get(opts, :run_id)} " <>
         "iteration=#{Keyword.get(opts, :trace_iteration)} provider=#{Keyword.get(opts, :provider)} " <>
@@ -795,31 +816,79 @@ defmodule Nex.Agent.Runner do
   @valid_tool_name ~r/^[a-zA-Z][a-zA-Z0-9_-]*$/
 
   defp registry_definitions(filter, opts) do
+    runtime_definitions =
+      case Keyword.get(opts, :runtime_snapshot) do
+        %Snapshot{} = snapshot -> snapshot_tool_definitions(snapshot, filter)
+        _ -> nil
+      end
+
+    if is_list(runtime_definitions) do
+      runtime_definitions
+      |> append_ephemeral_tools(opts)
+      |> normalize_tool_definitions()
+    else
+      registry_definitions_from_registry(filter, opts)
+    end
+  end
+
+  defp registry_definitions_from_registry(filter, opts) do
     if Process.whereis(ToolRegistry) do
-      runtime_tools =
-        opts
-        |> Keyword.get(:skill_runtime_prepared_run, %Nex.SkillRuntime.PreparedRun{})
-        |> Map.get(:ephemeral_tools, [])
-
-      (ToolRegistry.definitions(filter) ++ runtime_tools)
-      |> Enum.filter(fn tool ->
-        name = tool["name"]
-
-        if valid_tool_name?(name) do
-          true
-        else
-          Logger.warning("[Runner] Dropping tool with invalid name: #{inspect(name)}")
-          false
-        end
-      end)
-      |> Enum.uniq_by(& &1["name"])
+      ToolRegistry.definitions(filter)
+      |> append_ephemeral_tools(opts)
+      |> normalize_tool_definitions()
     else
       []
     end
   end
 
+  defp append_ephemeral_tools(definitions, opts) do
+    runtime_tools =
+      opts
+      |> Keyword.get(:skill_runtime_prepared_run, %Nex.SkillRuntime.PreparedRun{})
+      |> Map.get(:ephemeral_tools, [])
+
+    definitions ++ runtime_tools
+  end
+
+  defp normalize_tool_definitions(definitions) do
+    definitions
+    |> Enum.filter(fn tool ->
+      name = tool["name"]
+
+      if valid_tool_name?(name) do
+        true
+      else
+        Logger.warning("[Runner] Dropping tool with invalid name: #{inspect(name)}")
+        false
+      end
+    end)
+    |> Enum.uniq_by(& &1["name"])
+  end
+
+  defp snapshot_tool_definitions(%Snapshot{} = snapshot, :subagent),
+    do: snapshot.tools.definitions_subagent
+
+  defp snapshot_tool_definitions(%Snapshot{} = snapshot, :cron),
+    do: snapshot.tools.definitions_cron
+
+  defp snapshot_tool_definitions(%Snapshot{} = snapshot, _filter),
+    do: snapshot.tools.definitions_all
+
   defp valid_tool_name?(name) when is_binary(name), do: Regex.match?(@valid_tool_name, name)
   defp valid_tool_name?(_), do: false
+
+  defp runtime_system_prompt(%Snapshot{} = snapshot), do: snapshot.prompt.system_prompt
+  defp runtime_system_prompt(_), do: nil
+
+  defp runtime_snapshot_from_opts(opts) do
+    case Keyword.get(opts, :runtime_snapshot) do
+      %Snapshot{} = snapshot ->
+        snapshot
+
+      _ ->
+        nil
+    end
+  end
 
   defp call_llm_real(messages, opts) do
     provider = Keyword.get(opts, :provider, :anthropic)
@@ -1480,7 +1549,8 @@ defmodule Nex.Agent.Runner do
 
   defp message_stats_log(messages) when is_list(messages) do
     counts =
-      Enum.reduce(messages, %{"system" => 0, "user" => 0, "assistant" => 0, "tool" => 0}, fn msg, acc ->
+      Enum.reduce(messages, %{"system" => 0, "user" => 0, "assistant" => 0, "tool" => 0}, fn msg,
+                                                                                             acc ->
         role = Map.get(msg, "role", "unknown")
         Map.update(acc, role, 1, &(&1 + 1))
       end)

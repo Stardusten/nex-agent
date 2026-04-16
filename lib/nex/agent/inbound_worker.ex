@@ -8,7 +8,8 @@ defmodule Nex.Agent.InboundWorker do
   use GenServer
   require Logger
 
-  alias Nex.Agent.{Bus, Config, MemoryUpdater, Workspace}
+  alias Nex.Agent.{Bus, Config, MemoryUpdater, Runtime, Workspace}
+  alias Nex.Agent.Runtime.Snapshot
 
   defstruct [
     :config,
@@ -95,7 +96,13 @@ defmodule Nex.Agent.InboundWorker do
       publish_outbound(payload, result)
     end
 
-    maybe_enqueue_memory_refresh(updated_agent, payload, from_cron, from_subagent)
+    maybe_enqueue_memory_refresh(
+      updated_agent,
+      payload,
+      from_cron,
+      from_subagent,
+      state.agent_prompt_fun
+    )
 
     {:noreply, maybe_drain_pending(state, key)}
   end
@@ -114,7 +121,13 @@ defmodule Nex.Agent.InboundWorker do
       publish_outbound(payload, "Error: #{format_reason(reason)}")
     end
 
-    maybe_enqueue_memory_refresh(updated_agent, payload, from_cron, from_subagent)
+    maybe_enqueue_memory_refresh(
+      updated_agent,
+      payload,
+      from_cron,
+      from_subagent,
+      state.agent_prompt_fun
+    )
 
     {:noreply, maybe_drain_pending(state, key)}
   end
@@ -469,10 +482,21 @@ defmodule Nex.Agent.InboundWorker do
   defp ensure_agent(state, key, session_key, workspace) do
     case Map.fetch(state.agents, key) do
       {:ok, agent} ->
-        # Reload session from SessionManager to get latest state
-        session = Nex.Agent.SessionManager.get_or_create(session_key, workspace: workspace)
-        updated_agent = %{agent | session: session, workspace: workspace}
-        {:ok, updated_agent, put_in(state.agents[key], updated_agent)}
+        if stale_agent?(agent) do
+          Logger.info(
+            "[InboundWorker] Rebuilding stale agent session=#{session_key} key=#{inspect(key)} " <>
+              "agent_runtime_version=#{inspect(agent_runtime_version(agent))} current_runtime_version=#{inspect(Runtime.current_version())}"
+          )
+
+          state
+          |> update_in([Access.key!(:agents)], &Map.delete(&1, key))
+          |> ensure_agent(key, session_key, workspace)
+        else
+          # Reload session from SessionManager to get latest state
+          session = Nex.Agent.SessionManager.get_or_create(session_key, workspace: workspace)
+          updated_agent = %{agent | session: session, workspace: workspace}
+          {:ok, updated_agent, put_in(state.agents[key], updated_agent)}
+        end
 
       :error ->
         opts = agent_start_opts(session_key, workspace)
@@ -489,6 +513,8 @@ defmodule Nex.Agent.InboundWorker do
         base_url = Keyword.get(opts, :base_url)
         cwd = Keyword.get(opts, :cwd, File.cwd!())
         max_iterations = Keyword.get(opts, :max_iterations, 40)
+        tools = Keyword.get(opts, :tools, %{})
+        runtime_version = Keyword.get(opts, :runtime_version)
 
         agent = %Nex.Agent{
           session_key: session_key,
@@ -497,9 +523,11 @@ defmodule Nex.Agent.InboundWorker do
           model: model,
           api_key: api_key,
           base_url: base_url,
+          tools: tools,
           workspace: workspace,
           cwd: cwd,
-          max_iterations: max_iterations
+          max_iterations: max_iterations,
+          runtime_version: runtime_version
         }
 
         {:ok, agent, put_in(state.agents[key], agent)}
@@ -507,8 +535,9 @@ defmodule Nex.Agent.InboundWorker do
   end
 
   defp agent_start_opts(session_key, workspace) do
-    config = Config.load()
     [channel, chat_id] = String.split(session_key, ":", parts: 2)
+    snapshot = runtime_snapshot_for_workspace(workspace)
+    config = if snapshot, do: snapshot.config, else: Config.load()
     provider = Config.provider_to_atom(config.provider)
     home = System.get_env("HOME", File.cwd!())
 
@@ -519,12 +548,55 @@ defmodule Nex.Agent.InboundWorker do
       base_url: Config.get_current_base_url(config),
       tools: config.tools,
       workspace: workspace,
+      runtime_snapshot: snapshot,
+      runtime_version: snapshot && snapshot.version,
       cwd: home,
       max_iterations: Config.get_max_iterations(config),
       channel: channel,
       chat_id: chat_id
     ]
   end
+
+  defp runtime_snapshot_for_workspace(workspace) do
+    expanded_workspace = Path.expand(workspace)
+
+    case Runtime.current() do
+      {:ok, %Snapshot{workspace: snapshot_workspace} = snapshot}
+      when is_binary(snapshot_workspace) ->
+        if Path.expand(snapshot_workspace) == expanded_workspace do
+          snapshot
+        else
+          case Runtime.reload(workspace: workspace) do
+            {:ok, %Snapshot{} = snapshot} -> snapshot
+            _ -> snapshot
+          end
+        end
+
+      {:ok, %Snapshot{} = snapshot} ->
+        snapshot
+
+      _ ->
+        nil
+    end
+  end
+
+  defp stale_agent?(%Nex.Agent{} = agent) do
+    case Runtime.current_version() do
+      current_version when is_integer(current_version) ->
+        case agent.runtime_version do
+          agent_version when is_integer(agent_version) -> current_version > agent_version
+          _ -> true
+        end
+
+      _ ->
+        false
+    end
+  end
+
+  defp stale_agent?(_agent), do: false
+
+  defp agent_runtime_version(%Nex.Agent{runtime_version: version}), do: version
+  defp agent_runtime_version(_agent), do: nil
 
   defp abort_session_agent(state, key) do
     case Map.fetch(state.agents, key) do
@@ -609,10 +681,37 @@ defmodule Nex.Agent.InboundWorker do
   defp maybe_put_opt(opts, _key, nil), do: opts
   defp maybe_put_opt(opts, key, value), do: Keyword.put(opts, key, value)
 
-  defp maybe_enqueue_memory_refresh(_agent, _payload, true, _from_subagent), do: :ok
-  defp maybe_enqueue_memory_refresh(_agent, _payload, _from_cron, true), do: :ok
+  defp maybe_enqueue_memory_refresh(_agent, _payload, true, _from_subagent, _prompt_fun), do: :ok
+  defp maybe_enqueue_memory_refresh(_agent, _payload, _from_cron, true, _prompt_fun), do: :ok
 
-  defp maybe_enqueue_memory_refresh(%Nex.Agent{} = agent, _payload, false, false) do
+  defp maybe_enqueue_memory_refresh(%Nex.Agent{} = agent, _payload, false, false, prompt_fun) do
+    if memory_refresh_allowed?(agent, prompt_fun) do
+      enqueue_memory_refresh(agent)
+    end
+  end
+
+  defp memory_refresh_allowed?(%Nex.Agent{} = agent, prompt_fun) do
+    metadata = agent.session.metadata || %{}
+
+    default_agent_prompt_fun?(prompt_fun) or
+      Map.has_key?(metadata, "memory_refresh_llm_call_fun") or
+      Map.has_key?(metadata, "memory_refresh_req_llm_generate_text_fun")
+  end
+
+  defp memory_refresh_allowed?(_agent, prompt_fun), do: default_agent_prompt_fun?(prompt_fun)
+
+  defp default_agent_prompt_fun?(fun) when is_function(fun, 3) do
+    info = Function.info(fun)
+
+    Keyword.get(info, :type) == :external and
+      Keyword.get(info, :module) == Nex.Agent and
+      Keyword.get(info, :name) == :prompt and
+      Keyword.get(info, :arity) == 3
+  end
+
+  defp default_agent_prompt_fun?(_fun), do: false
+
+  defp enqueue_memory_refresh(%Nex.Agent{} = agent) do
     MemoryUpdater.enqueue(
       agent.session,
       provider: agent.provider,

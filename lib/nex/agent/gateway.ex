@@ -12,6 +12,9 @@ defmodule Nex.Agent.Gateway do
   use GenServer
   require Logger
 
+  alias Nex.Agent.Runtime
+  alias Nex.Agent.Runtime.Snapshot
+
   defstruct [:config, :status, :started_at]
 
   @type status :: :stopped | :starting | :running | :stopping
@@ -52,12 +55,20 @@ defmodule Nex.Agent.Gateway do
     GenServer.call(__MODULE__, {:send_message, message}, :infinity)
   end
 
+  @doc "Reconcile channel children against the latest runtime snapshot."
+  @spec reconcile(term()) :: :ok | {:error, term()}
+  def reconcile(event \\ nil) do
+    GenServer.call(__MODULE__, {:reconcile, event}, :infinity)
+  end
+
   # GenServer callbacks
 
   @impl true
   def init(_opts) do
+    config = runtime_config() || Nex.Agent.Config.load()
+
     state = %__MODULE__{
-      config: Nex.Agent.Config.load(),
+      config: config,
       status: :stopped,
       started_at: nil
     }
@@ -118,6 +129,29 @@ defmodule Nex.Agent.Gateway do
   end
 
   @impl true
+  def handle_call({:reconcile, _event}, _from, %{status: :running} = state) do
+    case runtime_snapshot() do
+      %Snapshot{config: config} ->
+        old_config = state.config
+        reconcile_channels(old_config, config)
+        {:reply, :ok, %{state | config: config}}
+
+      _ ->
+        {:reply, {:error, :runtime_unavailable}, state}
+    end
+  end
+
+  def handle_call({:reconcile, _event}, _from, state) do
+    case runtime_snapshot() do
+      %Snapshot{config: config} ->
+        {:reply, :ok, %{state | config: config}}
+
+      _ ->
+        {:reply, {:error, :runtime_unavailable}, state}
+    end
+  end
+
+  @impl true
   def handle_call({:send_message, message}, _from, %{status: :running} = state) do
     case do_send_message(message) do
       {:ok, response} ->
@@ -135,8 +169,8 @@ defmodule Nex.Agent.Gateway do
   # --- Private ---
 
   defp do_start(state) do
-    # Reload config to pick up any changes
-    config = Nex.Agent.Config.load()
+    # Refresh from the runtime snapshot to pick up a consistent world view.
+    config = runtime_config() || Nex.Agent.Config.load()
     state = %{state | config: config}
 
     if Nex.Agent.Config.valid?(config) do
@@ -191,6 +225,31 @@ defmodule Nex.Agent.Gateway do
     end
   end
 
+  defp reconcile_channels(old_config, new_config) do
+    channel_modules()
+    |> Enum.each(fn {module, enabled_fun, connection_fun} ->
+      old_enabled = apply(Nex.Agent.Config, enabled_fun, [old_config])
+      new_enabled = apply(Nex.Agent.Config, enabled_fun, [new_config])
+      old_connection = connection_fun.(old_config)
+      new_connection = connection_fun.(new_config)
+
+      cond do
+        old_enabled != new_enabled ->
+          if new_enabled do
+            start_channel(module, new_config)
+          else
+            stop_channel(module)
+          end
+
+        new_enabled and old_connection != new_connection ->
+          restart_channel(module, new_config)
+
+        true ->
+          :ok
+      end
+    end)
+  end
+
   defp stop_channels do
     # Stop Feishu websocket first
     if Process.whereis(Nex.Agent.Channel.Feishu) do
@@ -204,6 +263,58 @@ defmodule Nex.Agent.Gateway do
       end)
     end
   end
+
+  defp start_channel(module, config) do
+    if Process.whereis(Nex.Agent.ChannelSupervisor) do
+      case DynamicSupervisor.start_child(Nex.Agent.ChannelSupervisor, {module, config: config}) do
+        {:ok, _pid} ->
+          maybe_start_channel_socket(module)
+
+        {:error, {:already_started, _pid}} ->
+          maybe_start_channel_socket(module)
+
+        {:error, reason} ->
+          Logger.warning("[Gateway] Failed to start #{inspect(module)}: #{inspect(reason)}")
+      end
+    end
+  end
+
+  defp stop_channel(module) do
+    maybe_stop_channel_socket(module)
+
+    case Process.whereis(module) do
+      nil ->
+        :ok
+
+      pid ->
+        if Process.whereis(Nex.Agent.ChannelSupervisor) do
+          DynamicSupervisor.terminate_child(Nex.Agent.ChannelSupervisor, pid)
+        else
+          GenServer.stop(pid)
+        end
+    end
+  end
+
+  defp restart_channel(module, config) do
+    stop_channel(module)
+    start_channel(module, config)
+  end
+
+  defp maybe_start_channel_socket(Nex.Agent.Channel.Feishu) do
+    if Process.whereis(Nex.Agent.Channel.Feishu) do
+      _ = Nex.Agent.Channel.Feishu.start_websocket()
+    end
+  end
+
+  defp maybe_start_channel_socket(_module), do: :ok
+
+  defp maybe_stop_channel_socket(Nex.Agent.Channel.Feishu) do
+    if Process.whereis(Nex.Agent.Channel.Feishu) do
+      _ = Nex.Agent.Channel.Feishu.stop_websocket()
+    end
+  end
+
+  defp maybe_stop_channel_socket(_module), do: :ok
 
   defp channel_specs(config) do
     specs = []
@@ -236,19 +347,33 @@ defmodule Nex.Agent.Gateway do
     specs
   end
 
+  defp channel_modules do
+    [
+      {Nex.Agent.Channel.Telegram, :telegram_enabled?, &Nex.Agent.Config.telegram/1},
+      {Nex.Agent.Channel.Feishu, :feishu_enabled?, &Nex.Agent.Config.feishu/1},
+      {Nex.Agent.Channel.Discord, :discord_enabled?, &Nex.Agent.Config.discord/1},
+      {Nex.Agent.Channel.Slack, :slack_enabled?, &Nex.Agent.Config.slack/1},
+      {Nex.Agent.Channel.DingTalk, :dingtalk_enabled?, &Nex.Agent.Config.dingtalk/1}
+    ]
+  end
+
   defp do_send_message(message) do
-    config = Nex.Agent.Config.load()
+    snapshot = runtime_snapshot()
+    config = if snapshot, do: snapshot.config, else: Nex.Agent.Config.load()
 
     api_key = Nex.Agent.Config.get_current_api_key(config)
     base_url = Nex.Agent.Config.get_current_base_url(config)
 
-    opts = [
-      provider: Nex.Agent.Config.provider_to_atom(config.provider),
-      model: config.model,
-      api_key: api_key,
-      base_url: base_url,
-      tools: config.tools
-    ]
+    opts =
+      [
+        provider: Nex.Agent.Config.provider_to_atom(config.provider),
+        model: config.model,
+        api_key: api_key,
+        base_url: base_url,
+        tools: config.tools
+      ]
+      |> maybe_put(:runtime_snapshot, snapshot)
+      |> maybe_put(:runtime_version, snapshot && snapshot.version)
 
     case Nex.Agent.start(opts) do
       {:ok, agent} ->
@@ -264,4 +389,21 @@ defmodule Nex.Agent.Gateway do
         {:error, reason}
     end
   end
+
+  defp runtime_config do
+    case runtime_snapshot() do
+      %Snapshot{config: config} -> config
+      _ -> nil
+    end
+  end
+
+  defp runtime_snapshot do
+    case Runtime.current() do
+      {:ok, %Snapshot{} = snapshot} -> snapshot
+      _ -> nil
+    end
+  end
+
+  defp maybe_put(opts, _key, nil), do: opts
+  defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
 end
