@@ -11,6 +11,7 @@ defmodule Nex.Agent.InboundWorker do
   alias Nex.Agent.{Bus, Config, MemoryUpdater, Outbound, Runtime, Workspace}
   alias Nex.Agent.Channel.Feishu
   alias Nex.Agent.Channel.Feishu.StreamConverter
+  alias Nex.Agent.Channel.Feishu.StreamState, as: FeishuStreamState
   alias Nex.Agent.Inbound.Envelope
   alias Nex.Agent.Runtime.Snapshot
   alias Nex.Agent.Stream.Result
@@ -223,7 +224,7 @@ defmodule Nex.Agent.InboundWorker do
   @impl true
   def handle_info({:stream_state_event, key, event}, state) do
     case Map.fetch(state.stream_states, key) do
-      {:ok, {:feishu, stream_state}} ->
+      {:ok, {:feishu, %FeishuStreamState{} = stream_state}} ->
         case apply_feishu_stream_event(stream_state, key, event) do
           {:ok, updated} ->
             {:noreply, put_in(state.stream_states[key], {:feishu, updated})}
@@ -250,7 +251,7 @@ defmodule Nex.Agent.InboundWorker do
   @impl true
   def handle_info({:flush_feishu_stream, key}, state) do
     case Map.fetch(state.stream_states, key) do
-      {:ok, {:feishu, stream_state}} ->
+      {:ok, {:feishu, %FeishuStreamState{} = stream_state}} ->
         case flush_feishu_stream(stream_state) do
           {:ok, updated} ->
             {:noreply, put_in(state.stream_states[key], {:feishu, updated})}
@@ -423,7 +424,7 @@ defmodule Nex.Agent.InboundWorker do
             parent,
             {:stream_state_started,
              key,
-             {:feishu, %{converter: converter, pending_text: "", flush_timer_ref: nil}}}
+             {:feishu, %FeishuStreamState{converter: converter}}}
           )
 
           fn
@@ -798,11 +799,11 @@ defmodule Nex.Agent.InboundWorker do
 
   defp finalize_stream_session(state, key, result) do
     case Map.fetch(state.stream_states, key) do
-      {:ok, {:feishu, stream_state}} ->
+      {:ok, {:feishu, %FeishuStreamState{} = stream_state}} ->
         stream_state = cancel_feishu_flush(stream_state)
 
         case flush_feishu_stream(stream_state) do
-          {:ok, %{converter: converter}} ->
+          {:ok, %FeishuStreamState{converter: converter}} ->
             finalize_fun =
               case result do
                 {:ok, _value} -> &StreamConverter.finish/1
@@ -884,24 +885,26 @@ defmodule Nex.Agent.InboundWorker do
 
   defp streaming_error_message(reason), do: format_reason(reason)
 
-  defp schedule_feishu_flush(%{flush_timer_ref: nil} = stream_state, key) do
+  defp schedule_feishu_flush(%FeishuStreamState{flush_timer_ref: nil} = stream_state, key) do
     %{stream_state | flush_timer_ref: Process.send_after(self(), {:flush_feishu_stream, key}, @feishu_stream_flush_ms)}
   end
 
   defp schedule_feishu_flush(stream_state, _key), do: stream_state
 
-  defp cancel_feishu_flush(%{flush_timer_ref: nil} = stream_state), do: stream_state
+  defp cancel_feishu_flush(%FeishuStreamState{flush_timer_ref: nil} = stream_state), do: stream_state
 
-  defp cancel_feishu_flush(%{flush_timer_ref: ref} = stream_state) do
+  defp cancel_feishu_flush(%FeishuStreamState{flush_timer_ref: ref} = stream_state) do
     Process.cancel_timer(ref)
     %{stream_state | flush_timer_ref: nil}
   end
 
-  defp flush_feishu_stream(%{pending_text: ""} = stream_state) do
+  defp flush_feishu_stream(%FeishuStreamState{pending_text: ""} = stream_state) do
     {:ok, %{stream_state | flush_timer_ref: nil}}
   end
 
-  defp flush_feishu_stream(%{converter: converter, pending_text: pending_text} = stream_state) do
+  defp flush_feishu_stream(
+         %FeishuStreamState{converter: converter, pending_text: pending_text} = stream_state
+       ) do
     case StreamConverter.push_text(converter, pending_text) do
       {:ok, updated_converter} ->
         {:ok, %{stream_state | converter: updated_converter, pending_text: "", flush_timer_ref: nil}}
@@ -911,7 +914,11 @@ defmodule Nex.Agent.InboundWorker do
     end
   end
 
-  defp apply_feishu_stream_event(%{pending_text: pending_text} = stream_state, key, {:text, chunk})
+  defp apply_feishu_stream_event(
+         %FeishuStreamState{pending_text: pending_text} = stream_state,
+         key,
+         {:text, chunk}
+       )
        when is_binary(chunk) do
     updated =
       %{stream_state | pending_text: pending_text <> chunk}
@@ -925,7 +932,7 @@ defmodule Nex.Agent.InboundWorker do
   end
 
   defp apply_feishu_stream_event(stream_state, _key, {:error, message}) do
-    with {:ok, %{converter: converter} = stream_state} <-
+    with {:ok, %FeishuStreamState{converter: converter} = stream_state} <-
            flush_feishu_stream(cancel_feishu_flush(stream_state)),
          {:ok, updated_converter} <- StreamConverter.fail(converter, message) do
       {:ok, %{stream_state | converter: updated_converter}}

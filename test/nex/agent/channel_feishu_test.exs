@@ -234,6 +234,10 @@ defmodule Nex.Agent.Channel.FeishuTest do
   end
 
   test "stream converter creates a new card immediately on newmsg boundary", %{pid: _pid} do
+    drain_http_posts()
+    drain_http_posts_multipart()
+    _ = collect_http_puts([])
+
     assert {:ok, converter} = StreamConverter.start("ou_123", %{})
     assert {:ok, converter} = StreamConverter.push_text(converter, "first\n<newmsg/>\nsec")
     assert {:ok, converter2} = StreamConverter.push_text(converter, "ond")

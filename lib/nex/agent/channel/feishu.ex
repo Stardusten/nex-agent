@@ -356,6 +356,18 @@ defmodule Nex.Agent.Channel.Feishu do
   end
 
   @impl true
+  def handle_call({:update_card, card_id, content, sequence}, _from, state) do
+    case do_update_card(card_id, content, sequence, state) do
+      {:ok, new_state} ->
+        {:reply, :ok, new_state}
+
+      {:error, reason, new_state} ->
+        Logger.warning("[Feishu] CardKit update failed: #{inspect(reason)}")
+        {:reply, {:error, reason}, new_state}
+    end
+  end
+
+  @impl true
   def handle_info({:bus_message, :feishu_outbound, payload}, state) when is_map(payload) do
     outbound = outbound_from_payload(payload)
 
@@ -460,18 +472,6 @@ defmodule Nex.Agent.Channel.Feishu do
 
   @impl true
   def handle_info(_msg, state), do: {:noreply, state}
-
-  @impl true
-  def handle_call({:update_card, card_id, content, sequence}, _from, state) do
-    case do_update_card(card_id, content, sequence, state) do
-      {:ok, new_state} ->
-        {:reply, :ok, new_state}
-
-      {:error, reason, new_state} ->
-        Logger.warning("[Feishu] CardKit update failed: #{inspect(reason)}")
-        {:reply, {:error, reason}, new_state}
-    end
-  end
 
   defp add_reaction(_message_id, %{react_emoji: ""}), do: :ok
   defp add_reaction(_, %{enabled: false}), do: :ok

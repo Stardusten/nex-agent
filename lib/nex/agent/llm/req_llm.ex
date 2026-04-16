@@ -37,7 +37,7 @@ defmodule Nex.Agent.LLM.ReqLLM do
       case stream_text_fun.(model_spec, req_messages, req_options) do
         {:ok, %StreamResponse{} = response} ->
           state =
-            Enum.reduce(response.stream, %{tool_calls: []}, fn chunk, acc ->
+            Enum.reduce(response.stream, %{tool_calls: [], started_at: started_at}, fn chunk, acc ->
               handle_stream_chunk(chunk, callback, acc)
             end)
 
@@ -60,7 +60,7 @@ defmodule Nex.Agent.LLM.ReqLLM do
           state =
             Enum.reduce(
               Map.get(response, :stream) || Map.get(response, "stream") || [],
-              %{tool_calls: []},
+              %{tool_calls: [], started_at: started_at},
               fn chunk, acc ->
                 handle_stream_chunk(chunk, callback, acc)
               end
@@ -257,10 +257,18 @@ defmodule Nex.Agent.LLM.ReqLLM do
   defp handle_stream_chunk(chunk, callback, state) do
     case normalize_stream_event(chunk) do
       {:delta, text} ->
+        Logger.debug(
+          "[ReqLLM] stream delta elapsed_ms=#{elapsed_ms(state)} bytes=#{byte_size(text)} preview=#{inspect(stream_preview(text))}"
+        )
+
         callback.({:delta, text})
         state
 
       {:thinking, text} ->
+        Logger.info(
+          "[ReqLLM] stream thinking elapsed_ms=#{elapsed_ms(state)} bytes=#{byte_size(text)} preview=#{inspect(stream_preview(text))}"
+        )
+
         callback.({:thinking, text})
         state
 
@@ -304,6 +312,18 @@ defmodule Nex.Agent.LLM.ReqLLM do
   end
 
   defp normalize_stream_event(_), do: nil
+
+  defp elapsed_ms(%{started_at: started_at}) when is_integer(started_at) do
+    System.monotonic_time(:millisecond) - started_at
+  end
+
+  defp elapsed_ms(_state), do: nil
+
+  defp stream_preview(text) when is_binary(text) do
+    text
+    |> String.replace("\n", "\\n")
+    |> String.slice(0, 120)
+  end
 
   defp to_req_llm_tool_calls(tool_calls) when is_list(tool_calls) do
     Enum.map(tool_calls, fn tool_call ->

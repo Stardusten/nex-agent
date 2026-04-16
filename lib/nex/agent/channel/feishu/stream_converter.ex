@@ -54,29 +54,17 @@ defmodule Nex.Agent.Channel.Feishu.StreamConverter do
   def push_text(%__MODULE__{} = state, text_chunk) when is_binary(text_chunk) do
     data = state.pending_buffer <> text_chunk
 
-    if String.contains?(data, @new_message_token) do
-      Logger.info(
-        "[FeishuStreamConverter] push_text newmsg data=#{inspect(data)} active_text=#{inspect(state.active_text)} pending_buffer=#{inspect(state.pending_buffer)} in_code=#{state.in_code_block?}"
-      )
-    end
-
     {processable, pending_buffer} = split_processable(data)
 
     with {:ok, state} <- consume(state, processable) do
-      {:ok, reconcile_state(%{state | pending_buffer: pending_buffer})}
+      {:ok, %{state | pending_buffer: pending_buffer}}
     end
   end
 
   @spec finish(t()) :: {:ok, t()} | {:error, term()}
   def finish(%__MODULE__{} = state) do
-    if String.contains?(state.pending_buffer, @new_message_token) do
-      Logger.info(
-        "[FeishuStreamConverter] finish pending_buffer=#{inspect(state.pending_buffer)} active_text=#{inspect(state.active_text)} in_code=#{state.in_code_block?}"
-      )
-    end
-
     with {:ok, state} <- consume(%{state | pending_buffer: ""}, state.pending_buffer) do
-      {:ok, reconcile_state(%{state | completed: true})}
+      {:ok, %{state | completed: true}}
     end
   end
 
@@ -175,17 +163,9 @@ defmodule Nex.Agent.Channel.Feishu.StreamConverter do
     case Regex.run(~r/\A[ \t]*<newmsg\/>[ \t]*(?:\n|$)/, string) do
       [match] ->
         if separator_line_start?(state, segment) do
-          Logger.info(
-            "[FeishuStreamConverter] matched newmsg segment=#{inspect(segment)} string=#{inspect(string)} active_text=#{inspect(state.active_text)}"
-          )
-
           rest = String.replace_prefix(string, match, "")
           {:match, strip_separator_indent(segment), String.trim_leading(rest, "\n")}
         else
-          Logger.info(
-            "[FeishuStreamConverter] rejected newmsg-not-line-start segment=#{inspect(segment)} string=#{inspect(string)} active_text=#{inspect(state.active_text)}"
-          )
-
           :no_match
         end
 
@@ -279,7 +259,8 @@ defmodule Nex.Agent.Channel.Feishu.StreamConverter do
          | active_card_id: card_id,
            active_sequence: 1,
            active_text: content,
-           current_line: next_current_line(content)
+           current_line: next_current_line(content),
+           in_code_block?: false
        }}
     end
   end
@@ -302,17 +283,5 @@ defmodule Nex.Agent.Channel.Feishu.StreamConverter do
     text
     |> String.split("\n")
     |> List.last()
-  end
-
-  defp reconcile_state(%__MODULE__{} = state) do
-    %{state | current_line: next_current_line(state.active_text), in_code_block?: in_code_block?(state.active_text)}
-  end
-
-  defp in_code_block?(text) when is_binary(text) do
-    text
-    |> String.split("\n")
-    |> Enum.reduce(false, fn line, in_code? ->
-      if String.starts_with?(line, @code_fence), do: not in_code?, else: in_code?
-    end)
   end
 end
