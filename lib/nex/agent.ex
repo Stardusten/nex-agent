@@ -287,10 +287,7 @@ defmodule Nex.Agent do
         if Path.expand(snapshot_workspace) == expanded_workspace do
           snapshot
         else
-          case Runtime.reload(workspace: workspace) do
-            {:ok, %Nex.Agent.Runtime.Snapshot{} = snapshot} -> snapshot
-            _ -> snapshot
-          end
+          nil
         end
 
       {:ok, %Nex.Agent.Runtime.Snapshot{} = snapshot} ->

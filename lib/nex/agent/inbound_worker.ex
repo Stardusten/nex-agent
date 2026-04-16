@@ -501,36 +501,17 @@ defmodule Nex.Agent.InboundWorker do
       :error ->
         opts = agent_start_opts(session_key, workspace)
 
-        session = Nex.Agent.SessionManager.get_or_create(session_key, workspace: workspace)
-
         Logger.info(
-          "InboundWorker creating new agent session=#{session.key} for key=#{inspect(key)}"
+          "InboundWorker creating new agent session=#{session_key} for key=#{inspect(key)}"
         )
 
-        provider = Keyword.get(opts, :provider, :openai)
-        model = Keyword.get(opts, :model, "gpt-4o")
-        api_key = Keyword.get(opts, :api_key)
-        base_url = Keyword.get(opts, :base_url)
-        cwd = Keyword.get(opts, :cwd, File.cwd!())
-        max_iterations = Keyword.get(opts, :max_iterations, 40)
-        tools = Keyword.get(opts, :tools, %{})
-        runtime_version = Keyword.get(opts, :runtime_version)
+        case state.agent_start_fun.(opts) do
+          {:ok, agent} ->
+            {:ok, agent, put_in(state.agents[key], agent)}
 
-        agent = %Nex.Agent{
-          session_key: session_key,
-          session: session,
-          provider: provider,
-          model: model,
-          api_key: api_key,
-          base_url: base_url,
-          tools: tools,
-          workspace: workspace,
-          cwd: cwd,
-          max_iterations: max_iterations,
-          runtime_version: runtime_version
-        }
-
-        {:ok, agent, put_in(state.agents[key], agent)}
+          {:error, reason} ->
+            raise "failed to start agent for #{session_key}: #{inspect(reason)}"
+        end
     end
   end
 
@@ -566,10 +547,7 @@ defmodule Nex.Agent.InboundWorker do
         if Path.expand(snapshot_workspace) == expanded_workspace do
           snapshot
         else
-          case Runtime.reload(workspace: workspace) do
-            {:ok, %Snapshot{} = snapshot} -> snapshot
-            _ -> snapshot
-          end
+          nil
         end
 
       {:ok, %Snapshot{} = snapshot} ->
@@ -581,12 +559,17 @@ defmodule Nex.Agent.InboundWorker do
   end
 
   defp stale_agent?(%Nex.Agent{} = agent) do
-    case Runtime.current_version() do
-      current_version when is_integer(current_version) ->
-        case agent.runtime_version do
-          agent_version when is_integer(agent_version) -> current_version > agent_version
-          _ -> true
+    case Runtime.current() do
+      {:ok, %Snapshot{version: current_version, workspace: snapshot_workspace}}
+      when is_integer(current_version) and is_binary(snapshot_workspace) ->
+        if same_workspace?(snapshot_workspace, agent.workspace) do
+          stale_agent_runtime_version?(agent, current_version)
+        else
+          false
         end
+
+      {:ok, %Snapshot{version: current_version}} when is_integer(current_version) ->
+        stale_agent_runtime_version?(agent, current_version)
 
       _ ->
         false
@@ -594,6 +577,19 @@ defmodule Nex.Agent.InboundWorker do
   end
 
   defp stale_agent?(_agent), do: false
+
+  defp stale_agent_runtime_version?(%Nex.Agent{} = agent, current_version) do
+    case agent.runtime_version do
+      agent_version when is_integer(agent_version) -> current_version > agent_version
+      _ -> true
+    end
+  end
+
+  defp same_workspace?(left, right) when is_binary(left) and is_binary(right) do
+    Path.expand(left) == Path.expand(right)
+  end
+
+  defp same_workspace?(_left, _right), do: false
 
   defp agent_runtime_version(%Nex.Agent{runtime_version: version}), do: version
   defp agent_runtime_version(_agent), do: nil

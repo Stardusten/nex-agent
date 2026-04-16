@@ -1,7 +1,7 @@
 defmodule Nex.Agent.InboundWorkerTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{Bus, InboundWorker, Memory, MemoryUpdater, Runner, Session, SessionManager, Skills}
+  alias Nex.Agent.{Bus, InboundWorker, Memory, Runner, Runtime, Session, Skills}
 
   setup do
     workspace =
@@ -168,6 +168,118 @@ defmodule Nex.Agent.InboundWorkerTest do
            ]
   end
 
+  test "inbound worker creates new agents through configured agent_start_fun", %{
+    workspace: workspace
+  } do
+    parent = self()
+    worker_name = String.to_atom("inbound_worker_start_fun_#{System.unique_integer([:positive])}")
+
+    start_fun = fn opts ->
+      send(parent, {:agent_start_opts, opts})
+
+      session_key = "#{Keyword.fetch!(opts, :channel)}:#{Keyword.fetch!(opts, :chat_id)}"
+
+      {:ok,
+       %Nex.Agent{
+         session_key: session_key,
+         session: Session.new(session_key),
+         provider: Keyword.fetch!(opts, :provider),
+         model: Keyword.fetch!(opts, :model),
+         api_key: Keyword.get(opts, :api_key),
+         base_url: Keyword.get(opts, :base_url),
+         tools: Keyword.get(opts, :tools, %{}),
+         workspace: Keyword.fetch!(opts, :workspace),
+         cwd: Keyword.fetch!(opts, :cwd),
+         max_iterations: Keyword.fetch!(opts, :max_iterations),
+         runtime_version: Keyword.get(opts, :runtime_version)
+       }}
+    end
+
+    prompt_fun = fn agent, prompt, _opts ->
+      send(parent, {:prompt_agent, agent, prompt})
+      {:ok, "done", agent}
+    end
+
+    start_supervised!(
+      {InboundWorker, name: worker_name, agent_start_fun: start_fun, agent_prompt_fun: prompt_fun}
+    )
+
+    send(Process.whereis(worker_name), {
+      :bus_message,
+      :inbound,
+      %{channel: "feishu", chat_id: "chat-start", content: "hello"}
+    })
+
+    assert_receive {:agent_start_opts, opts}, 1_000
+    assert Keyword.get(opts, :workspace) == workspace
+    assert Keyword.get(opts, :channel) == "feishu"
+    assert Keyword.get(opts, :chat_id) == "chat-start"
+
+    assert_receive {:prompt_agent, %Nex.Agent{} = agent, "hello"}, 1_000
+    assert agent.session_key == "feishu:chat-start"
+  end
+
+  test "inbound workspace mismatch does not rewrite global runtime snapshot", %{
+    workspace: workspace
+  } do
+    other_workspace =
+      Path.join(
+        System.tmp_dir!(),
+        "nex-agent-inbound-other-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(Path.join(other_workspace, "memory"))
+    File.write!(Path.join(other_workspace, "AGENTS.md"), "# Other AGENTS\n")
+    File.write!(Path.join(other_workspace, "memory/MEMORY.md"), "# Memory\n")
+
+    on_exit(fn -> File.rm_rf!(other_workspace) end)
+
+    assert {:ok, snapshot_before} = Runtime.reload(workspace: workspace)
+    assert snapshot_before.workspace == workspace
+
+    parent = self()
+    worker_name = String.to_atom("inbound_worker_workspace_#{System.unique_integer([:positive])}")
+
+    start_fun = fn opts ->
+      send(parent, {:agent_start_opts, opts})
+
+      session_key = "#{Keyword.fetch!(opts, :channel)}:#{Keyword.fetch!(opts, :chat_id)}"
+
+      {:ok,
+       %Nex.Agent{
+         session_key: session_key,
+         session: Session.new(session_key),
+         provider: Keyword.fetch!(opts, :provider),
+         model: Keyword.fetch!(opts, :model),
+         workspace: Keyword.fetch!(opts, :workspace),
+         cwd: Keyword.fetch!(opts, :cwd),
+         max_iterations: Keyword.fetch!(opts, :max_iterations),
+         runtime_version: Keyword.get(opts, :runtime_version)
+       }}
+    end
+
+    prompt_fun = fn agent, _prompt, _opts -> {:ok, "done", agent} end
+
+    start_supervised!(
+      {InboundWorker, name: worker_name, agent_start_fun: start_fun, agent_prompt_fun: prompt_fun}
+    )
+
+    send(Process.whereis(worker_name), {
+      :bus_message,
+      :inbound,
+      %{channel: "feishu", chat_id: "chat-other", content: "hello", workspace: other_workspace}
+    })
+
+    assert_receive {:agent_start_opts, opts}, 1_000
+    assert Keyword.get(opts, :workspace) == Path.expand(other_workspace)
+    assert Keyword.get(opts, :runtime_snapshot) == nil
+    assert Keyword.get(opts, :runtime_version) == nil
+
+    assert {:ok, snapshot_after} = Runtime.current()
+    assert snapshot_after.workspace == workspace
+    assert snapshot_after.version == snapshot_before.version
+  end
+
   test "feishu reply via message tool does not append duplicate narration", %{
     workspace: workspace
   } do
@@ -252,18 +364,17 @@ defmodule Nex.Agent.InboundWorkerTest do
         |> then(fn session ->
           metadata =
             Map.merge(session.metadata || %{}, %{
-              "memory_refresh_llm_call_fun" =>
-                fn _messages, _llm_opts ->
-                  send(parent, :memory_refresh_started)
-                  Process.sleep(200)
+              "memory_refresh_llm_call_fun" => fn _messages, _llm_opts ->
+                send(parent, :memory_refresh_started)
+                Process.sleep(200)
 
-                  {:ok,
-                   %{
-                     "status" => "update",
-                     "memory_update" =>
-                       "# Long-term Memory\n\n## User Preferences\n- Likes concise replies.\n"
-                   }}
-                end
+                {:ok,
+                 %{
+                   "status" => "update",
+                   "memory_update" =>
+                     "# Long-term Memory\n\n## User Preferences\n- Likes concise replies.\n"
+                 }}
+              end
             })
 
           %{session | metadata: metadata}
