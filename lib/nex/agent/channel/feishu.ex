@@ -12,10 +12,13 @@ defmodule Nex.Agent.Channel.Feishu do
   require Logger
 
   alias Nex.Agent.{Bus, Config}
+  alias Nex.Agent.Channel.Feishu.CardBuilder
   alias Nex.Agent.Channel.Feishu.{Frame, WSClient}
+  alias Nex.Agent.Channel.Feishu.OutboundMedia
   alias Nex.Agent.Inbound.Envelope
-  alias Nex.Agent.IMIR.Renderers.Feishu, as: FeishuRenderer
+  alias Nex.Agent.IMIR.Text, as: IMText
   alias Nex.Agent.Media.{Hydrator, Ref}
+  alias Nex.Agent.Outbound.Message, as: OutboundMessage
 
   @feishu_api "https://open.feishu.cn/open-apis"
   @feishu_ws_endpoint "https://open.feishu.cn/callback/ws/endpoint"
@@ -31,7 +34,7 @@ defmodule Nex.Agent.Channel.Feishu do
     :react_emoji,
     :enabled,
     :http_post_fun,
-    :http_patch_fun,
+    :http_put_fun,
     :http_post_multipart_fun,
     :http_get_fun,
     :tenant_access_token,
@@ -55,7 +58,7 @@ defmodule Nex.Agent.Channel.Feishu do
           react_emoji: String.t(),
           enabled: boolean(),
           http_post_fun: (String.t(), map(), keyword() -> {:ok, map()} | {:error, term()}),
-          http_patch_fun: (String.t(), map(), keyword() -> {:ok, map()} | {:error, term()}),
+          http_put_fun: (String.t(), map(), keyword() -> {:ok, map()} | {:error, term()}),
           http_post_multipart_fun: (String.t(), keyword(), keyword() ->
                                       {:ok, map()} | {:error, term()}),
           http_get_fun: (String.t(), keyword() -> {:ok, map()} | {:error, term()}),
@@ -89,24 +92,52 @@ defmodule Nex.Agent.Channel.Feishu do
   @doc "Send a message synchronously and confirm whether Feishu accepted it."
   @spec deliver_message(String.t(), String.t() | nil, map()) :: :ok | {:error, term()}
   def deliver_message(chat_id, content, metadata \\ %{}) do
-    if Process.whereis(__MODULE__) do
-      GenServer.call(__MODULE__, {:send_message, chat_id, content, metadata}, 15_000)
-    else
-      {:error, :feishu_not_running}
-    end
+    deliver_outbound(%OutboundMessage{
+      channel: "feishu",
+      chat_id: to_string(chat_id),
+      text: content,
+      metadata: stringify_keys(metadata || %{})
+    })
   end
 
   @doc "Upload a local image and send it as a native Feishu image message."
   @spec deliver_local_image(String.t(), String.t(), map()) :: :ok | {:error, term()}
   def deliver_local_image(chat_id, image_path, metadata \\ %{}) do
+    expanded_path = Path.expand(image_path)
+
+    attachment = %Nex.Agent.Media.Attachment{
+      id: "out_" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower),
+      channel: "feishu",
+      kind: :image,
+      mime_type: MIME.from_path(expanded_path) || "image/jpeg",
+      filename: Path.basename(expanded_path),
+      local_path: expanded_path,
+      size_bytes: File.stat!(expanded_path).size,
+      source: :generated,
+      platform_ref: %{},
+      metadata: %{}
+    }
+
+    deliver_outbound(%OutboundMessage{
+      channel: "feishu",
+      chat_id: to_string(chat_id),
+      attachments: [attachment],
+      metadata: stringify_keys(metadata || %{})
+    })
+  rescue
+    error -> {:error, error}
+  end
+
+  @spec deliver_outbound(OutboundMessage.t()) :: :ok | {:ok, [String.t()]} | {:error, term()}
+  def deliver_outbound(%OutboundMessage{} = outbound) do
     if Process.whereis(__MODULE__) do
-      GenServer.call(__MODULE__, {:send_local_image, chat_id, image_path, metadata}, 30_000)
+      GenServer.call(__MODULE__, {:send_outbound, outbound}, 30_000)
     else
       {:error, :feishu_not_running}
     end
   end
 
-  @doc "Send an interactive card and return its message_id for subsequent PATCH updates."
+  @doc "Send an interactive CardKit card and return its message_id for subsequent updates."
   @spec send_card(String.t(), String.t(), map()) :: {:ok, String.t()} | {:error, term()}
   def send_card(chat_id, content, metadata \\ %{}) do
     if Process.whereis(__MODULE__) do
@@ -116,11 +147,22 @@ defmodule Nex.Agent.Channel.Feishu do
     end
   end
 
-  @doc "Update an existing card message via PATCH."
-  @spec update_card(String.t(), String.t()) :: :ok | {:error, term()}
-  def update_card(message_id, content) do
+  @doc false
+  @spec open_stream_card(String.t(), String.t(), map()) ::
+          {:ok, %{message_id: String.t(), card_id: String.t()}} | {:error, term()}
+  def open_stream_card(chat_id, content, metadata \\ %{}) do
     if Process.whereis(__MODULE__) do
-      GenServer.cast(__MODULE__, {:update_card, message_id, content})
+      GenServer.call(__MODULE__, {:open_stream_card, chat_id, content, metadata}, 15_000)
+    else
+      {:error, :feishu_not_running}
+    end
+  end
+
+  @doc "Update an existing CardKit card content element."
+  @spec update_card(String.t(), String.t(), pos_integer()) :: :ok | {:error, term()}
+  def update_card(card_id, content, sequence) do
+    if Process.whereis(__MODULE__) do
+      GenServer.call(__MODULE__, {:update_card, card_id, content, sequence}, 15_000)
     else
       {:error, :feishu_not_running}
     end
@@ -157,7 +199,7 @@ defmodule Nex.Agent.Channel.Feishu do
       react_emoji: Config.feishu_react_emoji(config),
       enabled: Config.feishu_enabled?(config),
       http_post_fun: Keyword.get(opts, :http_post_fun, &default_http_post/3),
-      http_patch_fun: Keyword.get(opts, :http_patch_fun, &default_http_patch/3),
+      http_put_fun: Keyword.get(opts, :http_put_fun, &default_http_put/3),
       http_post_multipart_fun:
         Keyword.get(opts, :http_post_multipart_fun, &default_http_post_multipart/3),
       http_get_fun: Keyword.get(opts, :http_get_fun, &default_http_get/2),
@@ -215,13 +257,14 @@ defmodule Nex.Agent.Channel.Feishu do
 
   @impl true
   def handle_call({:send_message, chat_id, content, metadata}, _from, state) do
-    payload = %{
+    outbound = %OutboundMessage{
+      channel: "feishu",
       chat_id: to_string(chat_id),
-      content: content,
-      metadata: metadata
+      text: content,
+      metadata: stringify_keys(metadata || %{})
     }
 
-    case do_send(payload, state) do
+    case do_send_outbound(outbound, state) do
       {:ok, new_state} ->
         {:reply, :ok, new_state}
 
@@ -232,7 +275,29 @@ defmodule Nex.Agent.Channel.Feishu do
 
   @impl true
   def handle_call({:send_local_image, chat_id, image_path, metadata}, _from, state) do
-    case do_send_local_image(chat_id, image_path, metadata, state) do
+    expanded_path = Path.expand(image_path)
+
+    attachment = %Nex.Agent.Media.Attachment{
+      id: "out_" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower),
+      channel: "feishu",
+      kind: :image,
+      mime_type: MIME.from_path(expanded_path) || "image/jpeg",
+      filename: Path.basename(expanded_path),
+      local_path: expanded_path,
+      size_bytes: File.stat!(expanded_path).size,
+      source: :generated,
+      platform_ref: %{},
+      metadata: %{}
+    }
+
+    outbound = %OutboundMessage{
+      channel: "feishu",
+      chat_id: to_string(chat_id),
+      attachments: [attachment],
+      metadata: stringify_keys(metadata || %{})
+    }
+
+    case do_send_outbound(outbound, state) do
       {:ok, new_state} ->
         {:reply, :ok, new_state}
 
@@ -242,10 +307,34 @@ defmodule Nex.Agent.Channel.Feishu do
   end
 
   @impl true
+  def handle_call({:send_outbound, %OutboundMessage{} = outbound}, _from, state) do
+    case do_send_outbound(outbound, state) do
+      {:ok, new_state} ->
+        delivered = delivered_items(outbound)
+
+        {:reply, {:ok, delivered}, new_state}
+
+      {:error, reason, new_state} ->
+        {:reply, {:error, reason}, new_state}
+    end
+  end
+
+  @impl true
   def handle_call({:send_card, chat_id, content, metadata}, _from, state) do
-    case do_send_card_with_id(chat_id, content, metadata, state) do
+    case do_send_inline_card_with_id(chat_id, content, metadata, state) do
       {:ok, message_id, new_state} ->
         {:reply, {:ok, message_id}, new_state}
+
+      {:error, reason, new_state} ->
+        {:reply, {:error, reason}, new_state}
+    end
+  end
+
+  @impl true
+  def handle_call({:open_stream_card, chat_id, content, metadata}, _from, state) do
+    case do_send_card_with_id(chat_id, content, metadata, state) do
+      {:ok, message_id, card_id, new_state} ->
+        {:reply, {:ok, %{message_id: message_id, card_id: card_id}}, new_state}
 
       {:error, reason, new_state} ->
         {:reply, {:error, reason}, new_state}
@@ -268,35 +357,15 @@ defmodule Nex.Agent.Channel.Feishu do
 
   @impl true
   def handle_info({:bus_message, :feishu_outbound, payload}, state) when is_map(payload) do
-    metadata = Map.get(payload, :metadata) || Map.get(payload, "metadata") || %{}
-    update_mid = Map.get(metadata, "_update_message_id") || Map.get(metadata, :_update_message_id)
+    outbound = outbound_from_payload(payload)
 
-    if is_binary(update_mid) and update_mid != "" do
-      content = Map.get(payload, :content) || Map.get(payload, "content") || ""
+    case do_send_outbound(outbound, state) do
+      {:ok, new_state} ->
+        {:noreply, new_state}
 
-      case do_patch_card(update_mid, content, state) do
-        {:ok, new_state} ->
-          {:noreply, new_state}
-
-        {:error, reason, _new_state} ->
-          Logger.warning(
-            "[Feishu] Card PATCH failed (#{update_mid}): #{inspect(reason)}, falling back to new message"
-          )
-
-          case do_send(payload, state) do
-            {:ok, s} -> {:noreply, s}
-            {:error, _, s} -> {:noreply, s}
-          end
-      end
-    else
-      case do_send(payload, state) do
-        {:ok, new_state} ->
-          {:noreply, new_state}
-
-        {:error, reason, new_state} ->
-          Logger.warning("Feishu send failed: #{inspect(reason)}")
-          {:noreply, new_state}
-      end
+      {:error, reason, new_state} ->
+        Logger.warning("Feishu send failed: #{inspect(reason)}")
+        {:noreply, new_state}
     end
   end
 
@@ -393,14 +462,14 @@ defmodule Nex.Agent.Channel.Feishu do
   def handle_info(_msg, state), do: {:noreply, state}
 
   @impl true
-  def handle_cast({:update_card, message_id, content}, state) do
-    case do_patch_card(message_id, content, state) do
+  def handle_call({:update_card, card_id, content, sequence}, _from, state) do
+    case do_update_card(card_id, content, sequence, state) do
       {:ok, new_state} ->
-        {:noreply, new_state}
+        {:reply, :ok, new_state}
 
       {:error, reason, new_state} ->
-        Logger.warning("[Feishu] Card update cast failed: #{inspect(reason)}")
-        {:noreply, new_state}
+        Logger.warning("[Feishu] CardKit update failed: #{inspect(reason)}")
+        {:reply, {:error, reason}, new_state}
     end
   end
 
@@ -1191,66 +1260,36 @@ defmodule Nex.Agent.Channel.Feishu do
 
   defp headers_content_type(_), do: "image/jpeg"
 
-  defp do_send_local_image(chat_id, image_path, metadata, state) do
-    metadata = stringify_keys(metadata || %{})
+  defp do_send_outbound(_outbound, %{enabled: false} = state), do: {:ok, state}
 
-    with {:ok, image_key, state} <- upload_local_image(image_path, state),
-         payload <- %{
-           chat_id: to_string(chat_id),
-           content: nil,
-           metadata:
-             metadata
-             |> Map.put("msg_type", "image")
-             |> Map.put("content_json", %{"image_key" => image_key})
-         },
-         {:ok, new_state} <-
-           send_explicit_message(
-             payload,
-             to_string(chat_id),
-             nil,
-             "image",
-             %{"image_key" => image_key},
-             state
-           ) do
-      {:ok, new_state}
-    else
-      {:error, reason} -> {:error, reason, state}
-      {:error, reason, new_state} -> {:error, reason, new_state}
-    end
-  end
-
-  defp do_send(_payload, %{enabled: false} = state), do: {:ok, state}
-
-  defp do_send(payload, state) do
-    chat_id = Map.get(payload, :chat_id) || Map.get(payload, "chat_id") || ""
-    content = Map.get(payload, :content) || Map.get(payload, "content") || ""
-    metadata = Map.get(payload, :metadata) || Map.get(payload, "metadata") || %{}
-    msg_type = metadata_get(metadata, "msg_type")
-    content_json = metadata_get(metadata, "content_json")
+  defp do_send_outbound(%OutboundMessage{} = outbound, state) do
+    chat_id = to_string(outbound.chat_id || "")
+    metadata = stringify_keys(outbound.metadata || %{})
+    msg_type = outbound.native_type
+    content_json = outbound.native_payload
+    content = outbound.text
 
     cond do
       not is_binary(chat_id) or chat_id == "" ->
         {:error, :invalid_chat_id, state}
 
-      is_nil(content_json) and (not is_binary(content) or String.trim(content) == "") ->
-        {:error, :invalid_content, state}
-
       state.app_id == "" or state.app_secret == "" ->
         {:error, :missing_credentials, state}
 
+      Map.get(metadata, "_progress") == true ->
+        {:ok, state}
+
+      is_binary(msg_type) and msg_type != "" ->
+        send_explicit_message(outbound, chat_id, content, msg_type, content_json, state)
+
+      outbound.attachments != [] ->
+        send_attachments(outbound, chat_id, content, metadata, state)
+
+      is_binary(content) and String.trim(content) != "" ->
+        send_inline_cards(outbound, chat_id, content, state)
+
       true ->
-        is_progress = Map.get(metadata, "_progress") || Map.get(metadata, :_progress)
-
-        cond do
-          is_binary(msg_type) and msg_type != "" ->
-            send_explicit_message(payload, chat_id, content, msg_type, content_json, state)
-
-          is_progress ->
-            {:ok, state}
-
-          true ->
-            send_interactive_card(payload, chat_id, content, state)
-        end
+        {:error, :invalid_content, state}
     end
   end
 
@@ -1275,6 +1314,68 @@ defmodule Nex.Agent.Channel.Feishu do
     end
   end
 
+  defp send_attachments(%OutboundMessage{} = outbound, chat_id, content, metadata, state) do
+    with {:ok, materialized, state} <- materialize_attachments(outbound.attachments, state),
+         {:ok, state} <- maybe_send_companion_text(outbound, chat_id, content, metadata, state),
+         {:ok, state} <- send_materialized_items(outbound, chat_id, materialized, state) do
+      {:ok, state}
+    else
+      {:error, reason} -> {:error, reason, state}
+      {:error, reason, new_state} -> {:error, reason, new_state}
+    end
+  end
+
+  defp materialize_attachments(attachments, state) do
+    case OutboundMedia.materialize(attachments,
+           upload_image_fun: &upload_image_attachment(&1, state),
+           upload_file_fun: &upload_file_attachment(&1, state)
+         ) do
+      {:ok, materialized} -> {:ok, materialized, state}
+      {:error, reason} -> {:error, reason, state}
+    end
+  end
+
+  defp maybe_send_companion_text(_outbound, _chat_id, content, _metadata, state)
+       when not is_binary(content) or content == "" do
+    {:ok, state}
+  end
+
+  defp maybe_send_companion_text(outbound, chat_id, content, _metadata, state) do
+    payload = %{outbound | native_type: nil, native_payload: nil, attachments: []}
+
+    case send_inline_cards(payload, chat_id, content, state) do
+      {:ok, new_state} -> {:ok, new_state}
+      {:error, reason, new_state} -> {:error, reason, new_state}
+    end
+  end
+
+  defp send_inline_cards(payload, chat_id, content, state) do
+    content
+    |> IMText.split_messages()
+    |> Enum.reduce_while({:ok, state}, fn segment, {:ok, acc_state} ->
+      case send_inline_card(payload, chat_id, segment, acc_state) do
+        {:ok, next_state} -> {:cont, {:ok, next_state}}
+        {:error, reason, next_state} -> {:halt, {:error, reason, next_state}}
+      end
+    end)
+  end
+
+  defp send_materialized_items(%OutboundMessage{} = outbound, chat_id, items, state) do
+    Enum.reduce_while(items, {:ok, state}, fn item, {:ok, acc_state} ->
+      case send_explicit_message(
+             %{metadata: outbound.metadata || %{}},
+             chat_id,
+             nil,
+             item.msg_type,
+             item.payload,
+             acc_state
+           ) do
+        {:ok, next_state} -> {:cont, {:ok, next_state}}
+        {:error, reason, next_state} -> {:halt, {:error, reason, next_state}}
+      end
+    end)
+  end
+
   defp build_outbound_content("text", content, nil) when is_binary(content) do
     {:ok, Jason.encode!(%{"text" => content})}
   end
@@ -1286,10 +1387,6 @@ defmodule Nex.Agent.Channel.Feishu do
          "content" => [[%{"tag" => "md", "text" => content}]]
        }
      })}
-  end
-
-  defp build_outbound_content("interactive", content, nil) when is_binary(content) do
-    {:ok, Jason.encode!(build_interactive_card(content))}
   end
 
   defp build_outbound_content(msg_type, _content, content_json)
@@ -1358,32 +1455,12 @@ defmodule Nex.Agent.Channel.Feishu do
   defp validate_explicit_message(msg_type, payload),
     do: {:error, {:invalid_explicit_content, msg_type, payload}}
 
-  defp send_text(payload, chat_id, content, state) do
-    with {:ok, token, state} <- get_tenant_access_token(state),
-         {:ok, receive_id_type} <- outbound_receive_id_type(payload, chat_id),
-         {:ok, _body} <-
-           feishu_post(
-             state,
-             "/im/v1/messages?receive_id_type=#{receive_id_type}",
-             %{
-               "receive_id" => chat_id,
-               "msg_type" => "text",
-               "content" => Jason.encode!(%{"text" => content})
-             },
-             [{"Authorization", "Bearer #{token}"}]
-           ) do
-      {:ok, state}
-    else
-      {:error, reason} -> {:error, reason, state}
-    end
-  end
-
-  defp do_send_card_with_id(chat_id, content, metadata, state) do
+  defp do_send_inline_card_with_id(chat_id, content, metadata, state) do
     if not state.enabled or state.app_id == "" or state.app_secret == "" do
       {:error, :not_configured, state}
     else
-      card = build_interactive_card(content)
       payload = %{metadata: metadata}
+      card = CardBuilder.to_interactive_content(content)
 
       with {:ok, token, state} <- get_tenant_access_token(state),
            {:ok, receive_id_type} <- outbound_receive_id_type(payload, chat_id),
@@ -1408,31 +1485,37 @@ defmodule Nex.Agent.Channel.Feishu do
     end
   end
 
-  defp do_patch_card(message_id, content, state) do
+  defp do_send_card_with_id(chat_id, content, metadata, state) do
     if not state.enabled or state.app_id == "" or state.app_secret == "" do
       {:error, :not_configured, state}
     else
-      card = build_interactive_card(content)
+      payload = %{metadata: metadata}
+      card = CardBuilder.to_interactive_content(content, streaming_mode: true, single_markdown?: true, element_id: "content")
 
       with {:ok, token, state} <- get_tenant_access_token(state),
-           {:ok, _body} <-
-             feishu_patch(
+           {:ok, card_id} <- create_cardkit_card(card, token, state),
+           {:ok, receive_id_type} <- outbound_receive_id_type(payload, chat_id),
+           {:ok, body} <-
+             feishu_post(
                state,
-               "/im/v1/messages/#{message_id}",
+               "/im/v1/messages?receive_id_type=#{receive_id_type}",
                %{
-                 "content" => Jason.encode!(card)
+                 "receive_id" => chat_id,
+                 "msg_type" => "interactive",
+                 "content" => Jason.encode!(%{"type" => "card", "data" => %{"card_id" => card_id}})
                },
                [{"Authorization", "Bearer #{token}"}]
              ) do
-        {:ok, state}
+        message_id = get_in(body, ["data", "message_id"]) || ""
+        {:ok, message_id, card_id, state}
       else
         {:error, reason} -> {:error, reason, state}
       end
     end
   end
 
-  defp send_interactive_card(payload, chat_id, content, state) do
-    card = build_interactive_card(content)
+  defp send_inline_card(payload, chat_id, content, state) do
+    card = CardBuilder.to_interactive_content(content)
 
     with {:ok, token, state} <- get_tenant_access_token(state),
          {:ok, receive_id_type} <- outbound_receive_id_type(payload, chat_id),
@@ -1449,18 +1532,47 @@ defmodule Nex.Agent.Channel.Feishu do
            ) do
       {:ok, state}
     else
-      {:error, reason} ->
-        Logger.warning("[Feishu] Card send failed, falling back to text: #{inspect(reason)}")
-
-        case send_text(payload, chat_id, content, state) do
-          {:ok, new_state} -> {:ok, new_state}
-          {:error, text_reason, text_state} -> {:error, text_reason, text_state}
-        end
+      {:error, reason} -> {:error, reason, state}
     end
   end
 
-  defp build_interactive_card(content) do
-    FeishuRenderer.render_card(content)
+  defp create_cardkit_card(card, token, state) do
+    with {:ok, body} <-
+           feishu_post(
+             state,
+             "/cardkit/v1/cards",
+             %{"type" => "card_json", "data" => Jason.encode!(card)},
+             [{"Authorization", "Bearer #{token}"}]
+           ),
+         card_id when is_binary(card_id) and card_id != "" <- get_in(body, ["data", "card_id"]) do
+      {:ok, card_id}
+    else
+      {:error, reason} -> {:error, reason}
+      other -> {:error, {:missing_card_id, other}}
+    end
+  end
+
+  defp do_update_card(card_id, content, sequence, state) do
+    if not state.enabled or state.app_id == "" or state.app_secret == "" do
+      {:error, :not_configured, state}
+    else
+      with {:ok, token, state} <- get_tenant_access_token(state),
+           {:ok, _body} <-
+             feishu_put(
+               state,
+               "/cardkit/v1/cards/#{card_id}/elements/content/content",
+               %{
+                 "content" => content,
+                 "sequence" => sequence,
+                 "uuid" => "nex_#{System.unique_integer([:positive])}"
+               },
+               [{"Authorization", "Bearer #{token}"}]
+             ) do
+        {:ok, state}
+      else
+        {:error, reason} -> {:error, reason, state}
+      end
+    end
   end
 
   defp extract_tenant_token(%{"code" => 0, "tenant_access_token" => token, "expire" => expire})
@@ -1498,16 +1610,16 @@ defmodule Nex.Agent.Channel.Feishu do
     |> normalize_feishu_response()
   end
 
-  defp feishu_patch(state, path, body, headers) do
+  defp feishu_put(state, path, body, headers) do
     url = @feishu_api <> path
 
-    state.http_patch_fun.(url, body, headers)
+    state.http_put_fun.(url, body, headers)
     |> normalize_req_response()
     |> normalize_feishu_response()
   end
 
-  defp default_http_patch(url, body, headers) do
-    Req.patch(url,
+  defp default_http_put(url, body, headers) do
+    Req.put(url,
       json: body,
       headers: headers,
       receive_timeout: @default_send_timeout_ms,
@@ -1599,6 +1711,21 @@ defmodule Nex.Agent.Channel.Feishu do
       end
   end
 
+  defp outbound_from_payload(%OutboundMessage{} = outbound), do: outbound
+
+  defp outbound_from_payload(payload) when is_map(payload) do
+    %OutboundMessage{
+      channel: "feishu",
+      chat_id: Map.get(payload, :chat_id) || Map.get(payload, "chat_id") || "",
+      text: Map.get(payload, :content) || Map.get(payload, "content"),
+      native_type: metadata_get(Map.get(payload, :metadata) || Map.get(payload, "metadata") || %{}, "msg_type"),
+      native_payload:
+        metadata_get(Map.get(payload, :metadata) || Map.get(payload, "metadata") || %{}, "content_json"),
+      attachments: [],
+      metadata: stringify_keys(Map.get(payload, :metadata) || Map.get(payload, "metadata") || %{})
+    }
+  end
+
   defp stringify_keys(map) when is_map(map) do
     map
     |> Enum.map(fn {key, value} -> {to_string(key), stringify_value(value)} end)
@@ -1609,43 +1736,69 @@ defmodule Nex.Agent.Channel.Feishu do
   defp stringify_value(value) when is_list(value), do: Enum.map(value, &stringify_value/1)
   defp stringify_value(value), do: value
 
-  defp upload_local_image(image_path, state) when is_binary(image_path) and image_path != "" do
-    expanded_path = Path.expand(image_path)
+  defp delivered_items(%OutboundMessage{} = outbound) do
+    items =
+      (if is_binary(outbound.text) and String.trim(outbound.text) != "", do: ["message"], else: []) ++
+        Enum.map(outbound.attachments, fn attachment -> Atom.to_string(attachment.kind) end)
 
-    cond do
-      not File.exists?(expanded_path) ->
-        {:error, {:local_image_not_found, expanded_path}, state}
-
-      not File.regular?(expanded_path) ->
-        {:error, {:local_image_not_regular_file, expanded_path}, state}
-
-      true ->
-        multipart = [
-          image_type: "message",
-          image:
-            {File.stream!(expanded_path, [], 2048),
-             filename: Path.basename(expanded_path), content_type: MIME.from_path(expanded_path)}
-        ]
-
-        with {:ok, token, state} <- get_tenant_access_token(state),
-             {:ok, body} <-
-               feishu_post_multipart(
-                 state,
-                 "/im/v1/images",
-                 multipart,
-                 [{"Authorization", "Bearer #{token}"}]
-               ),
-             image_key when is_binary(image_key) and image_key != "" <-
-               get_in(body, ["data", "image_key"]) do
-          {:ok, image_key, state}
-        else
-          {:error, reason} -> {:error, reason, state}
-          other -> {:error, {:missing_image_key, other}, state}
-        end
+    case items do
+      [] -> nil
+      list -> list
     end
   end
 
-  defp upload_local_image(_, state), do: {:error, :invalid_local_image_path, state}
+  defp upload_image_attachment(%Nex.Agent.Media.Attachment{} = attachment, state) do
+    multipart = [
+      image_type: "message",
+      image:
+        {File.stream!(attachment.local_path, [], 2048),
+         filename: attachment.filename || Path.basename(attachment.local_path),
+         content_type: attachment.mime_type}
+    ]
+
+    with {:ok, token, _state} <- get_tenant_access_token(state),
+         {:ok, body} <-
+           feishu_post_multipart(
+             state,
+             "/im/v1/images",
+             multipart,
+             [{"Authorization", "Bearer #{token}"}]
+           ),
+         image_key when is_binary(image_key) and image_key != "" <-
+           get_in(body, ["data", "image_key"]) do
+      {:ok, image_key}
+    else
+      {:error, reason} -> {:error, reason}
+      other -> {:error, {:missing_image_key, other}}
+    end
+  end
+
+  defp upload_file_attachment(%Nex.Agent.Media.Attachment{} = attachment, state) do
+    multipart = [
+      file_type: "message",
+      file_name: attachment.filename || Path.basename(attachment.local_path),
+      file:
+        {File.stream!(attachment.local_path, [], 2048),
+         filename: attachment.filename || Path.basename(attachment.local_path),
+         content_type: attachment.mime_type}
+    ]
+
+    with {:ok, token, _state} <- get_tenant_access_token(state),
+         {:ok, body} <-
+           feishu_post_multipart(
+             state,
+             "/im/v1/files",
+             multipart,
+             [{"Authorization", "Bearer #{token}"}]
+           ),
+         file_key when is_binary(file_key) and file_key != "" <-
+           get_in(body, ["data", "file_key"]) do
+      {:ok, file_key}
+    else
+      {:error, reason} -> {:error, reason}
+      other -> {:error, {:missing_file_key, other}}
+    end
+  end
 
   defp calendar_summary(content_json, label) do
     summary = Map.get(content_json, "summary", "")

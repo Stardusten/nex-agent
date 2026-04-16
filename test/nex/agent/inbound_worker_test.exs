@@ -5,7 +5,7 @@ defmodule Nex.Agent.InboundWorkerTest do
   alias Nex.Agent.Channel.Feishu
   alias Nex.Agent.Inbound.Envelope
   alias Nex.Agent.Media.Attachment
-  alias Nex.Agent.Stream.{Event, Result}
+  alias Nex.Agent.Stream.Result
 
   setup do
     workspace =
@@ -45,6 +45,11 @@ defmodule Nex.Agent.InboundWorkerTest do
 
     worker_name = String.to_atom("inbound_worker_test_#{System.unique_integer([:positive])}")
     parent = self()
+    config = %Nex.Agent.Config{
+      Nex.Agent.Config.default()
+      | feishu: %{"enabled" => true, "streaming" => true},
+        telegram: %{"enabled" => true, "streaming" => true}
+    }
 
     prompt_fun = fn agent, prompt, opts ->
       Process.put(:llm_call_count, 0)
@@ -92,7 +97,8 @@ defmodule Nex.Agent.InboundWorkerTest do
 
     start_supervised!(%{
       id: worker_name,
-      start: {InboundWorker, :start_link, [[name: worker_name, agent_prompt_fun: prompt_fun]]}
+      start:
+        {InboundWorker, :start_link, [[name: worker_name, config: config, agent_prompt_fun: prompt_fun]]}
     })
 
     Bus.subscribe(:feishu_outbound)
@@ -471,6 +477,10 @@ defmodule Nex.Agent.InboundWorkerTest do
 
   test "feishu stream sink updates card incrementally and suppresses default final outbound" do
     parent = self()
+    worker_config = %Nex.Agent.Config{
+      Nex.Agent.Config.default()
+      | feishu: %{"enabled" => true, "streaming" => true}
+    }
 
     http_post_fun = fn url, body, headers ->
       send(parent, {:http_post, url, body, headers})
@@ -482,32 +492,35 @@ defmodule Nex.Agent.InboundWorkerTest do
         String.contains?(url, "/im/v1/messages") ->
           {:ok, %{"code" => 0, "data" => %{"message_id" => "om_stream"}}}
 
+        String.contains?(url, "/cardkit/v1/cards") ->
+          {:ok, %{"code" => 0, "data" => %{"card_id" => "card_stream"}}}
+
         true ->
           {:ok, %{"code" => 1, "msg" => "unexpected"}}
       end
     end
 
-    http_patch_fun = fn url, body, headers ->
-      send(parent, {:http_patch, url, body, headers})
+    http_put_fun = fn url, body, headers ->
+      send(parent, {:http_put, url, body, headers})
       {:ok, %{"code" => 0, "data" => %{}}}
     end
 
     config = %Nex.Agent.Config{Nex.Agent.Config.default() | feishu: %{"enabled" => false}}
 
-    if Process.whereis(Feishu) == nil do
-      start_supervised!(
-        {Feishu,
-         config: config,
-         http_post_fun: http_post_fun,
-         http_patch_fun: http_patch_fun,
-         http_post_multipart_fun: fn _url, _body, _headers -> {:error, :unused} end,
-         http_get_fun: fn _url, _headers -> {:error, :unused} end}
-      )
+    if Process.whereis(Feishu), do: GenServer.stop(Feishu)
 
-      :sys.replace_state(Process.whereis(Feishu), fn state ->
-        %{state | enabled: true, app_id: "cli_test", app_secret: "sec_test"}
-      end)
-    end
+    start_supervised!(
+      {Feishu,
+       config: config,
+       http_post_fun: http_post_fun,
+       http_put_fun: http_put_fun,
+       http_post_multipart_fun: fn _url, _body, _headers -> {:error, :unused} end,
+       http_get_fun: fn _url, _headers -> {:error, :unused} end}
+    )
+
+    :sys.replace_state(Process.whereis(Feishu), fn state ->
+      %{state | enabled: true, app_id: "cli_test", app_secret: "sec_test"}
+    end)
 
     worker_name =
       String.to_atom("inbound_worker_feishu_stream_#{System.unique_integer([:positive])}")
@@ -516,10 +529,9 @@ defmodule Nex.Agent.InboundWorkerTest do
       sink = Keyword.fetch!(opts, :stream_sink)
       run_id = "run_stream_test"
 
-      sink.(%Event{seq: 1, run_id: run_id, type: :message_start})
-      sink.(%Event{seq: 2, run_id: run_id, type: :text_delta, content: "你好"})
-      sink.(%Event{seq: 3, run_id: run_id, type: :text_delta, content: "，哥"})
-      sink.(%Event{seq: 4, run_id: run_id, type: :message_end, content: "你好，哥"})
+      sink.({:text, "你好"})
+      sink.({:text, "，哥"})
+      sink.(:finish)
 
       {:ok,
        Result.ok(run_id, "你好，哥", %{
@@ -527,7 +539,9 @@ defmodule Nex.Agent.InboundWorkerTest do
        }), agent}
     end
 
-    start_supervised!({InboundWorker, name: worker_name, agent_prompt_fun: prompt_fun})
+    start_supervised!(
+      {InboundWorker, name: worker_name, config: worker_config, agent_prompt_fun: prompt_fun}
+    )
 
     send(Process.whereis(worker_name), {
       :bus_message,
@@ -548,25 +562,127 @@ defmodule Nex.Agent.InboundWorkerTest do
     assert_receive {:http_post, auth_url, _auth_body, _auth_headers}, 1_000
     assert auth_url =~ "/auth/v3/tenant_access_token/internal"
 
-    assert_receive {:http_post, send_url, send_body, _send_headers}, 1_000
+    posts = collect_http_posts([])
+    {card_url, card_body} = Enum.find(posts, fn {url, _body} -> url =~ "/cardkit/v1/cards" end)
+    assert card_url =~ "/cardkit/v1/cards"
+    assert card_body["type"] == "card_json"
+
+    {send_url, send_body} =
+      Enum.find(posts, fn {url, body} -> url =~ "/im/v1/messages" and body["msg_type"] == "interactive" end)
+
     assert send_url =~ "/im/v1/messages"
     assert send_body["msg_type"] == "interactive"
 
-    patches = collect_http_patches([])
+    puts = collect_http_puts([])
 
-    assert Enum.any?(patches, fn {patch_url, _patch_body} ->
-             patch_url =~ "/im/v1/messages/om_stream"
+    assert Enum.any?(puts, fn {put_url, _put_body} ->
+             put_url =~ "/cardkit/v1/cards/card_stream/elements/content/content"
            end)
 
-    assert Enum.any?(patches, fn {_patch_url, patch_body} ->
-             is_binary(patch_body["content"]) and patch_body["content"] =~ "你好，哥"
+    assert Enum.any?(puts, fn {_put_url, put_body} ->
+             put_body["content"] =~ "你好，哥"
            end)
 
     refute_receive {:bus_message, :feishu_outbound, _payload}, 300
   end
 
+  test "feishu stream sink batches rapid deltas before updating card" do
+    parent = self()
+    worker_config = %Nex.Agent.Config{
+      Nex.Agent.Config.default()
+      | feishu: %{"enabled" => true, "streaming" => true}
+    }
+
+    http_post_fun = fn url, body, headers ->
+      send(parent, {:http_post, url, body, headers})
+
+      cond do
+        String.contains?(url, "/auth/v3/tenant_access_token/internal") ->
+          {:ok, %{"code" => 0, "tenant_access_token" => "tenant-token", "expire" => 7200}}
+
+        String.contains?(url, "/im/v1/messages") ->
+          {:ok, %{"code" => 0, "data" => %{"message_id" => "om_stream"}}}
+
+        String.contains?(url, "/cardkit/v1/cards") ->
+          {:ok, %{"code" => 0, "data" => %{"card_id" => "card_stream"}}}
+
+        true ->
+          {:ok, %{"code" => 1, "msg" => "unexpected"}}
+      end
+    end
+
+    http_put_fun = fn url, body, headers ->
+      send(parent, {:http_put, url, body, headers})
+      {:ok, %{"code" => 0, "data" => %{}}}
+    end
+
+    config = %Nex.Agent.Config{Nex.Agent.Config.default() | feishu: %{"enabled" => false}}
+
+    if Process.whereis(Feishu), do: GenServer.stop(Feishu)
+
+    start_supervised!(
+      {Feishu,
+       config: config,
+       http_post_fun: http_post_fun,
+       http_put_fun: http_put_fun,
+       http_post_multipart_fun: fn _url, _body, _headers -> {:error, :unused} end,
+       http_get_fun: fn _url, _headers -> {:error, :unused} end}
+    )
+
+    :sys.replace_state(Process.whereis(Feishu), fn state ->
+      %{state | enabled: true, app_id: "cli_test", app_secret: "sec_test"}
+    end)
+
+    worker_name =
+      String.to_atom("inbound_worker_feishu_stream_batch_#{System.unique_integer([:positive])}")
+
+    prompt_fun = fn agent, _prompt, opts ->
+      sink = Keyword.fetch!(opts, :stream_sink)
+      run_id = "run_stream_batch_test"
+
+      sink.({:text, "你"})
+      sink.({:text, "好"})
+      sink.({:text, "，"})
+      sink.({:text, "哥"})
+      sink.(:finish)
+
+      {:ok, Result.ok(run_id, "你好，哥", %{"transport" => "feishu"}), agent}
+    end
+
+    start_supervised!(
+      {InboundWorker, name: worker_name, config: worker_config, agent_prompt_fun: prompt_fun}
+    )
+
+    send(Process.whereis(worker_name), {
+      :bus_message,
+      :inbound,
+      %Envelope{
+        channel: "feishu",
+        chat_id: "chat-stream-batch",
+        sender_id: "tester",
+        text: "hello",
+        message_type: :text,
+        raw: %{},
+        metadata: %{},
+        media_refs: [],
+        attachments: []
+      }
+    })
+
+    assert_receive {:http_post, _auth_url, _auth_body, _auth_headers}, 1_000
+    _posts = collect_http_posts([])
+    puts = collect_http_puts([])
+
+    assert length(puts) == 1
+    assert Enum.at(puts, 0) |> elem(1) |> Map.fetch!("content") == "你好，哥"
+  end
+
   test "non-feishu channels receive unified stream sink and suppress default final outbound" do
     parent = self()
+    worker_config = %Nex.Agent.Config{
+      Nex.Agent.Config.default()
+      | telegram: %{"enabled" => true, "streaming" => true}
+    }
 
     worker_name =
       String.to_atom("inbound_worker_telegram_stream_#{System.unique_integer([:positive])}")
@@ -576,15 +692,16 @@ defmodule Nex.Agent.InboundWorkerTest do
       run_id = "run_telegram_stream_test"
       send(parent, {:prompt_channel, Keyword.fetch!(opts, :channel)})
 
-      sink.(%Event{seq: 1, run_id: run_id, type: :message_start})
-      sink.(%Event{seq: 2, run_id: run_id, type: :text_delta, content: "hel"})
-      sink.(%Event{seq: 3, run_id: run_id, type: :text_delta, content: "lo"})
-      sink.(%Event{seq: 4, run_id: run_id, type: :message_end, content: "hello"})
+      sink.({:text, "hel"})
+      sink.({:text, "lo"})
+      sink.(:finish)
 
       {:ok, Result.ok(run_id, "hello"), agent}
     end
 
-    start_supervised!({InboundWorker, name: worker_name, agent_prompt_fun: prompt_fun})
+    start_supervised!(
+      {InboundWorker, name: worker_name, config: worker_config, agent_prompt_fun: prompt_fun}
+    )
 
     send(Process.whereis(worker_name), {
       :bus_message,
@@ -617,10 +734,19 @@ defmodule Nex.Agent.InboundWorkerTest do
     end
   end
 
-  defp collect_http_patches(acc) do
+  defp collect_http_puts(acc) do
     receive do
-      {:http_patch, url, body, _headers} ->
-        collect_http_patches([{url, body} | acc])
+      {:http_put, url, body, _headers} ->
+        collect_http_puts([{url, body} | acc])
+    after
+      300 -> Enum.reverse(acc)
+    end
+  end
+
+  defp collect_http_posts(acc) do
+    receive do
+      {:http_post, url, body, _headers} ->
+        collect_http_posts([{url, body} | acc])
     after
       300 -> Enum.reverse(acc)
     end

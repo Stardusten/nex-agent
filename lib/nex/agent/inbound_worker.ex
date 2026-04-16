@@ -9,9 +9,13 @@ defmodule Nex.Agent.InboundWorker do
   require Logger
 
   alias Nex.Agent.{Bus, Config, MemoryUpdater, Outbound, Runtime, Workspace}
+  alias Nex.Agent.Channel.Feishu
+  alias Nex.Agent.Channel.Feishu.StreamConverter
   alias Nex.Agent.Inbound.Envelope
   alias Nex.Agent.Runtime.Snapshot
-  alias Nex.Agent.Stream.{Event, Result, Transport}
+  alias Nex.Agent.Stream.Result
+
+  @feishu_stream_flush_ms 500
 
   defstruct [
     :config,
@@ -22,7 +26,7 @@ defmodule Nex.Agent.InboundWorker do
     active_tasks: %{},
     agent_last_active: %{},
     pending_queue: %{},
-    stream_sessions: %{}
+    stream_states: %{}
   ]
 
   @type agent_start_fun :: (keyword() -> {:ok, term()} | {:error, term()})
@@ -39,7 +43,7 @@ defmodule Nex.Agent.InboundWorker do
           active_tasks: %{String.t() => pid()},
           agent_last_active: %{String.t() => integer()},
           pending_queue: %{term() => :queue.queue()},
-          stream_sessions: %{term() => term()}
+          stream_states: %{term() => term()}
         }
 
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -64,7 +68,7 @@ defmodule Nex.Agent.InboundWorker do
       active_tasks: %{},
       agent_last_active: %{},
       pending_queue: %{},
-      stream_sessions: %{}
+      stream_states: %{}
     }
 
     Bus.subscribe(:inbound)
@@ -164,24 +168,6 @@ defmodule Nex.Agent.InboundWorker do
   end
 
   @impl true
-  def handle_info({:stream_session_started, key, session}, state) do
-    {:noreply, put_in(state.stream_sessions[key], session)}
-  end
-
-  @impl true
-  def handle_info({:stream_event, key, %Event{} = event}, state) do
-    case Map.fetch(state.stream_sessions, key) do
-      {:ok, session} ->
-        {updated_session, actions} = Transport.handle_event(session, event)
-        Transport.run_actions(session, actions)
-        {:noreply, put_in(state.stream_sessions[key], updated_session)}
-
-      :error ->
-        {:noreply, state}
-    end
-  end
-
-  @impl true
   def handle_info({:check_timeout, key, pid}, state) do
     if Map.get(state.active_tasks, key) == pid and Process.alive?(pid) do
       Logger.warning("[InboundWorker] Task #{key} timed out after 10 minutes, killing")
@@ -227,6 +213,56 @@ defmodule Nex.Agent.InboundWorker do
 
     Process.send_after(self(), :cleanup_stale_agents, 600_000)
     {:noreply, %{state | agents: agents, agent_last_active: agent_last_active}}
+  end
+
+  @impl true
+  def handle_info({:stream_state_started, key, stream_state}, state) do
+    {:noreply, put_in(state.stream_states[key], stream_state)}
+  end
+
+  @impl true
+  def handle_info({:stream_state_event, key, event}, state) do
+    case Map.fetch(state.stream_states, key) do
+      {:ok, {:feishu, stream_state}} ->
+        case apply_feishu_stream_event(stream_state, key, event) do
+          {:ok, updated} ->
+            {:noreply, put_in(state.stream_states[key], {:feishu, updated})}
+
+          {:error, reason} ->
+            Logger.warning("[InboundWorker] feishu stream event failed: #{inspect(reason)}")
+            {:noreply, state}
+        end
+
+      {:ok, {:text_buffer, buffer}} ->
+        updated =
+          case event do
+            {:text, chunk} when is_binary(chunk) -> {:text_buffer, buffer <> chunk}
+            _ -> {:text_buffer, buffer}
+          end
+
+        {:noreply, put_in(state.stream_states[key], updated)}
+
+      :error ->
+        {:noreply, state}
+    end
+  end
+
+  @impl true
+  def handle_info({:flush_feishu_stream, key}, state) do
+    case Map.fetch(state.stream_states, key) do
+      {:ok, {:feishu, stream_state}} ->
+        case flush_feishu_stream(stream_state) do
+          {:ok, updated} ->
+            {:noreply, put_in(state.stream_states[key], {:feishu, updated})}
+
+          {:error, reason} ->
+            Logger.warning("[InboundWorker] feishu stream flush failed: #{inspect(reason)}")
+            {:noreply, state}
+        end
+
+      _ ->
+        {:noreply, state}
+    end
   end
 
   @impl true
@@ -377,18 +413,53 @@ defmodule Nex.Agent.InboundWorker do
   defp build_stream_sink(parent, key, channel, chat_id, envelope, config) do
     metadata = extract_metadata(envelope)
     channel_runtime = channel_runtime(envelope, channel, config)
-    context = %{metadata: metadata, channel_runtime: channel_runtime}
+    streaming? = Map.get(channel_runtime, "streaming", false) == true
 
-    case Transport.open_session(key, channel, chat_id, context) do
-      {:ok, session} ->
-        send(parent, {:stream_session_started, key, session})
+    cond do
+      channel == "feishu" and streaming? ->
+        if Process.whereis(Feishu) do
+          {:ok, converter} = StreamConverter.start(chat_id, metadata)
+          send(
+            parent,
+            {:stream_state_started,
+             key,
+             {:feishu, %{converter: converter, pending_text: "", flush_timer_ref: nil}}}
+          )
 
-        fn %Event{} = event ->
-          send(parent, {:stream_event, key, event})
-          :ok
+          fn
+            {:text, chunk} when is_binary(chunk) ->
+              send(parent, {:stream_state_event, key, {:text, chunk}})
+              :ok
+
+            :finish ->
+              send(parent, {:stream_state_event, key, :finish})
+              :ok
+
+            {:error, message} ->
+              send(parent, {:stream_state_event, key, {:error, message}})
+              :ok
+          end
+        else
+          nil
         end
 
-      :error ->
+      channel != "feishu" and streaming? ->
+        send(parent, {:stream_state_started, key, {:text_buffer, ""}})
+
+        fn
+          {:text, chunk} when is_binary(chunk) ->
+            send(parent, {:stream_state_event, key, {:text, chunk}})
+            :ok
+
+          :finish ->
+            send(parent, {:stream_state_event, key, :finish})
+            :ok
+
+          {:error, _message} ->
+            :ok
+        end
+
+      true ->
         nil
     end
   end
@@ -397,8 +468,13 @@ defmodule Nex.Agent.InboundWorker do
     workspace = payload_workspace(envelope)
 
     case runtime_snapshot_for_workspace(workspace) do
-      %Snapshot{channels: channels} when is_map(channels) ->
-        Map.get(channels, to_string(channel), %{"streaming" => false})
+      %Snapshot{workspace: snapshot_workspace, channels: channels}
+      when is_map(channels) and is_binary(snapshot_workspace) ->
+        if same_workspace?(snapshot_workspace, workspace) do
+          Config.channel_runtime(config, channel)
+        else
+          Map.get(channels, to_string(channel), Config.channel_runtime(config, channel))
+        end
 
       %Snapshot{config: %Config{} = config} ->
         Config.channel_runtime(config, channel)
@@ -608,12 +684,12 @@ defmodule Nex.Agent.InboundWorker do
       |> Map.put_new("chat_id", chat_id)
       |> Map.merge(Map.new(extra_meta, fn {k, v} -> {to_string(k), v} end))
 
-    # If a streaming card was created, update it instead of sending a new message
-    card_mid = Map.get(envelope.metadata, "_card_message_id")
+    # If a streaming CardKit card was created, update it instead of sending a new message.
+    card_id = Map.get(envelope.metadata, "_card_id")
 
     metadata =
-      if is_binary(card_mid) and card_mid != "" do
-        Map.put(metadata, "_update_message_id", card_mid)
+      if is_binary(card_id) and card_id != "" do
+        Map.put(metadata, "_update_card_id", card_id)
       else
         metadata
       end
@@ -721,18 +797,46 @@ defmodule Nex.Agent.InboundWorker do
   defp suppress_outbound?(_), do: false
 
   defp finalize_stream_session(state, key, result) do
-    case Map.fetch(state.stream_sessions, key) do
-      {:ok, session} ->
-        final_result = coerce_stream_result(result, session, key)
+    case Map.fetch(state.stream_states, key) do
+      {:ok, {:feishu, stream_state}} ->
+        stream_state = cancel_feishu_flush(stream_state)
 
-        {_updated_session, actions, handled?} =
-          case final_result.status do
-            :ok -> Transport.finalize_success(session, final_result)
-            :error -> Transport.finalize_error(session, final_result)
+        case flush_feishu_stream(stream_state) do
+          {:ok, %{converter: converter}} ->
+            finalize_fun =
+              case result do
+                {:ok, _value} -> &StreamConverter.finish/1
+                {:error, message, _reason} -> &StreamConverter.fail(&1, message)
+                {:error, message} -> &StreamConverter.fail(&1, format_reason(message))
+              end
+
+            case finalize_fun.(converter) do
+              {:ok, _updated} ->
+                {%{state | stream_states: Map.delete(state.stream_states, key)}, true}
+
+              {:error, reason} ->
+                Logger.warning("[InboundWorker] feishu stream finalize failed: #{inspect(reason)}")
+                {%{state | stream_states: Map.delete(state.stream_states, key)}, true}
+            end
+
+          {:error, reason} ->
+            Logger.warning("[InboundWorker] feishu stream flush before finalize failed: #{inspect(reason)}")
+            {%{state | stream_states: Map.delete(state.stream_states, key)}, true}
+        end
+
+      {:ok, {:text_buffer, buffer}} ->
+        handled? =
+          case result do
+            {:ok, _value} when is_binary(buffer) and buffer != "" ->
+              {channel, chat_id} = parse_session_key(elem(key, 1))
+              Bus.publish(Outbound.topic_for_channel(channel), %{chat_id: chat_id, content: buffer, metadata: %{}})
+              true
+
+            _ ->
+              false
           end
 
-        Transport.run_actions(session, actions)
-        {%{state | stream_sessions: Map.delete(state.stream_sessions, key)}, handled?}
+        {%{state | stream_states: Map.delete(state.stream_states, key)}, handled?}
 
       :error ->
         {state, false}
@@ -780,38 +884,51 @@ defmodule Nex.Agent.InboundWorker do
 
   defp streaming_error_message(reason), do: format_reason(reason)
 
-  defp coerce_stream_result({:ok, %Result{} = result}, _session, _key), do: result
-
-  defp coerce_stream_result({:ok, :message_sent}, session, key) do
-    Result.ok(stream_run_id(session, key), nil, %{message_sent: true})
+  defp schedule_feishu_flush(%{flush_timer_ref: nil} = stream_state, key) do
+    %{stream_state | flush_timer_ref: Process.send_after(self(), {:flush_feishu_stream, key}, @feishu_stream_flush_ms)}
   end
 
-  defp coerce_stream_result({:ok, result}, session, key) when is_binary(result) do
-    Result.ok(stream_run_id(session, key), result)
+  defp schedule_feishu_flush(stream_state, _key), do: stream_state
+
+  defp cancel_feishu_flush(%{flush_timer_ref: nil} = stream_state), do: stream_state
+
+  defp cancel_feishu_flush(%{flush_timer_ref: ref} = stream_state) do
+    Process.cancel_timer(ref)
+    %{stream_state | flush_timer_ref: nil}
   end
 
-  defp coerce_stream_result({:ok, result}, session, key) do
-    Result.ok(stream_run_id(session, key), to_string(result))
+  defp flush_feishu_stream(%{pending_text: ""} = stream_state) do
+    {:ok, %{stream_state | flush_timer_ref: nil}}
   end
 
-  defp coerce_stream_result({:error, _message, %Result{} = result}, _session, _key), do: result
+  defp flush_feishu_stream(%{converter: converter, pending_text: pending_text} = stream_state) do
+    case StreamConverter.push_text(converter, pending_text) do
+      {:ok, updated_converter} ->
+        {:ok, %{stream_state | converter: updated_converter, pending_text: "", flush_timer_ref: nil}}
 
-  defp coerce_stream_result({:error, _message, reason}, session, key) do
-    message = format_reason(reason)
-    Result.error(stream_run_id(session, key), reason, message)
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
-  defp coerce_stream_result({:error, message}, session, key) do
-    Result.error(stream_run_id(session, key), message, format_reason(message))
+  defp apply_feishu_stream_event(%{pending_text: pending_text} = stream_state, key, {:text, chunk})
+       when is_binary(chunk) do
+    updated =
+      %{stream_state | pending_text: pending_text <> chunk}
+      |> schedule_feishu_flush(key)
+
+    {:ok, updated}
   end
 
-  defp stream_run_id(session, key) do
-    cond do
-      is_map(session) and Map.has_key?(session, :run_id) and is_binary(session.run_id) ->
-        session.run_id
+  defp apply_feishu_stream_event(stream_state, _key, :finish) do
+    flush_feishu_stream(cancel_feishu_flush(stream_state))
+  end
 
-      true ->
-        "run_" <> Integer.to_string(:erlang.phash2(key))
+  defp apply_feishu_stream_event(stream_state, _key, {:error, message}) do
+    with {:ok, %{converter: converter} = stream_state} <-
+           flush_feishu_stream(cancel_feishu_flush(stream_state)),
+         {:ok, updated_converter} <- StreamConverter.fail(converter, message) do
+      {:ok, %{stream_state | converter: updated_converter}}
     end
   end
 end
