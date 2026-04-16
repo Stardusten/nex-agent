@@ -6,10 +6,11 @@ defmodule Nex.Agent.Runner do
   alias Nex.Agent.{
     Bus,
     ContextBuilder,
-    Memory,
     MemoryUpdater,
     RequestTrace,
-    Session
+    Session,
+    Stream.Assembler,
+    Stream.Result
   }
 
   alias Nex.Agent.Runtime.Snapshot
@@ -20,8 +21,6 @@ defmodule Nex.Agent.Runner do
   @max_iterations_hard_limit 50
   @memory_window 50
   @max_tool_result_length 8000
-  @tool_hint_preview_length 220
-  @memory_flush_min_messages 12
   @skill_complexity_tool_calls 4
   @skill_complexity_tool_rounds 2
   @user_correction_terms [
@@ -39,6 +38,10 @@ defmodule Nex.Agent.Runner do
   Run agent loop with session and prompt.
   """
   def run(session, prompt, opts \\ []) do
+    do_run(session, prompt, opts)
+  end
+
+  defp do_run(session, prompt, opts) do
     workspace = Keyword.get(opts, :workspace)
     runtime_snapshot = runtime_snapshot_from_opts(opts)
     runtime_config = if runtime_snapshot, do: runtime_snapshot.config
@@ -79,6 +82,7 @@ defmodule Nex.Agent.Runner do
       |> Keyword.put(:request_trace, request_trace_config)
       |> Keyword.put(:skill_runtime, SkillRuntime.config(opts))
       |> Keyword.put_new(:_evolution_signals, default_evolution_signals())
+      |> init_stream_assembler()
 
     initial_message_count = length(session.messages)
     {session, runtime_system_messages} = prepare_evolution_turn(session, prompt, opts)
@@ -277,7 +281,6 @@ defmodule Nex.Agent.Runner do
   defp run_loop(session, messages, iteration, max_iterations, opts) do
     iter_start = System.monotonic_time(:millisecond)
     Logger.info("[Runner] === Iteration #{iteration + 1}/#{max_iterations} started ===")
-    on_progress = Keyword.get(opts, :on_progress)
 
     if iteration >= max_iterations do
       Logger.warning("[Runner] Max iterations reached (#{max_iterations})")
@@ -326,8 +329,19 @@ defmodule Nex.Agent.Runner do
               "[Runner] === Iteration #{iteration + 1} finished in #{iter_total}ms (error) ==="
             )
 
-            {:error, "LLM returned an error", session}
+            reason = "LLM returned an error"
+            emit_stream_error(opts, reason)
+            {:error, stream_result(:error, opts, nil, %{error: reason}), session}
           else
+            {response, opts} = take_stream_assembler(response, opts)
+
+            opts =
+              if Map.get(response, :streamed_text, false) do
+                Keyword.put(opts, :_llm_text_streamed, true)
+              else
+                opts
+              end
+
             result =
               handle_response(
                 session,
@@ -337,7 +351,7 @@ defmodule Nex.Agent.Runner do
                 reasoning_content,
                 iteration,
                 max_iterations,
-                on_progress,
+                _on_progress = nil,
                 opts
               )
 
@@ -348,13 +362,14 @@ defmodule Nex.Agent.Runner do
 
         {:error, reason} ->
           Logger.error("[Runner] LLM call failed: #{inspect(reason)}")
+          emit_stream_error(opts, reason)
           iter_total = System.monotonic_time(:millisecond) - iter_start
 
           Logger.info(
             "[Runner] === Iteration #{iteration + 1} finished in #{iter_total}ms (failed) ==="
           )
 
-          {:error, reason, session}
+          {:error, stream_result(:error, opts, nil, %{error: reason}), session}
       end
     end
   end
@@ -369,12 +384,37 @@ defmodule Nex.Agent.Runner do
          reasoning_content,
          iteration,
          max_iterations,
-         on_progress,
+         _on_progress,
          opts
        )
        when is_list(tool_calls) and tool_calls != [] do
     Logger.info("[Runner] LLM requests #{length(tool_calls)} tool call(s)")
 
+    if Keyword.get(opts, :_suppress_current_reply_stream, false) do
+      tool_call_dicts = normalize_tool_calls(tool_calls)
+
+      messages =
+        ContextBuilder.add_assistant_message(
+          messages,
+          content,
+          tool_call_dicts,
+          reasoning_content
+        )
+
+      session =
+        Session.add_message(session, "assistant", content,
+          tool_calls: tool_call_dicts,
+          reasoning_content: reasoning_content
+        )
+
+      {new_messages, results, session, opts} =
+        execute_tools(session, messages, tool_call_dicts, opts)
+
+      opts = maybe_emit_tool_result_events(opts, results)
+      maybe_publish_tool_results(results, opts)
+
+      run_loop(session, new_messages, iteration + 1, max_iterations, opts)
+    else
     tool_call_dicts = normalize_tool_calls(tool_calls)
 
     current_signatures =
@@ -396,14 +436,45 @@ defmodule Nex.Agent.Runner do
         "[Runner] Loop detected: #{inspect(current_signatures)} repeated #{@max_loop_repeats}x, breaking"
       )
 
-      {:ok,
-       render_text(content) ||
-         "I detected a repeated action loop and stopped. Please try a different approach.",
-       session}
+      final_content =
+        render_text(content) ||
+          "I detected a repeated action loop and stopped. Please try a different approach."
+
+      opts =
+        opts
+        |> maybe_emit_text_delta(final_content)
+        |> maybe_emit_message_end(final_content)
+
+      {:ok, stream_result(:ok, opts, final_content), session}
     else
       opts = Keyword.put(opts, :_tool_history, tool_history)
 
-      maybe_send_progress(on_progress, content, tool_call_dicts)
+      existing_suppress? = Keyword.get(opts, :_suppress_current_reply_stream, false)
+
+      suppress_current_reply_stream? =
+        existing_suppress? or
+          Enum.any?(tool_call_dicts, fn tc ->
+            get_in(tc, ["function", "name"]) == "message" and
+              message_tool_call_targets_current_conversation?(tc, opts)
+          end)
+
+      opts =
+        if suppress_current_reply_stream? do
+          opts
+          |> Keyword.put(:_suppress_current_reply_stream, true)
+          |> suppress_stream_output(true)
+        else
+          opts
+        end
+
+      opts =
+        if suppress_current_reply_stream? do
+          opts
+        else
+          maybe_emit_text_commit(opts, content)
+        end
+
+      opts = maybe_emit_tool_call_start_events(opts, tool_call_dicts)
 
       messages =
         ContextBuilder.add_assistant_message(
@@ -422,6 +493,7 @@ defmodule Nex.Agent.Runner do
       {new_messages, results, session, opts} =
         execute_tools(session, messages, tool_call_dicts, opts)
 
+      opts = maybe_emit_tool_result_events(opts, results)
       maybe_publish_tool_results(results, opts)
 
       message_sent_to_current_channel =
@@ -447,12 +519,13 @@ defmodule Nex.Agent.Runner do
 
       case run_loop(session, new_messages, iteration + 1, effective_max, opts) do
         {:ok, _final_content, final_session} when message_sent_to_current_channel ->
-          {:ok, :message_sent, final_session}
+          {:ok, stream_result(:ok, opts, nil, %{message_sent: true}), final_session}
 
         other ->
           other
       end
     end
+  end
   end
 
   defp handle_response(
@@ -464,18 +537,34 @@ defmodule Nex.Agent.Runner do
          _iteration,
          _max_iterations,
          _on_progress,
-         _opts
+         opts
        ) do
     content_text = render_text(content)
 
     Logger.info("[Runner] LLM finished: #{String.slice(content_text, 0, 100)}")
+
+    opts =
+      unless Keyword.get(opts, :_llm_text_streamed, false) or
+               Keyword.get(opts, :_suppress_current_reply_stream, false) do
+        opts
+        |> maybe_emit_text_delta(content_text)
+        |> maybe_emit_message_end(content_text)
+      else
+        opts
+      end
 
     session =
       Session.add_message(session, "assistant", content_text,
         reasoning_content: reasoning_content
       )
 
-    {:ok, content_text, session}
+    final_content =
+      if Keyword.get(opts, :_suppress_current_reply_stream, false), do: nil, else: content_text
+
+    metadata =
+      if Keyword.get(opts, :_suppress_current_reply_stream, false), do: %{message_sent: true}, else: %{}
+
+    {:ok, stream_result(:ok, opts, final_content, metadata), session}
   end
 
   defp normalize_tool_calls(tool_calls) do
@@ -501,70 +590,49 @@ defmodule Nex.Agent.Runner do
     end)
   end
 
-  defp maybe_send_progress(nil, _content, _tool_calls), do: :ok
+  defp maybe_emit_text_delta(opts, text),
+    do: update_stream_assembler(opts, &Assembler.emit_text_delta(&1, text))
 
-  defp maybe_send_progress(on_progress, content, tool_call_dicts) do
-    hint = format_tool_hint(tool_call_dicts)
+  defp maybe_emit_text_commit(opts, content),
+    do: update_stream_assembler(opts, &Assembler.emit_text_commit(&1, content))
 
-    if is_function(on_progress, 2) do
-      on_progress.(:tool_hint, hint)
-    end
+  defp maybe_emit_tool_call_start_events(opts, tool_call_dicts),
+    do: update_stream_assembler(opts, &Assembler.emit_tool_call_start_events(&1, tool_call_dicts))
 
-    clean = strip_think_tags(content)
+  defp maybe_emit_tool_result_events(opts, results),
+    do: update_stream_assembler(opts, &Assembler.emit_tool_result_events(&1, results))
 
-    if clean && clean != "" && is_function(on_progress, 2) do
-      on_progress.(:thinking, clean)
-    end
+  defp maybe_emit_message_end(opts, _content_text),
+    do: update_stream_assembler(opts, &Assembler.emit_message_end/1)
 
-    :ok
-  end
+  defp emit_stream_error(opts, reason),
+    do: update_stream_assembler(opts, &Assembler.emit_error(&1, reason))
 
-  defp format_tool_hint(tool_call_dicts) do
-    Enum.map_join(tool_call_dicts, ", ", fn tc ->
-      name = get_in(tc, ["function", "name"]) || "?"
-      args = get_in(tc, ["function", "arguments"]) || ""
+  defp stream_result(status, opts, final_content, metadata \\ %{})
 
-      args_preview =
-        args
-        |> normalize_tool_hint_args(name)
-        |> truncate_tool_hint(@tool_hint_preview_length)
-
-      "#{name}(#{args_preview})"
-    end)
-  end
-
-  defp normalize_tool_hint_args(args, tool_name) when is_binary(args) do
-    case Jason.decode(args) do
-      {:ok, decoded} -> normalize_tool_hint_args(decoded, tool_name)
-      _ -> args
+  defp stream_result(:ok, opts, final_content, metadata) do
+    if streaming_result?(opts) do
+      Result.ok(Keyword.get(opts, :run_id) || "run_unknown", final_content, metadata)
+    else
+      if Map.get(metadata, :message_sent) == true or Map.get(metadata, "message_sent") == true do
+        :message_sent
+      else
+        final_content
+      end
     end
   end
 
-  defp normalize_tool_hint_args(%{"command" => command}, "bash") when is_binary(command),
-    do: command
+  defp stream_result(:error, opts, final_content, metadata) do
+    reason = Map.get(metadata, :error) || Map.get(metadata, "error")
 
-  defp normalize_tool_hint_args(%{command: command}, "bash") when is_binary(command), do: command
-
-  defp normalize_tool_hint_args(args, _tool_name) when is_map(args) do
-    inspect(args, limit: :infinity, printable_limit: 500)
+    if streaming_result?(opts) do
+      Result.error(Keyword.get(opts, :run_id) || "run_unknown", reason, final_content, metadata)
+    else
+      reason
+    end
   end
 
-  defp normalize_tool_hint_args(args, _tool_name), do: render_text(args)
-
-  defp truncate_tool_hint(text, max_len) when is_binary(text) and byte_size(text) > max_len do
-    String.slice(text, 0, max_len - 3) <> "..."
-  end
-
-  defp truncate_tool_hint(text, _max_len), do: text
-
-  defp strip_think_tags(nil), do: nil
-
-  defp strip_think_tags(content) do
-    content
-    |> render_text()
-    |> String.replace(~r/<think>.*?<\/think>/s, "")
-    |> String.trim()
-  end
+  defp streaming_result?(opts), do: is_function(Keyword.get(opts, :stream_sink), 1)
 
   defp maybe_publish_tool_results(results, opts) do
     if Process.whereis(Nex.Agent.Bus) do
@@ -630,6 +698,13 @@ defmodule Nex.Agent.Runner do
 
   defp message_targets_current_conversation_with_channel?(_args, _opts, _current_channel),
     do: false
+
+  defp message_tool_call_targets_current_conversation?(tool_call, opts) when is_map(tool_call) do
+    args = get_in(tool_call, ["function", "arguments"]) || %{}
+    message_targets_current_conversation?(parse_tool_arguments(args), opts)
+  end
+
+  defp message_tool_call_targets_current_conversation?(_tool_call, _opts), do: false
 
   defp normalize_chat_id(nil), do: ""
   defp normalize_chat_id(chat_id), do: to_string(chat_id)
@@ -805,11 +880,7 @@ defmodule Nex.Agent.Runner do
 
     trace_llm_request(Keyword.get(opts, :trace_iteration), messages, tools, opts)
 
-    if opts[:llm_client] do
-      opts[:llm_client].(messages, opts)
-    else
-      call_llm_real(messages, opts)
-    end
+    call_llm_stream(messages, opts)
   end
 
   # Tool names must start with a letter and contain only letters, numbers, underscores, dashes.
@@ -890,21 +961,58 @@ defmodule Nex.Agent.Runner do
     end
   end
 
-  defp call_llm_real(messages, opts) do
+  defp call_llm_stream(messages, opts) do
+    assembler =
+      Keyword.get_lazy(opts, :_stream_assembler, fn ->
+        Assembler.new(
+          mode: :conversation,
+          run_id: Keyword.get(opts, :run_id) || "run_unknown",
+          sink: Keyword.get(opts, :stream_sink),
+          suppress_output?: Keyword.get(opts, :_suppress_current_reply_stream, false)
+        )
+      end)
+      |> Assembler.prepare_next_response()
+
+    stream_fun = fn callback ->
+      if opts[:llm_stream_client] do
+        opts[:llm_stream_client].(messages, opts, callback)
+      else
+        call_req_llm_stream(messages, opts, callback)
+      end
+    end
+
+    case Assembler.drain_stream(stream_fun, assembler, :runner_stream_event) do
+      {:ok, assembler} ->
+        {assembler, response} = Assembler.finalize(assembler)
+
+        if response.error do
+          {:error, response.error}
+        else
+          {:ok, Map.put(response, :_stream_assembler, assembler)}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp call_req_llm_stream(messages, opts, callback) do
     provider = Keyword.get(opts, :provider, :anthropic)
 
-    [
-      provider: provider,
-      model: Keyword.get(opts, :model),
-      api_key: Keyword.get(opts, :api_key),
-      base_url: Keyword.get(opts, :base_url),
-      tools: Keyword.get(opts, :tools, []),
-      temperature: Keyword.get(opts, :temperature, 1.0),
-      max_tokens: Keyword.get(opts, :max_tokens, 4096),
-      tool_choice: Keyword.get(opts, :tool_choice)
-    ]
-    |> maybe_put_opt(:req_llm_generate_text_fun, Keyword.get(opts, :req_llm_generate_text_fun))
-    |> then(&Nex.Agent.LLM.ReqLLM.chat(messages, &1))
+    stream_opts =
+      [
+        provider: provider,
+        model: Keyword.get(opts, :model),
+        api_key: Keyword.get(opts, :api_key),
+        base_url: Keyword.get(opts, :base_url),
+        tools: Keyword.get(opts, :tools, []),
+        temperature: Keyword.get(opts, :temperature, 1.0),
+        max_tokens: Keyword.get(opts, :max_tokens, 4096),
+        tool_choice: Keyword.get(opts, :tool_choice)
+      ]
+      |> maybe_put_opt(:req_llm_stream_text_fun, Keyword.get(opts, :req_llm_stream_text_fun))
+
+    Nex.Agent.LLM.ReqLLM.stream(messages, stream_opts, callback)
   end
 
   defp execute_tools(session, messages, tool_calls, opts) do
@@ -1112,13 +1220,13 @@ defmodule Nex.Agent.Runner do
         tools: Keyword.get(opts, :tools, []),
         tool_choice: tool_choice
       ]
-      |> maybe_put_opt(:req_llm_generate_text_fun, Keyword.get(opts, :req_llm_generate_text_fun))
+      |> maybe_put_opt(:req_llm_stream_text_fun, Keyword.get(opts, :req_llm_stream_text_fun))
 
     Logger.info(
       "[Runner] consolidation LLM call: provider=#{provider} model=#{Keyword.get(call_opts, :model)} tool_choice=#{inspect(tool_choice)}"
     )
 
-    case Nex.Agent.LLM.ReqLLM.chat(messages, call_opts) do
+    case call_llm_stream_for_consolidation(messages, call_opts) do
       {:ok, response} ->
         Logger.info(
           "[Runner] consolidation LLM response: finish_reason=#{inspect(Map.get(response, :finish_reason))} has_tool_calls=#{is_list(Map.get(response, :tool_calls) || Map.get(response, "tool_calls"))} content_preview=#{inspect(String.slice(to_string(Map.get(response, :content, "")), 0, 100))}"
@@ -1137,7 +1245,7 @@ defmodule Nex.Agent.Runner do
             Logger.warning("[Runner] #{consolidation_tool_choice_retry_message(reason)}")
             retry_opts = Keyword.delete(call_opts, :tool_choice)
 
-            case Nex.Agent.LLM.ReqLLM.chat(messages, retry_opts) do
+            case call_llm_stream_for_consolidation(messages, retry_opts) do
               {:ok, response} -> extract_tool_call(response)
               error -> error
             end
@@ -1146,6 +1254,28 @@ defmodule Nex.Agent.Runner do
       error ->
         Logger.error("[Runner] consolidation unexpected error: #{inspect(error, limit: 300)}")
         error
+    end
+  end
+
+  defp call_llm_stream_for_consolidation(messages, opts) do
+    assembler = Assembler.new(mode: :consolidation)
+
+    stream_fun = fn callback ->
+      Nex.Agent.LLM.ReqLLM.stream(messages, opts, callback)
+    end
+
+    case Assembler.drain_stream(stream_fun, assembler, :runner_consolidation_stream_event) do
+      {:ok, assembler} ->
+        {_assembler, response} = Assembler.finalize(assembler)
+
+        if response.error do
+          {:error, response.error}
+        else
+          {:ok, Map.delete(response, :streamed_text)}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -1297,7 +1427,7 @@ defmodule Nex.Agent.Runner do
         api_key: Keyword.get(opts, :api_key),
         base_url: Keyword.get(opts, :base_url),
         workspace: workspace,
-        req_llm_generate_text_fun: Keyword.get(opts, :req_llm_generate_text_fun),
+        req_llm_stream_text_fun: Keyword.get(opts, :req_llm_stream_text_fun),
         llm_call_fun: Keyword.get(opts, :llm_call_fun)
       )
     end
@@ -1344,82 +1474,6 @@ defmodule Nex.Agent.Runner do
     }
   end
 
-  defp maybe_flush_memory_before_consolidation(session, provider, model, api_key, base_url, opts) do
-    unconsolidated = length(session.messages) - session.last_consolidated
-
-    if unconsolidated < @memory_flush_min_messages do
-      :ok
-    else
-      lines =
-        session.messages
-        |> Enum.drop(session.last_consolidated)
-        |> Enum.take(-@memory_window)
-        |> Enum.map(fn msg ->
-          role = Map.get(msg, "role", "unknown")
-          content = Map.get(msg, "content", "") |> render_text()
-          "[#{role}] #{content}"
-        end)
-        |> Enum.reject(&(&1 == "[unknown] "))
-
-      if lines == [] do
-        :ok
-      else
-        prompt = """
-        Review this conversation excerpt before archival. If it contains one durable fact worth saving,
-        call memory_write exactly once with action=append or action=set for durable project/environment/workflow knowledge.
-        Do not write user profile facts here. If nothing is worth saving, do not call any tool.
-
-        ## USER.md
-        #{Memory.read_user_profile(workspace: Keyword.get(opts, :workspace))}
-
-        ## MEMORY.md
-        #{Memory.read_long_term(workspace: Keyword.get(opts, :workspace))}
-
-        ## Recent Conversation
-        #{Enum.join(lines, "\n")}
-        """
-
-        messages = [
-          %{
-            "role" => "system",
-            "content" =>
-              "You are a memory flush agent. Only call memory_write when the conversation contains durable long-term knowledge worth saving."
-          },
-          %{"role" => "user", "content" => prompt}
-        ]
-
-        case call_llm_for_consolidation(messages,
-               provider: provider,
-               model: model,
-               api_key: api_key,
-               base_url: base_url,
-               tools: [
-                 %{
-                   "type" => "function",
-                   "function" => Nex.Agent.Tool.MemoryWrite.definition()
-                 }
-               ],
-               tool_choice: tool_choice_for_memory_write(provider),
-               req_llm_generate_text_fun: Keyword.get(opts, :req_llm_generate_text_fun)
-             ) do
-          {:ok, %{} = args} when map_size(args) > 0 ->
-            _ =
-              Memory.apply_memory_write(
-                Map.get(args, "action"),
-                "memory",
-                Map.get(args, "content"),
-                workspace: Keyword.get(opts, :workspace)
-              )
-
-            :ok
-
-          _ ->
-            :ok
-        end
-      end
-    end
-  end
-
   defp render_text(nil), do: ""
   defp render_text(text) when is_binary(text), do: text
 
@@ -1457,8 +1511,6 @@ defmodule Nex.Agent.Runner do
       _ -> inspect(content, printable_limit: 500, limit: 50)
     end
   end
-
-  defp tool_choice_for_memory_write(_provider), do: nil
 
   defp trace_request_started(
          prompt,
@@ -1597,10 +1649,39 @@ defmodule Nex.Agent.Runner do
 
   defp trace_tool_definition(tool), do: %{"definition" => inspect(tool)}
 
-  defp workspace_opts(opts) do
-    case Keyword.get(opts, :workspace) do
-      nil -> []
-      workspace -> [workspace: workspace]
+  defp init_stream_assembler(opts) do
+    if streaming_result?(opts) do
+      assembler =
+        Assembler.new(
+          mode: :conversation,
+          run_id: Keyword.get(opts, :run_id) || "run_unknown",
+          sink: Keyword.get(opts, :stream_sink),
+          suppress_output?: Keyword.get(opts, :_suppress_current_reply_stream, false)
+        )
+
+      Keyword.put(opts, :_stream_assembler, assembler)
+    else
+      opts
     end
   end
+
+  defp suppress_stream_output(opts, suppress?) do
+    update_stream_assembler(opts, &Assembler.suppress_output(&1, suppress?))
+  end
+
+  defp update_stream_assembler(opts, fun) when is_function(fun, 1) do
+    case Keyword.get(opts, :_stream_assembler) do
+      %Assembler{} = assembler ->
+        Keyword.put(opts, :_stream_assembler, fun.(assembler))
+
+      _ ->
+        opts
+    end
+  end
+
+  defp take_stream_assembler(%{_stream_assembler: %Assembler{} = assembler} = response, opts) do
+    {Map.delete(response, :_stream_assembler), Keyword.put(opts, :_stream_assembler, assembler)}
+  end
+
+  defp take_stream_assembler(response, opts), do: {response, opts}
 end

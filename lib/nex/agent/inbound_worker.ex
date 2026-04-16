@@ -8,8 +8,9 @@ defmodule Nex.Agent.InboundWorker do
   use GenServer
   require Logger
 
-  alias Nex.Agent.{Bus, Config, MemoryUpdater, Runtime, Workspace}
+  alias Nex.Agent.{Bus, Config, MemoryUpdater, Outbound, Runtime, Workspace}
   alias Nex.Agent.Runtime.Snapshot
+  alias Nex.Agent.Stream.{Event, Result, Transport}
 
   defstruct [
     :config,
@@ -19,12 +20,13 @@ defmodule Nex.Agent.InboundWorker do
     agents: %{},
     active_tasks: %{},
     agent_last_active: %{},
-    pending_queue: %{}
+    pending_queue: %{},
+    stream_sessions: %{}
   ]
 
   @type agent_start_fun :: (keyword() -> {:ok, term()} | {:error, term()})
   @type agent_prompt_fun :: (term(), String.t(), keyword() ->
-                               {:ok, String.t(), term()} | {:error, term(), term()})
+                               {:ok, term(), term()} | {:error, term(), term()})
   @type agent_abort_fun :: (term() -> :ok | {:error, term()})
 
   @type t :: %__MODULE__{
@@ -35,7 +37,8 @@ defmodule Nex.Agent.InboundWorker do
           agents: %{String.t() => term()},
           active_tasks: %{String.t() => pid()},
           agent_last_active: %{String.t() => integer()},
-          pending_queue: %{term() => :queue.queue()}
+          pending_queue: %{term() => :queue.queue()},
+          stream_sessions: %{term() => term()}
         }
 
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -59,7 +62,8 @@ defmodule Nex.Agent.InboundWorker do
       agents: %{},
       active_tasks: %{},
       agent_last_active: %{},
-      pending_queue: %{}
+      pending_queue: %{},
+      stream_sessions: %{}
     }
 
     Bus.subscribe(:inbound)
@@ -91,8 +95,9 @@ defmodule Nex.Agent.InboundWorker do
       if from_cron, do: state, else: put_in(state.agents[key], updated_agent)
 
     state = %{state | active_tasks: Map.delete(state.active_tasks, key)}
+    {state, handled_by_stream?} = finalize_stream_session(state, key, {:ok, result})
 
-    unless result == :message_sent or from_cron or suppress_outbound?(result) do
+    unless from_cron or handled_by_stream? or suppress_outbound?(result) do
       publish_outbound(payload, result)
     end
 
@@ -116,9 +121,13 @@ defmodule Nex.Agent.InboundWorker do
       if from_cron, do: state, else: put_in(state.agents[key], updated_agent)
 
     state = %{state | active_tasks: Map.delete(state.active_tasks, key)}
+    formatted_reason = streaming_error_message(reason)
 
-    unless from_cron do
-      publish_outbound(payload, "Error: #{format_reason(reason)}")
+    {state, handled_by_stream?} =
+      finalize_stream_session(state, key, {:error, formatted_reason, reason})
+
+    unless from_cron or handled_by_stream? or suppress_outbound?(reason) do
+      publish_outbound(payload, "Error: #{formatted_reason}")
     end
 
     maybe_enqueue_memory_refresh(
@@ -135,8 +144,34 @@ defmodule Nex.Agent.InboundWorker do
   @impl true
   def handle_info({:async_result, key, {:error, reason}, payload}, state) do
     state = %{state | active_tasks: Map.delete(state.active_tasks, key)}
-    publish_outbound(payload, "Error: #{format_reason(reason)}")
+    formatted_reason = streaming_error_message(reason)
+
+    {state, handled_by_stream?} =
+      finalize_stream_session(state, key, {:error, formatted_reason, reason})
+
+    unless handled_by_stream? or suppress_outbound?(reason) do
+      publish_outbound(payload, "Error: #{formatted_reason}")
+    end
+
     {:noreply, maybe_drain_pending(state, key)}
+  end
+
+  @impl true
+  def handle_info({:stream_session_started, key, session}, state) do
+    {:noreply, put_in(state.stream_sessions[key], session)}
+  end
+
+  @impl true
+  def handle_info({:stream_event, key, %Event{} = event}, state) do
+    case Map.fetch(state.stream_sessions, key) do
+      {:ok, session} ->
+        {updated_session, actions} = Transport.handle_event(session, event)
+        Transport.run_actions(session, actions)
+        {:noreply, put_in(state.stream_sessions[key], updated_session)}
+
+      :error ->
+        {:noreply, state}
+    end
   end
 
   @impl true
@@ -290,29 +325,13 @@ defmodule Nex.Agent.InboundWorker do
 
     {:ok, pid} =
       Task.Supervisor.start_child(Nex.Agent.TaskSupervisor, fn ->
-        # For Feishu channels: send initial "thinking" card and get message_id for updates
-        card_message_id =
-          if channel == "feishu" and not from_cron do
-            case Nex.Agent.Channel.Feishu.send_card(
-                   chat_id,
-                   "✨ Thinking...",
-                   extract_metadata(payload)
-                 ) do
-              {:ok, mid} when is_binary(mid) and mid != "" ->
-                mid
-
-              _ ->
-                nil
-            end
-          else
-            nil
-          end
-
         try do
-          on_progress =
-            if from_cron,
-              do: nil,
-              else: build_progress_callback(channel, card_message_id)
+          stream_sink =
+            if from_cron do
+              nil
+            else
+              build_stream_sink(parent, key, channel, chat_id, payload)
+            end
 
           result =
             state.agent_prompt_fun.(
@@ -321,7 +340,7 @@ defmodule Nex.Agent.InboundWorker do
               [
                 channel: channel,
                 chat_id: chat_id,
-                on_progress: on_progress,
+                stream_sink: stream_sink,
                 workspace: workspace,
                 schedule_memory_refresh: false
               ]
@@ -329,30 +348,13 @@ defmodule Nex.Agent.InboundWorker do
               |> Kernel.++(cron_opts)
             )
 
-          # Finalize progress card with all accumulated tool hints (card stays as execution log)
-          if is_binary(card_message_id) and card_message_id != "" do
-            finalize_progress_card(card_message_id)
-          end
-
-          # Send original payload (no _card_message_id) so the final result goes as a new message
           send(parent, {:async_result, key, result, payload})
         rescue
           e ->
-            if is_binary(card_message_id) and card_message_id != "" do
-              finalize_progress_card(card_message_id)
-            end
-
             send(parent, {:async_result, key, {:error, Exception.message(e)}, payload})
         catch
           kind, reason ->
-            if is_binary(card_message_id) and card_message_id != "" do
-              finalize_progress_card(card_message_id)
-            end
-
-            send(
-              parent,
-              {:async_result, key, {:error, "#{kind}: #{inspect(reason)}"}, payload}
-            )
+            send(parent, {:async_result, key, {:error, "#{kind}: #{inspect(reason)}"}, payload})
         end
       end)
 
@@ -366,55 +368,21 @@ defmodule Nex.Agent.InboundWorker do
     }
   end
 
-  defp build_progress_callback(channel, card_message_id) do
-    fn type, progress_content ->
-      cond do
-        # Feishu with active card: accumulate tool hints on the card
-        channel == "feishu" and is_binary(card_message_id) and card_message_id != "" ->
-          case type do
-            :tool_hint ->
-              hints = Process.get(:tool_hints, [])
-              hints = hints ++ [progress_content]
-              Process.put(:tool_hints, hints)
+  defp build_stream_sink(parent, key, channel, chat_id, payload) do
+    metadata = extract_metadata(payload)
 
-              text = Enum.map_join(hints, "\n", fn h -> "⚙️ #{h}" end)
-              Nex.Agent.Channel.Feishu.update_card(card_message_id, text)
+    case Transport.open_session(key, channel, chat_id, metadata) do
+      {:ok, session} ->
+        send(parent, {:stream_session_started, key, session})
 
-            :thinking ->
-              hints = Process.get(:tool_hints, [])
-
-              text =
-                if hints == [] do
-                  "💡 Thinking..."
-                else
-                  Enum.map_join(hints, "\n", fn h -> "⚙️ #{h}" end) <> "\n💡 Thinking..."
-                end
-
-              Nex.Agent.Channel.Feishu.update_card(card_message_id, text)
-
-            _ ->
-              :ok
-          end
-
+        fn %Event{} = event ->
+          send(parent, {:stream_event, key, event})
           :ok
+        end
 
-        true ->
-          :ok
-      end
+      :error ->
+        nil
     end
-  end
-
-  defp finalize_progress_card(card_message_id) do
-    hints = Process.get(:tool_hints, [])
-
-    text =
-      if hints == [] do
-        "✅ Done"
-      else
-        Enum.map_join(hints, "\n", fn h -> "⚙️ #{h}" end) <> "\n✅ Done"
-      end
-
-    Nex.Agent.Channel.Feishu.update_card(card_message_id, text)
   end
 
   defp maybe_drain_pending(state, key) do
@@ -608,17 +576,7 @@ defmodule Nex.Agent.InboundWorker do
   defp publish_outbound(payload, content, extra_meta \\ []) do
     channel = Map.get(payload, :channel) || Map.get(payload, "channel") || "unknown"
     chat_id = payload_chat_id(payload)
-
-    outbound_topic =
-      case channel do
-        "telegram" -> :telegram_outbound
-        "feishu" -> :feishu_outbound
-        "discord" -> :discord_outbound
-        "slack" -> :slack_outbound
-        "dingtalk" -> :dingtalk_outbound
-        "http" -> :http_outbound
-        _ -> :outbound
-      end
+    outbound_topic = Outbound.topic_for_channel(channel)
 
     metadata =
       payload
@@ -691,7 +649,7 @@ defmodule Nex.Agent.InboundWorker do
 
     default_agent_prompt_fun?(prompt_fun) or
       Map.has_key?(metadata, "memory_refresh_llm_call_fun") or
-      Map.has_key?(metadata, "memory_refresh_req_llm_generate_text_fun")
+      Map.has_key?(metadata, "memory_refresh_req_llm_stream_text_fun")
   end
 
   defp memory_refresh_allowed?(_agent, prompt_fun), do: default_agent_prompt_fun?(prompt_fun)
@@ -720,6 +678,9 @@ defmodule Nex.Agent.InboundWorker do
 
   # Suppress LLM outputs that are clearly not real replies to the user.
   # Uses structural checks rather than keyword blocklists.
+  defp suppress_outbound?(%Result{handled?: true}), do: true
+  defp suppress_outbound?(:message_sent), do: true
+
   defp suppress_outbound?(content) when is_binary(content) do
     trimmed = String.trim(content)
 
@@ -744,6 +705,25 @@ defmodule Nex.Agent.InboundWorker do
   end
 
   defp suppress_outbound?(_), do: false
+
+  defp finalize_stream_session(state, key, result) do
+    case Map.fetch(state.stream_sessions, key) do
+      {:ok, session} ->
+        final_result = coerce_stream_result(result, session, key)
+
+        {_updated_session, actions, handled?} =
+          case final_result.status do
+            :ok -> Transport.finalize_success(session, final_result)
+            :error -> Transport.finalize_error(session, final_result)
+          end
+
+        Transport.run_actions(session, actions)
+        {%{state | stream_sessions: Map.delete(state.stream_sessions, key)}, handled?}
+
+      :error ->
+        {state, false}
+    end
+  end
 
   defp normalize_inbound_content(content) when is_binary(content), do: content
   defp normalize_inbound_content(nil), do: ""
@@ -779,4 +759,45 @@ defmodule Nex.Agent.InboundWorker do
 
   defp format_reason(reason) when is_binary(reason), do: reason
   defp format_reason(reason), do: inspect(reason)
+
+  defp streaming_error_message(%Result{} = result) do
+    result.final_content || format_reason(result.error)
+  end
+
+  defp streaming_error_message(reason), do: format_reason(reason)
+
+  defp coerce_stream_result({:ok, %Result{} = result}, _session, _key), do: result
+
+  defp coerce_stream_result({:ok, :message_sent}, session, key) do
+    Result.ok(stream_run_id(session, key), nil, %{message_sent: true})
+  end
+
+  defp coerce_stream_result({:ok, result}, session, key) when is_binary(result) do
+    Result.ok(stream_run_id(session, key), result)
+  end
+
+  defp coerce_stream_result({:ok, result}, session, key) do
+    Result.ok(stream_run_id(session, key), to_string(result))
+  end
+
+  defp coerce_stream_result({:error, _message, %Result{} = result}, _session, _key), do: result
+
+  defp coerce_stream_result({:error, _message, reason}, session, key) do
+    message = format_reason(reason)
+    Result.error(stream_run_id(session, key), reason, message)
+  end
+
+  defp coerce_stream_result({:error, message}, session, key) do
+    Result.error(stream_run_id(session, key), message, format_reason(message))
+  end
+
+  defp stream_run_id(session, key) do
+    cond do
+      is_map(session) and Map.has_key?(session, :run_id) and is_binary(session.run_id) ->
+        session.run_id
+
+      true ->
+        "run_" <> Integer.to_string(:erlang.phash2(key))
+    end
+  end
 end

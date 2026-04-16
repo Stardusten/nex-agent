@@ -113,7 +113,7 @@ defmodule Nex.Agent.RunnerEvolutionTest do
 
     {:ok, _result, session} =
       Runner.run(session, "记住这个项目约定",
-        llm_client: llm_client,
+        llm_stream_client: stream_client_from_response(llm_client),
         workspace: workspace,
         skip_consolidation: true
       )
@@ -151,7 +151,7 @@ defmodule Nex.Agent.RunnerEvolutionTest do
 
     {:ok, _result, _session} =
       Runner.run(Session.new("runner-media"), "这张图里是什么",
-        llm_client: llm_client,
+        llm_stream_client: stream_client_from_response(llm_client),
         media: media,
         workspace: workspace,
         skip_consolidation: true,
@@ -187,7 +187,7 @@ defmodule Nex.Agent.RunnerEvolutionTest do
 
     {:ok, _result, _session} =
       Runner.run(Session.new("trace-basic"), "show trace",
-        llm_client: llm_client,
+        llm_stream_client: stream_client_from_response(llm_client),
         workspace: workspace,
         request_trace: %{"enabled" => true},
         skip_consolidation: true,
@@ -243,7 +243,7 @@ defmodule Nex.Agent.RunnerEvolutionTest do
 
     {:ok, _result, _session} =
       Runner.run(Session.new("trace-tools"), "inspect workspace",
-        llm_client: llm_client,
+        llm_stream_client: stream_client_from_response(llm_client),
         workspace: workspace,
         request_trace: %{"enabled" => true},
         skill_runtime: %{"enabled" => true, "post_run_analysis" => false},
@@ -287,39 +287,39 @@ defmodule Nex.Agent.RunnerEvolutionTest do
       {:ok, %{content: "ok", finish_reason: nil, tool_calls: []}}
     end
 
-    req_llm_generate_text_fun = fn _model_spec, _messages, opts ->
+    req_llm_stream_text_fun = fn _model_spec, _messages, opts ->
       tool_names = Enum.map(opts[:tools] || [], &tool_name_from_definition/1)
 
       cond do
         "memory_write" in tool_names ->
-          {:ok, %{content: "", finish_reason: nil, tool_calls: []}}
+          {:ok, %{stream: [], finish_reason: :stop}}
 
         "save_memory" in tool_names ->
           {:ok,
            %{
-             tool_calls: [
+             stream: [
                %{
-                 function: %{
-                   name: "save_memory",
-                   arguments: %{
-                     "history_entry" => "[2026-03-30 10:00] Auto consolidation ran.",
-                     "memory_update" => "# Memory\n\nAuto consolidation fact.\n"
-                   }
+                 type: :tool_call,
+                 name: "save_memory",
+                 arguments: %{
+                   "history_entry" => "[2026-03-30 10:00] Auto consolidation ran.",
+                   "memory_update" => "# Memory\n\nAuto consolidation fact.\n"
                  }
                }
-             ]
+             ],
+             finish_reason: :stop
            }}
 
         true ->
-          {:ok, %{content: "", finish_reason: nil, tool_calls: []}}
+          {:ok, %{stream: [], finish_reason: :stop}}
       end
     end
 
     {:ok, _result, _session} =
       Runner.run(session, "latest prompt",
-        llm_client: llm_client,
+        llm_stream_client: stream_client_from_response(llm_client),
         workspace: workspace,
-        req_llm_generate_text_fun: req_llm_generate_text_fun,
+        req_llm_stream_text_fun: req_llm_stream_text_fun,
         channel: "telegram",
         chat_id: "auto"
       )
@@ -366,7 +366,7 @@ defmodule Nex.Agent.RunnerEvolutionTest do
 
     {:ok, _result, session_after_first} =
       Runner.run(Session.new("skill-nudge"), "先分析一下项目",
-        llm_client: llm_client_first,
+        llm_stream_client: stream_client_from_response(llm_client_first),
         workspace: workspace,
         cwd: workspace,
         skill_runtime: %{"enabled" => true},
@@ -403,7 +403,7 @@ defmodule Nex.Agent.RunnerEvolutionTest do
 
     {:ok, _result, session_after_second} =
       Runner.run(session_after_first, "把刚才的方法沉淀一下",
-        llm_client: llm_client_second,
+        llm_stream_client: stream_client_from_response(llm_client_second),
         workspace: workspace,
         cwd: workspace,
         skill_runtime: %{"enabled" => true},
@@ -422,7 +422,7 @@ defmodule Nex.Agent.RunnerEvolutionTest do
              false
   end
 
-  test "structured tool arguments crash in tool hint normalization", %{workspace: workspace} do
+  test "structured tool arguments do not crash unified event emission", %{workspace: workspace} do
     llm_client = fn _messages, _opts ->
       {:ok,
        %{
@@ -442,8 +442,7 @@ defmodule Nex.Agent.RunnerEvolutionTest do
 
     assert {:ok, _result, _session} =
              Runner.run(Session.new("runner-structured-args"), "trigger structured args",
-               llm_client: llm_client,
-               on_progress: fn _, _ -> :ok end,
+               llm_stream_client: stream_client_from_response(llm_client),
                workspace: workspace,
                skip_consolidation: true
              )
@@ -481,7 +480,7 @@ defmodule Nex.Agent.RunnerEvolutionTest do
 
     assert {:ok, "ok", session} =
              Runner.run(Session.new("runner-malformed-tool"), "trigger malformed tool",
-               llm_client: llm_client,
+               llm_stream_client: stream_client_from_response(llm_client),
                workspace: workspace,
                skip_consolidation: true
              )
@@ -495,7 +494,7 @@ defmodule Nex.Agent.RunnerEvolutionTest do
            end)
   end
 
-  test "structured model content crashes in progress thinking sanitization", %{
+  test "structured model content does not crash unified event handling", %{
     workspace: workspace
   } do
     llm_client = fn _messages, _opts ->
@@ -517,8 +516,7 @@ defmodule Nex.Agent.RunnerEvolutionTest do
 
     assert {:ok, _result, _session} =
              Runner.run(Session.new("runner-structured-content"), "trigger structured content",
-               llm_client: llm_client,
-               on_progress: fn _, _ -> :ok end,
+               llm_stream_client: stream_client_from_response(llm_client),
                workspace: workspace,
                skip_consolidation: true
              )
@@ -546,7 +544,7 @@ defmodule Nex.Agent.RunnerEvolutionTest do
 
     {:ok, _result, telegram_session} =
       Runner.run(Session.new("telegram:1"), "hello from telegram",
-        llm_client: llm_client,
+        llm_stream_client: stream_client_from_response(llm_client),
         workspace: workspace,
         skip_consolidation: true,
         session_key: "telegram:1",
@@ -556,7 +554,7 @@ defmodule Nex.Agent.RunnerEvolutionTest do
 
     {:ok, _result, discord_session} =
       Runner.run(Session.new("discord:2"), "hello from discord",
-        llm_client: llm_client,
+        llm_stream_client: stream_client_from_response(llm_client),
         workspace: workspace,
         skip_consolidation: true,
         session_key: "discord:2",
@@ -632,7 +630,7 @@ defmodule Nex.Agent.RunnerEvolutionTest do
 
     assert {:ok, "ok", _updated_session} =
              Runner.run(session, "继续",
-               llm_client: llm_client,
+               llm_stream_client: stream_client_from_response(llm_client),
                workspace: workspace,
                skip_consolidation: true
              )
@@ -683,7 +681,7 @@ defmodule Nex.Agent.RunnerEvolutionTest do
 
     assert {:ok, :message_sent, _session} =
              Runner.run(Session.new("feishu:ou_current"), "123",
-               llm_client: llm_client,
+               llm_stream_client: stream_client_from_response(llm_client),
                workspace: workspace,
                skip_consolidation: true,
                channel: "feishu",
@@ -734,7 +732,7 @@ defmodule Nex.Agent.RunnerEvolutionTest do
 
     assert {:ok, "当前会话的最终回复", _session} =
              Runner.run(Session.new("feishu:ou_current"), "123",
-               llm_client: llm_client,
+               llm_stream_client: stream_client_from_response(llm_client),
                workspace: workspace,
                skip_consolidation: true,
                channel: "feishu",
@@ -751,7 +749,7 @@ defmodule Nex.Agent.RunnerEvolutionTest do
   test "call_llm_for_consolidation retries anthropic match errors without tool_choice" do
     parent = self()
 
-    llm_generate_text_fun = fn _model_spec, _messages, opts ->
+    llm_stream_text_fun = fn _model_spec, _messages, opts ->
       send(parent, {:consolidation_opts, opts})
 
       case Process.get(:runner_consolidation_retry_count, 0) do
@@ -762,17 +760,17 @@ defmodule Nex.Agent.RunnerEvolutionTest do
         _ ->
           {:ok,
            %{
-             tool_calls: [
+             stream: [
                %{
-                 function: %{
-                   name: "save_memory",
-                   arguments: %{
-                     "history_entry" => "[2026-03-18 13:00] Anthropic retry worked.",
-                     "memory_update" => "# Memory\n\nRetry path succeeded.\n"
-                   }
+                 type: :tool_call,
+                 name: "save_memory",
+                 arguments: %{
+                   "history_entry" => "[2026-03-18 13:00] Anthropic retry worked.",
+                   "memory_update" => "# Memory\n\nRetry path succeeded.\n"
                  }
                }
-             ]
+             ],
+             finish_reason: :stop
            }}
       end
     end
@@ -787,7 +785,7 @@ defmodule Nex.Agent.RunnerEvolutionTest do
                model: "claude-sonnet-4-20250514",
                tools: [save_memory_tool_definition()],
                tool_choice: %{type: "tool", name: "save_memory"},
-               req_llm_generate_text_fun: llm_generate_text_fun
+               req_llm_stream_text_fun: llm_stream_text_fun
              )
 
     assert_receive {:consolidation_opts, first_opts}
@@ -799,7 +797,7 @@ defmodule Nex.Agent.RunnerEvolutionTest do
   test "call_llm_for_consolidation returns non-retryable errors unchanged" do
     parent = self()
 
-    llm_generate_text_fun = fn _model_spec, _messages, opts ->
+    llm_stream_text_fun = fn _model_spec, _messages, opts ->
       send(parent, {:consolidation_opts, opts})
       {:error, "upstream unavailable"}
     end
@@ -810,7 +808,7 @@ defmodule Nex.Agent.RunnerEvolutionTest do
                model: "claude-sonnet-4-20250514",
                tools: [save_memory_tool_definition()],
                tool_choice: %{type: "tool", name: "save_memory"},
-               req_llm_generate_text_fun: llm_generate_text_fun
+               req_llm_stream_text_fun: llm_stream_text_fun
              )
 
     assert_receive {:consolidation_opts, first_opts}
@@ -918,4 +916,61 @@ defmodule Nex.Agent.RunnerEvolutionTest do
       wait_for_value(fun, predicate, attempts - 1)
     end
   end
+
+  defp stream_client_from_response(fun) when is_function(fun, 2) do
+    fn messages, opts, callback ->
+      case fun.(messages, opts) do
+        {:ok, response} when is_map(response) ->
+          emit_mock_stream_response(callback, response)
+          :ok
+
+        {:error, reason} ->
+          {:error, reason}
+
+        response when is_map(response) ->
+          emit_mock_stream_response(callback, response)
+          :ok
+
+        other ->
+          other
+      end
+    end
+  end
+
+  defp emit_mock_stream_response(callback, response) do
+    reasoning_content =
+      Map.get(response, :reasoning_content) || Map.get(response, "reasoning_content")
+
+    if is_binary(reasoning_content) and String.trim(reasoning_content) != "" do
+      callback.({:thinking, reasoning_content})
+    end
+
+    content = Map.get(response, :content) || Map.get(response, "content") || ""
+
+    if is_binary(content) do
+      case render_mock_content(content) do
+        "" -> :ok
+        text -> callback.({:delta, text})
+      end
+    end
+
+    tool_calls = Map.get(response, :tool_calls) || Map.get(response, "tool_calls") || []
+
+    if tool_calls != [] do
+      callback.({:tool_calls, tool_calls})
+    end
+
+    callback.(
+      {:done,
+       %{
+         finish_reason: Map.get(response, :finish_reason) || Map.get(response, "finish_reason"),
+         usage: Map.get(response, :usage) || Map.get(response, "usage"),
+         model: Map.get(response, :model) || Map.get(response, "model")
+       }}
+    )
+  end
+
+  defp render_mock_content(nil), do: ""
+  defp render_mock_content(text) when is_binary(text), do: text
+  defp render_mock_content(text), do: inspect(text, printable_limit: 500, limit: 50)
 end
