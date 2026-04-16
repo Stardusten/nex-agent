@@ -104,8 +104,6 @@ defmodule Nex.Agent.Stream.Assembler do
 
   @spec emit_text_delta(t(), String.t() | nil) :: t()
   def emit_text_delta(%__MODULE__{} = assembler, text) when is_binary(text) do
-    text = String.trim(text)
-
     if text != "" do
       assembler
       |> maybe_start_message()
@@ -216,7 +214,7 @@ defmodule Nex.Agent.Stream.Assembler do
   defp maybe_emit_stream_delta(%__MODULE__{mode: :conversation, suppress_output?: false} = assembler, text) do
     assembler
     |> maybe_start_message()
-    |> emit_event(:text_delta, content: String.trim(text))
+    |> emit_event(:text_delta, content: text)
   end
 
   defp maybe_emit_stream_delta(%__MODULE__{} = assembler, _text), do: assembler

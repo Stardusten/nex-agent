@@ -62,6 +62,72 @@ defmodule Nex.Agent.RunnerStreamTest do
     assert List.last(session.messages)["content"] == "hello"
   end
 
+  test "runner preserves whitespace and newlines in streamed text deltas" do
+    parent = self()
+
+    workspace =
+      Path.join(
+        System.tmp_dir!(),
+        "nex-agent-runner-stream-markdown-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(Path.join(workspace, "memory"))
+    File.write!(Path.join(workspace, "AGENTS.md"), "# AGENTS\n")
+    File.write!(Path.join(workspace, "SOUL.md"), "# SOUL\n")
+    File.write!(Path.join(workspace, "USER.md"), "# USER\n")
+    File.write!(Path.join(workspace, "TOOLS.md"), "# TOOLS\n")
+    File.write!(Path.join(workspace, "memory/MEMORY.md"), "# Memory\n")
+
+    on_exit(fn -> File.rm_rf!(workspace) end)
+
+    stream_sink = fn %Event{} = event ->
+      send(parent, {:stream_event, event})
+      :ok
+    end
+
+    markdown = "# Title\n\n- item 1\n- item 2\n"
+
+    stream_text_fun = fn _model_spec, _messages, _opts ->
+      {:ok,
+       %{
+         stream: [
+           %{type: :content, text: "#"},
+           %{type: :content, text: " Title"},
+           %{type: :content, text: "\n\n"},
+           %{type: :content, text: "-"},
+           %{type: :content, text: " item 1"},
+           %{type: :content, text: "\n"},
+           %{type: :content, text: "- item 2\n"}
+         ],
+         finish_reason: :stop
+       }}
+    end
+
+    assert {:ok, %Result{handled?: true, status: :ok, final_content: ^markdown}, _session} =
+             Runner.run(Session.new("stream:markdown"), "hi",
+               workspace: workspace,
+               provider: :ollama,
+               model: "qwen2.5:latest",
+               base_url: "http://localhost:11434",
+               skip_consolidation: true,
+               skip_skills: true,
+               stream_sink: stream_sink,
+               req_llm_stream_text_fun: stream_text_fun
+             )
+
+    assert [
+             %Event{type: :message_start, seq: 1},
+             %Event{type: :text_delta, seq: 2, content: "#"},
+             %Event{type: :text_delta, seq: 3, content: " Title"},
+             %Event{type: :text_delta, seq: 4, content: "\n\n"},
+             %Event{type: :text_delta, seq: 5, content: "-"},
+             %Event{type: :text_delta, seq: 6, content: " item 1"},
+             %Event{type: :text_delta, seq: 7, content: "\n"},
+             %Event{type: :text_delta, seq: 8, content: "- item 2\n"},
+             %Event{type: :message_end, seq: 9, content: ^markdown}
+           ] = collect_stream_events([])
+  end
+
   test "runner resets stream process state between runs in the same process" do
     parent = self()
 

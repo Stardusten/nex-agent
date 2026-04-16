@@ -109,29 +109,19 @@ defmodule Nex.Agent.Stream.FeishuSession do
   @spec finalize_success(t(), Result.t()) :: {t(), [action()], boolean()}
   def finalize_success(%__MODULE__{} = session, %Result{} = result) do
     cond do
-      session.completed and session.user_visible ->
+      session.completed ->
         {session, [], true}
-
-      session.user_visible ->
-        {session, actions} = maybe_flush_text(session, true)
-        {%{session | completed: true}, actions, true}
 
       Result.message_sent?(result) ->
         text = "✅ Done"
         {%{session | completed: true}, [update_card_action(session, text)], true}
 
       is_binary(result.final_content) and String.trim(result.final_content) != "" ->
-        text = String.trim(result.final_content)
+        publish_final(session, result.final_content)
 
-        session = %{
-          session
-          | visible_text: text,
-            last_flushed_text: text,
-            user_visible: true,
-            completed: true
-        }
-
-        {session, [update_card_action(session, text)], true}
+      session.user_visible ->
+        {session, actions} = maybe_flush_text(session, true)
+        {%{session | completed: true}, actions, true}
 
       true ->
         text = completion_text(session)
@@ -207,6 +197,18 @@ defmodule Nex.Agent.Stream.FeishuSession do
 
   defp update_card_action(%__MODULE__{card_message_id: message_id}, text),
     do: {:update_card, message_id, text}
+
+  defp publish_final(%__MODULE__{} = session, content) do
+    updated = %{
+      session
+      | visible_text: content,
+        last_flushed_text: content,
+        user_visible: true,
+        completed: true
+    }
+
+    {updated, [update_card_action(updated, content)], true}
+  end
 
   defp truncate_hint(text) when is_binary(text) and byte_size(text) > 120 do
     String.slice(text, 0, 117) <> "..."

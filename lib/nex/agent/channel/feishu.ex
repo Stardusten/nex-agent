@@ -28,6 +28,7 @@ defmodule Nex.Agent.Channel.Feishu do
     :react_emoji,
     :enabled,
     :http_post_fun,
+    :http_patch_fun,
     :http_post_multipart_fun,
     :http_get_fun,
     :tenant_access_token,
@@ -51,6 +52,7 @@ defmodule Nex.Agent.Channel.Feishu do
           react_emoji: String.t(),
           enabled: boolean(),
           http_post_fun: (String.t(), map(), keyword() -> {:ok, map()} | {:error, term()}),
+          http_patch_fun: (String.t(), map(), keyword() -> {:ok, map()} | {:error, term()}),
           http_post_multipart_fun: (String.t(), keyword(), keyword() ->
                                       {:ok, map()} | {:error, term()}),
           http_get_fun: (String.t(), keyword() -> {:ok, map()} | {:error, term()}),
@@ -152,6 +154,7 @@ defmodule Nex.Agent.Channel.Feishu do
       react_emoji: Config.feishu_react_emoji(config),
       enabled: Config.feishu_enabled?(config),
       http_post_fun: Keyword.get(opts, :http_post_fun, &default_http_post/3),
+      http_patch_fun: Keyword.get(opts, :http_patch_fun, &default_http_patch/3),
       http_post_multipart_fun:
         Keyword.get(opts, :http_post_multipart_fun, &default_http_post_multipart/3),
       http_get_fun: Keyword.get(opts, :http_get_fun, &default_http_get/2),
@@ -1589,9 +1592,15 @@ defmodule Nex.Agent.Channel.Feishu do
     |> normalize_feishu_response()
   end
 
-  defp feishu_patch(_state, path, body, headers) do
+  defp feishu_patch(state, path, body, headers) do
     url = @feishu_api <> path
 
+    state.http_patch_fun.(url, body, headers)
+    |> normalize_req_response()
+    |> normalize_feishu_response()
+  end
+
+  defp default_http_patch(url, body, headers) do
     Req.patch(url,
       json: body,
       headers: headers,
@@ -1599,8 +1608,6 @@ defmodule Nex.Agent.Channel.Feishu do
       retry: false,
       finch: Req.Finch
     )
-    |> normalize_req_response()
-    |> normalize_feishu_response()
   end
 
   defp feishu_get_binary(state, path, headers) do

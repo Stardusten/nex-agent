@@ -3,6 +3,7 @@ defmodule Nex.Agent.Channel.FeishuTest do
 
   alias Nex.Agent.{Bus, Config}
   alias Nex.Agent.Channel.Feishu
+  alias Nex.Agent.Stream.{FeishuSession, Result, Transport}
 
   setup do
     if Process.whereis(Bus) == nil do
@@ -23,6 +24,16 @@ defmodule Nex.Agent.Channel.FeishuTest do
 
         true ->
           {:ok, %{"code" => 1, "msg" => "unexpected"}}
+      end
+    end
+
+    http_patch_fun = fn url, body, headers ->
+      send(parent, {:http_patch, url, body, headers})
+
+      if String.contains?(url, "/im/v1/messages/") do
+        {:ok, %{"code" => 0, "data" => %{}}}
+      else
+        {:ok, %{"code" => 1, "msg" => "unexpected"}}
       end
     end
 
@@ -52,14 +63,12 @@ defmodule Nex.Agent.Channel.FeishuTest do
     end
 
     config = %Config{Config.default() | feishu: %{"enabled" => false}}
-    name = String.to_atom("feishu_test_#{System.unique_integer([:positive])}")
-
     pid =
       start_supervised!(
         {Feishu,
-         name: name,
          config: config,
          http_post_fun: http_post_fun,
+         http_patch_fun: http_patch_fun,
          http_post_multipart_fun: http_post_multipart_fun,
          http_get_fun: http_get_fun}
       )
@@ -126,6 +135,44 @@ defmodule Nex.Agent.Channel.FeishuTest do
     assert is_binary(body2["content"])
   end
 
+  test "public send_card and update_card patch the same carrier", %{pid: _pid} do
+    assert {:ok, "om_123"} = Feishu.send_card("ou_123", "hello card", %{})
+
+    assert_receive {:http_post, url1, _body1, _headers1}
+    assert url1 =~ "/auth/v3/tenant_access_token/internal"
+
+    assert_receive {:http_post, url2, body2, _headers2}
+    assert url2 =~ "/im/v1/messages"
+    assert body2["msg_type"] == "interactive"
+
+    assert :ok = Feishu.update_card("om_123", "hello updated")
+
+    assert_receive {:http_patch, patch_url, patch_body, _patch_headers}
+    assert patch_url =~ "/im/v1/messages/om_123"
+    assert is_binary(patch_body["content"])
+    assert patch_body["content"] =~ "hello updated"
+  end
+
+  test "feishu session finalize_success patches final markdown content", %{pid: _pid} do
+    {:ok, %FeishuSession{} = session} =
+      Transport.open_session(
+        {:workspace, "feishu:ou_123"},
+        "feishu",
+        "ou_123",
+        %{}
+      )
+
+    streamed_session = %FeishuSession{session | visible_text: "#Title", user_visible: true}
+    result = Result.ok("run_1", "# Title\n\n- item 1\n- item 2\n")
+
+    {final_session, actions, handled?} = Transport.finalize_success(streamed_session, result)
+
+    assert handled?
+    assert final_session.completed
+    assert final_session.visible_text == "# Title\n\n- item 1\n- item 2\n"
+    assert actions == [{:update_card, "om_123", "# Title\n\n- item 1\n- item 2\n"}]
+  end
+
   test "synchronous local image send uploads and delivers native image message", %{pid: pid} do
     path =
       Path.join(System.tmp_dir!(), "feishu_test_image_#{System.unique_integer([:positive])}.png")
@@ -155,13 +202,21 @@ defmodule Nex.Agent.Channel.FeishuTest do
   end
 
   test "progress payloads are ignored instead of being sent to feishu", %{pid: _pid} do
+    drain_http_posts()
+
     Bus.publish_sync(:feishu_outbound, %{
       chat_id: "ou_123",
       content: "内部进度",
       metadata: %{"_progress" => true}
     })
 
-    refute_receive {:http_post, _, _, _}, 100
+    posts = collect_http_posts([])
+
+    refute Enum.any?(posts, fn {url, body} ->
+             String.contains?(url, "/im/v1/messages") and
+               Map.get(body, "receive_id") == "ou_123" and
+               to_string(Map.get(body, "content", "")) =~ "内部进度"
+           end)
   end
 
   test "ingest_event keeps structured normalized metadata for location messages", %{pid: pid} do
@@ -194,6 +249,26 @@ defmodule Nex.Agent.Channel.FeishuTest do
     assert inbound.metadata["message_type"] == "location"
     assert inbound.metadata["raw_content_json"]["name"] == "Shanghai Tower"
     assert inbound.metadata["normalized_content"]["card"]["longitude"] == "121.499"
+  end
+
+  defp drain_http_posts do
+    receive do
+      {:http_post, _url, _body, _headers} ->
+        drain_http_posts()
+    after
+      0 ->
+        :ok
+    end
+  end
+
+  defp collect_http_posts(acc) do
+    receive do
+      {:http_post, url, body, _headers} ->
+        collect_http_posts([{url, body} | acc])
+    after
+      150 ->
+        Enum.reverse(acc)
+    end
   end
 
   test "ingest_event extracts post resources into metadata", %{pid: pid} do
