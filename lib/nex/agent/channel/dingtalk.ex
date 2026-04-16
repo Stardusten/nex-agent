@@ -26,6 +26,7 @@ defmodule Nex.Agent.Channel.DingTalk do
   require Logger
 
   alias Nex.Agent.{Bus, Config}
+  alias Nex.Agent.Inbound.Envelope
 
   @dingtalk_api "https://api.dingtalk.com"
   @stream_api "https://api.dingtalk.com/v1.0/gateway/connections/open"
@@ -222,17 +223,21 @@ defmodule Nex.Agent.Channel.DingTalk do
     if clean_text != "" and allowed?(conversation_id, state.allow_from) do
       Logger.info("[DingTalk] Inbound from #{sender_id} in #{conversation_id}")
 
-      Bus.publish(:inbound, %{
+      Bus.publish(:inbound, %Envelope{
         channel: "dingtalk",
         chat_id: to_string(conversation_id),
         sender_id: to_string(sender_id),
-        content: clean_text,
+        text: clean_text,
+        message_type: :text,
+        raw: data,
         metadata: %{
           "conversation_type" => conversation_type,
           "msg_id" => msg_id,
           "webhook_url" => Map.get(data, "sessionWebhook"),
           "sender_nick" => Map.get(data, "senderNick")
-        }
+        },
+        media_refs: [],
+        attachments: []
       })
     end
   end

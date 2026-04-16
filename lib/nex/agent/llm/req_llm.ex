@@ -6,74 +6,19 @@ defmodule Nex.Agent.LLM.ReqLLM do
 
   alias ReqLLM.Context
   alias ReqLLM.Message.ContentPart
-  alias ReqLLM.Response
   alias ReqLLM.StreamChunk
   alias ReqLLM.StreamResponse
   alias ReqLLM.Tool
   alias ReqLLM.ToolCall
   alias Nex.Agent.LLM.ProviderProfile
 
-  @chat_timeout 180_000
-
-  def chat(messages, options) do
-    provider = Keyword.get(options, :provider, :anthropic)
-    profile = ProviderProfile.for(provider, options)
-    model_spec = resolve_model(profile, options)
-    {req_messages, prepared_options} =
-      messages
-      |> sanitize_messages()
-      |> prepare_messages_and_options(profile, options)
-
-    req_options = build_req_llm_options(prepared_options)
-    started_at = System.monotonic_time(:millisecond)
-
-    generate_text_fun =
-      Keyword.get(options, :req_llm_generate_text_fun) || (&ReqLLM.generate_text/3)
-
-    Logger.info(
-      "[ReqLLM] chat start model=#{model_spec_log(model_spec)} " <>
-        "messages=#{req_message_stats(req_messages)} options=#{req_options_log(req_options)}"
-    )
-
-    try do
-      case generate_text_fun.(model_spec, req_messages, req_options) do
-        {:ok, response} ->
-          parsed = parse_response(response)
-          duration_ms = System.monotonic_time(:millisecond) - started_at
-
-          Logger.info(
-            "[ReqLLM] chat success duration_ms=#{duration_ms} response=#{response_log(parsed)}"
-          )
-
-          {:ok, parsed}
-
-        {:error, reason} ->
-          normalized = normalize_error(reason)
-          duration_ms = System.monotonic_time(:millisecond) - started_at
-
-          Logger.error(
-            "[ReqLLM] chat error duration_ms=#{duration_ms} reason=#{error_log(normalized)}"
-          )
-
-          {:error, normalized}
-      end
-    rescue
-      error ->
-        normalized = normalize_error(error)
-        duration_ms = System.monotonic_time(:millisecond) - started_at
-
-        Logger.error(
-          "[ReqLLM] chat rescue duration_ms=#{duration_ms} reason=#{error_log(normalized)}"
-        )
-
-        {:error, normalized}
-    end
-  end
+  @receive_timeout 180_000
 
   def stream(messages, options, callback) do
     provider = Keyword.get(options, :provider, :anthropic)
     profile = ProviderProfile.for(provider, options)
     model_spec = resolve_model(profile, options)
+
     {req_messages, prepared_options} =
       messages
       |> sanitize_messages()
@@ -142,7 +87,11 @@ defmodule Nex.Agent.LLM.ReqLLM do
         {:error, reason} ->
           error = normalize_error(reason)
           duration_ms = System.monotonic_time(:millisecond) - started_at
-          Logger.error("[ReqLLM] stream error duration_ms=#{duration_ms} reason=#{error_log(error)}")
+
+          Logger.error(
+            "[ReqLLM] stream error duration_ms=#{duration_ms} reason=#{error_log(error)}"
+          )
+
           callback.({:error, error})
           {:error, error}
       end
@@ -150,9 +99,11 @@ defmodule Nex.Agent.LLM.ReqLLM do
       error ->
         normalized = normalize_error(error)
         duration_ms = System.monotonic_time(:millisecond) - started_at
+
         Logger.error(
           "[ReqLLM] stream rescue duration_ms=#{duration_ms} reason=#{error_log(normalized)}"
         )
+
         callback.({:error, normalized})
         {:error, normalized}
     end
@@ -225,7 +176,7 @@ defmodule Nex.Agent.LLM.ReqLLM do
       not is_nil(options[:tool_choice]),
       normalize_tool_choice(options[:tool_choice])
     )
-    |> maybe_put_keyword(:receive_timeout, true, @chat_timeout)
+    |> maybe_put_keyword(:receive_timeout, true, @receive_timeout)
     |> maybe_put_keyword(
       :provider_options,
       true,
@@ -295,46 +246,6 @@ defmodule Nex.Agent.LLM.ReqLLM do
     ProviderProfile.model_spec(profile, model)
   end
 
-  defp parse_response(%Response{} = response) do
-    classified = Response.classify(response)
-    reasoning_content = normalized_reasoning_content(classified.thinking, classified.text)
-    content = sanitize_final_content(classified.text)
-
-    %{
-      content: content,
-      reasoning_content: reasoning_content,
-      tool_calls: normalize_tool_calls(classified.tool_calls),
-      finish_reason: normalize_finish_reason(classified.finish_reason),
-      model: extract_model(response),
-      usage: Response.usage(response)
-    }
-  end
-
-  defp parse_response(response) when is_map(response) do
-    raw_content =
-      Map.get(response, :content) || Map.get(response, "content") || Map.get(response, :text) ||
-        Map.get(response, "text")
-
-    raw_reasoning =
-      Map.get(response, :reasoning_content) || Map.get(response, "reasoning_content") ||
-        Map.get(response, :thinking) || Map.get(response, "thinking")
-
-    %{
-      content: sanitize_final_content(raw_content),
-      reasoning_content: normalized_reasoning_content(raw_reasoning, raw_content),
-      tool_calls:
-        normalize_tool_calls(
-          Map.get(response, :tool_calls) || Map.get(response, "tool_calls") || []
-        ),
-      finish_reason:
-        normalize_finish_reason(
-          Map.get(response, :finish_reason) || Map.get(response, "finish_reason")
-        ),
-      model: extract_model(response),
-      usage: Map.get(response, :usage) || Map.get(response, "usage")
-    }
-  end
-
   defp emit_stream_done(callback, tool_calls, metadata) do
     if tool_calls != [] do
       callback.({:tool_calls, tool_calls})
@@ -393,12 +304,6 @@ defmodule Nex.Agent.LLM.ReqLLM do
   end
 
   defp normalize_stream_event(_), do: nil
-
-  defp normalize_tool_calls(tool_calls) when is_list(tool_calls) do
-    Enum.map(tool_calls, &normalize_tool_call/1)
-  end
-
-  defp normalize_tool_calls(_), do: []
 
   defp to_req_llm_tool_calls(tool_calls) when is_list(tool_calls) do
     Enum.map(tool_calls, fn tool_call ->
@@ -537,23 +442,6 @@ defmodule Nex.Agent.LLM.ReqLLM do
     })
   end
 
-  defp response_log(response) when is_map(response) do
-    content = Map.get(response, :content) || Map.get(response, "content") || ""
-    reasoning = Map.get(response, :reasoning_content) || Map.get(response, "reasoning_content") || ""
-    tool_calls = Map.get(response, :tool_calls) || Map.get(response, "tool_calls") || []
-    usage = Map.get(response, :usage) || Map.get(response, "usage")
-
-    inspect(%{
-      model: Map.get(response, :model) || Map.get(response, "model"),
-      finish_reason: Map.get(response, :finish_reason) || Map.get(response, "finish_reason"),
-      content_chars: byte_size(to_text(content)),
-      reasoning_chars: byte_size(to_text(reasoning)),
-      tool_call_count: if(is_list(tool_calls), do: length(tool_calls), else: 0),
-      usage: usage,
-      preview: String.slice(to_text(content), 0, 160)
-    })
-  end
-
   defp error_log(error) when is_map(error) do
     inspect(Map.take(error, [:message, :status, :reason, "message", "status", "reason"]))
   end
@@ -592,11 +480,6 @@ defmodule Nex.Agent.LLM.ReqLLM do
   end
 
   defp redact_provider_options(value), do: value
-
-  defp extract_model(%Response{model: model}), do: model
-  defp extract_model(%{model: model}), do: model
-  defp extract_model(%{"model" => model}), do: model
-  defp extract_model(_), do: nil
 
   defp extract_stream_model(%StreamResponse{model: model}) when is_map(model),
     do: Map.get(model, :id) || Map.get(model, "id")
@@ -679,52 +562,31 @@ defmodule Nex.Agent.LLM.ReqLLM do
        when is_binary(url),
        do: ContentPart.image_url(url)
 
+  defp to_content_part(%{
+         "type" => "image",
+         "source" => %{"type" => "file", "path" => path, "media_type" => mime_type}
+       })
+       when is_binary(path),
+       do: path |> file_data_url(mime_type) |> ContentPart.image_url()
+
+  defp to_content_part(%{
+         type: "image",
+         source: %{type: "file", path: path, media_type: mime_type}
+       })
+       when is_binary(path),
+       do: path |> file_data_url(mime_type) |> ContentPart.image_url()
+
   defp to_content_part(%ContentPart{} = part), do: part
   defp to_content_part(text) when is_binary(text), do: ContentPart.text(text)
   defp to_content_part(_), do: nil
 
+  defp file_data_url(path, mime_type) do
+    mime_type = mime_type || MIME.from_path(path) || "application/octet-stream"
+    "data:#{mime_type};base64," <> (path |> File.read!() |> Base.encode64())
+  end
+
   defp present?(value) when value in [nil, "", []], do: false
   defp present?(_), do: true
-
-  defp sanitize_final_content(content) when is_binary(content) do
-    content
-    |> String.replace(~r/<think>.*?<\/think>\s*/s, "")
-    |> String.trim()
-  end
-
-  defp sanitize_final_content(content), do: content
-
-  defp normalized_reasoning_content(reasoning_content, content)
-       when is_binary(reasoning_content) do
-    reasoning_content =
-      reasoning_content
-      |> String.trim()
-
-    if reasoning_content == "" do
-      extract_think_block(content)
-    else
-      reasoning_content
-    end
-  end
-
-  defp normalized_reasoning_content(_reasoning_content, content), do: extract_think_block(content)
-
-  defp extract_think_block(content) when is_binary(content) do
-    case Regex.run(~r/<think>\s*(.*?)\s*<\/think>/s, content, capture: :all_but_first) do
-      [think] ->
-        think
-        |> String.trim()
-        |> case do
-          "" -> ""
-          value -> value
-        end
-
-      _ ->
-        ""
-    end
-  end
-
-  defp extract_think_block(_), do: ""
 
   defp default_model(:anthropic), do: "claude-sonnet-4-20250514"
   defp default_model(:openai), do: "gpt-4o"

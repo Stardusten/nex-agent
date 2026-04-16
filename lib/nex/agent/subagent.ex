@@ -11,6 +11,7 @@ defmodule Nex.Agent.Subagent do
   require Logger
 
   alias Nex.Agent.{Bus, Session}
+  alias Nex.Agent.Inbound.Envelope
   alias Nex.Agent.SubAgent.Review
 
   @max_subagent_iterations 15
@@ -274,6 +275,8 @@ defmodule Nex.Agent.Subagent do
             user_feedback: nil
           })
 
+          result = render_runner_result(result)
+
           send(server, {:task_complete, task_id, result})
 
           announce_result(
@@ -336,11 +339,13 @@ defmodule Nex.Agent.Subagent do
       status_emoji = if status == :ok, do: "\u2705", else: "\u274c"
       content = "#{status_emoji} Subagent [#{label}] finished:\n#{result}"
 
-      Bus.publish(:inbound, %{
+      Bus.publish(:inbound, %Envelope{
         channel: channel || "system",
         chat_id: chat_id || "default",
-        workspace: workspace,
-        content: content,
+        sender_id: "subagent",
+        text: content,
+        message_type: :text,
+        raw: %{"task_id" => task_id, "label" => label, "status" => status},
         metadata: %{
           "_from_subagent" => true,
           "subagent_task_id" => task_id,
@@ -348,7 +353,9 @@ defmodule Nex.Agent.Subagent do
           "origin_channel" => channel,
           "origin_chat_id" => chat_id,
           "workspace" => workspace
-        }
+        },
+        media_refs: [],
+        attachments: []
       })
     end
   end
@@ -418,4 +425,7 @@ defmodule Nex.Agent.Subagent do
     end)
     |> Enum.uniq()
   end
+
+  defp render_runner_result(%Nex.Agent.Stream.Result{} = result), do: to_string(result)
+  defp render_runner_result(result), do: result
 end

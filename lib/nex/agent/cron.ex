@@ -7,6 +7,7 @@ defmodule Nex.Agent.Cron do
   require Logger
 
   alias Nex.Agent.{Audit, Workspace}
+  alias Nex.Agent.Inbound.Envelope
 
   @jobs_file "cron_jobs.json"
 
@@ -391,17 +392,21 @@ defmodule Nex.Agent.Cron do
           "\n\n[CRON] This is a scheduled task. Use the `message` tool to deliver results to the user. " <>
           "If there is nothing meaningful to report, do NOT call message — just reply with a short text and it will be silently discarded."
 
-      payload = %{
+      payload = %Envelope{
         channel: job.channel || "cron",
         chat_id: job.chat_id || "",
-        workspace: workspace,
-        content: content,
+        sender_id: "cron",
+        text: content,
+        message_type: :text,
+        raw: %{"job_id" => job.id, "job_name" => job.name},
         metadata: %{
           "_from_cron" => true,
           "job_id" => job.id,
           "job_name" => job.name,
           "workspace" => workspace
-        }
+        },
+        media_refs: [],
+        attachments: []
       }
 
       Nex.Agent.Bus.publish(:inbound, payload)

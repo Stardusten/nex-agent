@@ -6,6 +6,7 @@ defmodule Nex.Agent.Channel.HTTP do
   use GenServer
   require Logger
   alias Nex.Agent.Bus
+  alias Nex.Agent.Inbound.Envelope
 
   defstruct [:port, :enabled]
 
@@ -80,10 +81,16 @@ defmodule Nex.Agent.Channel.HTTP do
   def handle_incoming(_conn, body) do
     case Jason.decode(body) do
       {:ok, %{"message" => message, "chat_id" => chat_id}} ->
-        Bus.publish(:inbound, %{
+        Bus.publish(:inbound, %Envelope{
           channel: "http",
           chat_id: chat_id,
-          content: message
+          sender_id: "http",
+          text: message,
+          message_type: :text,
+          raw: %{"message" => message, "chat_id" => chat_id},
+          metadata: %{},
+          media_refs: [],
+          attachments: []
         })
 
         {:ok, %{status: "message received"}}

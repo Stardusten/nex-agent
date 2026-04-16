@@ -2,6 +2,7 @@ defmodule Nex.Agent.InboundWorkerMemoryRefreshTest do
   use ExUnit.Case, async: false
 
   alias Nex.Agent.{Bus, InboundWorker, Memory, MemoryUpdater, Session, SessionManager}
+  alias Nex.Agent.Inbound.Envelope
 
   setup do
     workspace =
@@ -67,7 +68,17 @@ defmodule Nex.Agent.InboundWorkerMemoryRefreshTest do
     send(Process.whereis(worker_name), {
       :bus_message,
       :inbound,
-      %{channel: "feishu", chat_id: "chat-memory", content: "hello"}
+      %Envelope{
+        channel: "feishu",
+        chat_id: "chat-memory",
+        sender_id: "tester",
+        text: "hello",
+        message_type: :text,
+        raw: %{},
+        metadata: %{},
+        media_refs: [],
+        attachments: []
+      }
     })
 
     assert_receive {:bus_message, :feishu_outbound, payload}, 1_000

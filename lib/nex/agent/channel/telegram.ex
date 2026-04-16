@@ -7,6 +7,7 @@ defmodule Nex.Agent.Channel.Telegram do
   require Logger
 
   alias Nex.Agent.{Bus, Config}
+  alias Nex.Agent.Inbound.Envelope
 
   @telegram_api "https://api.telegram.org"
   @default_poll_interval_ms 500
@@ -261,17 +262,20 @@ defmodule Nex.Agent.Channel.Telegram do
           end
 
         {:ok,
-         %{
+         %Envelope{
            channel: "telegram",
            chat_id: to_string(chat_id),
            sender_id: sender_id,
            user_id: to_string(user_id),
            message_id: message_id,
-           content: content,
+           text: content,
+           message_type: :text,
            raw: %{"message" => message},
            metadata:
              %{"message_id" => message_id, "user_id" => to_string(user_id)}
-             |> maybe_put("media", media)
+             |> maybe_put("telegram_media_dropped", media != nil),
+           media_refs: [],
+           attachments: []
          }}
     end
   end

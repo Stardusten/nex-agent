@@ -5,7 +5,8 @@ defmodule Nex.Agent.ContextBuilder do
 
   require Logger
 
-  alias Nex.Agent.{ContextDiagnostics, Skills, Workspace}
+  alias Nex.Agent.{Config, ContextDiagnostics, Skills, Workspace}
+  alias Nex.Agent.Media.Projector
 
   @bootstrap_layer_order [
     {"AGENTS.md", :agents},
@@ -107,19 +108,18 @@ defmodule Nex.Agent.ContextBuilder do
     Only use the 'message' tool when the tool payload itself is the user-visible message for a chat channel.
     If you use the 'message' tool for the current conversation, do not also narrate or summarize that send in assistant text.
 
-    ## Feishu Messaging
-    When using the `message` tool for channel=`feishu`:
-    - If you only have plain text, send `content` only. The runtime will keep the legacy default behavior.
-    - If you need a native Feishu format, set `msg_type` and `content_json` explicitly.
-    - Prefer `text` for short progress updates.
-    - Prefer `interactive` for formatted reports, code blocks, and structured summaries.
-    - If you have a local PNG/JPEG file and want to send it to Feishu, use `local_image_path` on the `message` tool. The runtime will upload it and send a native image message.
-    - If you need a short companion text plus a PNG, provide both the text payload and `local_image_path` in the same `message` call. The runtime will send the text first and then the image.
-    - Use `image` with `{"image_key": "..."}`
-    - Use `file`, `audio`, `media`, or `sticker` with `{"file_key": "..."}`
-    - Use `share_chat` with `{"chat_id": "..."}`
-    - Use `share_user` with `{"user_id": "..."}`
-    - Use `system` only when the user clearly needs a Feishu system message and you know the exact payload.
+    ## Channel Output Rules
+    - Normal assistant replies stay model-side plain text. Channel-specific rendering happens after generation.
+    - Do not emit platform JSON payloads unless a tool explicitly requires them.
+    - `<newmsg/>` is a platform text IR separator, not prose. Never explain or expose it to the user.
+    - Do not place `<newmsg/>` inside fenced code blocks.
+    - Use `<newmsg/>` only when you intentionally want the runtime to split or separate user-visible sections.
+    - If a structure is not reliably supported by the current channel, prefer simpler markdown-like text instead of inventing unsupported syntax.
+
+    ## Feishu Tooling
+    - When using the `message` tool for channel=`feishu`, plain `content` is usually enough for assistant replies.
+    - Use native `msg_type` and `content_json` only when you intentionally need a Feishu-specific payload.
+    - If you have a local PNG/JPEG file and want to send it to Feishu, use `local_image_path` on the `message` tool.
     - If you do not already have a valid `image_key` or `file_key`, do not guess one.
     - Lark/Feishu business operations such as Docs, Sheets, Base, Calendar, Tasks, Drive, or search are not built-in tools anymore.
     - If `lark-cli` is installed, use `bash` to call it for those operations.
@@ -281,12 +281,20 @@ defmodule Nex.Agent.ContextBuilder do
     time_str = Calendar.strftime(now, "%Y-%m-%d %H:%M (%A)")
     cwd = Keyword.get(opts, :cwd)
     repo_root = git_root(cwd)
+    config = Keyword.get(opts, :config)
 
     lines =
       [@runtime_context_tag, "Current Time: #{time_str}"]
       |> then(fn lines ->
         if channel && chat_id do
           lines ++ ["Channel: #{channel}", "Chat ID: #{chat_id}"]
+        else
+          lines
+        end
+      end)
+      |> then(fn lines ->
+        if is_binary(channel) do
+          lines ++ channel_runtime_lines(channel, config)
         else
           lines
         end
@@ -309,6 +317,27 @@ defmodule Nex.Agent.ContextBuilder do
     Enum.join(lines, "\n")
   end
 
+  defp channel_runtime_lines(channel, %Config{} = config) do
+    channel_runtime = Config.channel_runtime(config, channel)
+    streaming? = Map.get(channel_runtime, "streaming", false) == true
+
+    base = ["Channel Streaming: #{if streaming?, do: "streaming", else: "single"}"]
+
+    case channel do
+      "feishu" ->
+        base ++
+          [
+            "Channel IR: feishu markdown-like text IR",
+            "Feishu IR supports headings, lists, quotes, fenced code blocks, tables, and `<newmsg/>`."
+          ]
+
+      _ ->
+        base ++ ["Channel IR: markdown-like plain text"]
+    end
+  end
+
+  defp channel_runtime_lines(_channel, _config), do: []
+
   @doc """
   Build full message list for LLM call.
   """
@@ -317,7 +346,7 @@ defmodule Nex.Agent.ContextBuilder do
           String.t(),
           String.t() | nil,
           String.t() | nil,
-          [map()] | nil,
+          [Nex.Agent.Media.Attachment.t()] | nil,
           keyword()
         ) :: [message()]
   def build_messages(
@@ -405,31 +434,8 @@ defmodule Nex.Agent.ContextBuilder do
 
   defp build_user_content(text, nil), do: text
 
-  defp build_user_content(text, media) when is_list(media) and media != [] do
-    content_parts =
-      media
-      |> Enum.map(fn item ->
-        case Map.get(item, "type") || Map.get(item, :type) do
-          "image" ->
-            url = Map.get(item, "url") || Map.get(item, :url, "")
-            mime = Map.get(item, "mime_type") || Map.get(item, :mime_type, "image/jpeg")
-
-            %{
-              "type" => "image",
-              "source" => %{
-                "type" => "url",
-                "url" => url,
-                "media_type" => mime
-              }
-            }
-
-          _ ->
-            nil
-        end
-      end)
-      |> Enum.reject(&is_nil/1)
-
-    content_parts ++ [%{"type" => "text", "text" => text}]
+  defp build_user_content(text, attachments) when is_list(attachments) and attachments != [] do
+    Projector.project_for_model(attachments, []) ++ [%{"type" => "text", "text" => text}]
   end
 
   defp git_root(nil), do: nil

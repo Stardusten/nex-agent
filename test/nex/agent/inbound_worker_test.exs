@@ -3,6 +3,8 @@ defmodule Nex.Agent.InboundWorkerTest do
 
   alias Nex.Agent.{Bus, InboundWorker, Memory, Runner, Runtime, Session, Skills}
   alias Nex.Agent.Channel.Feishu
+  alias Nex.Agent.Inbound.Envelope
+  alias Nex.Agent.Media.Attachment
   alias Nex.Agent.Stream.{Event, Result}
 
   setup do
@@ -110,7 +112,17 @@ defmodule Nex.Agent.InboundWorkerTest do
     send(Process.whereis(worker_name), {
       :bus_message,
       :inbound,
-      %{channel: "feishu", chat_id: "chat-1", content: "hello"}
+      %Envelope{
+        channel: "feishu",
+        chat_id: "chat-1",
+        sender_id: "tester",
+        text: "hello",
+        message_type: :text,
+        raw: %{},
+        metadata: %{},
+        media_refs: [],
+        attachments: []
+      }
     })
 
     assert_receive :llm_finished, 1_000
@@ -129,9 +141,14 @@ defmodule Nex.Agent.InboundWorkerTest do
            end)
   end
 
-  test "inbound worker forwards media from payload metadata into agent prompt opts", %{} do
+  test "inbound worker forwards attachments into agent prompt opts", %{} do
     parent = self()
     worker_name = String.to_atom("inbound_worker_media_#{System.unique_integer([:positive])}")
+    image_path =
+      Path.join(System.tmp_dir!(), "inbound_worker_media_#{System.unique_integer([:positive])}.png")
+
+    File.write!(image_path, <<137, 80, 78, 71, 13, 10, 26, 10>>)
+    on_exit(fn -> File.rm(image_path) end)
 
     prompt_fun = fn agent, prompt, opts ->
       send(parent, {:prompt_opts, prompt, Keyword.get(opts, :media)})
@@ -143,31 +160,36 @@ defmodule Nex.Agent.InboundWorkerTest do
     send(Process.whereis(worker_name), {
       :bus_message,
       :inbound,
-      %{
+      %Envelope{
         channel: "feishu",
         chat_id: "chat-1",
-        content: "看图",
-        metadata: %{
-          "media" => [
-            %{
-              "type" => "image",
-              "url" => "data:image/png;base64,iVBORw0KGgo=",
-              "mime_type" => "image/png"
-            }
-          ]
-        }
+        sender_id: "tester",
+        text: "看图",
+        message_type: :image,
+        raw: %{},
+        metadata: %{},
+        media_refs: [],
+        attachments: [
+          %Attachment{
+            id: "media_test",
+            channel: "feishu",
+            kind: :image,
+            mime_type: "image/png",
+            filename: "test.png",
+            local_path: image_path,
+            size_bytes: 8,
+            source: :inbound,
+            message_id: "om_test",
+            platform_ref: %{"image_key" => "img_test"},
+            metadata: %{}
+          }
+        ]
       }
     })
 
     assert_receive {:prompt_opts, "看图", media}, 1_000
 
-    assert media == [
-             %{
-               "type" => "image",
-               "url" => "data:image/png;base64,iVBORw0KGgo=",
-               "mime_type" => "image/png"
-             }
-           ]
+    assert [%Attachment{local_path: ^image_path, kind: :image, mime_type: "image/png"}] = media
   end
 
   test "inbound worker creates new agents through configured agent_start_fun", %{
@@ -209,7 +231,17 @@ defmodule Nex.Agent.InboundWorkerTest do
     send(Process.whereis(worker_name), {
       :bus_message,
       :inbound,
-      %{channel: "feishu", chat_id: "chat-start", content: "hello"}
+      %Envelope{
+        channel: "feishu",
+        chat_id: "chat-start",
+        sender_id: "tester",
+        text: "hello",
+        message_type: :text,
+        raw: %{},
+        metadata: %{},
+        media_refs: [],
+        attachments: []
+      }
     })
 
     assert_receive {:agent_start_opts, opts}, 1_000
@@ -269,7 +301,17 @@ defmodule Nex.Agent.InboundWorkerTest do
     send(Process.whereis(worker_name), {
       :bus_message,
       :inbound,
-      %{channel: "feishu", chat_id: "chat-other", content: "hello", workspace: other_workspace}
+      %Envelope{
+        channel: "feishu",
+        chat_id: "chat-other",
+        sender_id: "tester",
+        text: "hello",
+        message_type: :text,
+        raw: %{},
+        metadata: %{"workspace" => other_workspace},
+        media_refs: [],
+        attachments: []
+      }
     })
 
     assert_receive {:agent_start_opts, opts}, 1_000
@@ -340,7 +382,17 @@ defmodule Nex.Agent.InboundWorkerTest do
     send(Process.whereis(worker_name), {
       :bus_message,
       :inbound,
-      %{channel: "feishu", chat_id: "chat-1", content: "123"}
+      %Envelope{
+        channel: "feishu",
+        chat_id: "chat-1",
+        sender_id: "tester",
+        text: "123",
+        message_type: :text,
+        raw: %{},
+        metadata: %{},
+        media_refs: [],
+        attachments: []
+      }
     })
 
     assert_receive :message_tool_turn_finished, 1_000
@@ -393,7 +445,17 @@ defmodule Nex.Agent.InboundWorkerTest do
     send(Process.whereis(worker_name), {
       :bus_message,
       :inbound,
-      %{channel: "feishu", chat_id: "chat-memory", content: "hello"}
+      %Envelope{
+        channel: "feishu",
+        chat_id: "chat-memory",
+        sender_id: "tester",
+        text: "hello",
+        message_type: :text,
+        raw: %{},
+        metadata: %{},
+        media_refs: [],
+        attachments: []
+      }
     })
 
     assert_receive {:bus_message, :feishu_outbound, payload}, 1_000
@@ -470,7 +532,17 @@ defmodule Nex.Agent.InboundWorkerTest do
     send(Process.whereis(worker_name), {
       :bus_message,
       :inbound,
-      %{channel: "feishu", chat_id: "chat-stream", content: "hello"}
+      %Envelope{
+        channel: "feishu",
+        chat_id: "chat-stream",
+        sender_id: "tester",
+        text: "hello",
+        message_type: :text,
+        raw: %{},
+        metadata: %{},
+        media_refs: [],
+        attachments: []
+      }
     })
 
     assert_receive {:http_post, auth_url, _auth_body, _auth_headers}, 1_000
@@ -517,7 +589,17 @@ defmodule Nex.Agent.InboundWorkerTest do
     send(Process.whereis(worker_name), {
       :bus_message,
       :inbound,
-      %{channel: "telegram", chat_id: "chat-stream", content: "hello"}
+      %Envelope{
+        channel: "telegram",
+        chat_id: "chat-stream",
+        sender_id: "tester",
+        text: "hello",
+        message_type: :text,
+        raw: %{},
+        metadata: %{},
+        media_refs: [],
+        attachments: []
+      }
     })
 
     assert_receive {:prompt_channel, "telegram"}, 1_000

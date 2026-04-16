@@ -26,6 +26,7 @@ defmodule Nex.Agent.RunnerEvolutionTest do
   alias Nex.Agent.{
     Bus,
     ContextBuilder,
+    Media.Attachment,
     Onboarding,
     RequestTrace,
     Runner,
@@ -135,6 +136,8 @@ defmodule Nex.Agent.RunnerEvolutionTest do
 
   test "runner includes media in the user message content", %{workspace: workspace} do
     parent = self()
+    image_path = Path.join(workspace, "runner-media.png")
+    File.write!(image_path, <<137, 80, 78, 71, 13, 10, 26, 10>>)
 
     llm_client = fn messages, _opts ->
       send(parent, {:messages, messages})
@@ -142,10 +145,18 @@ defmodule Nex.Agent.RunnerEvolutionTest do
     end
 
     media = [
-      %{
-        "type" => "image",
-        "url" => "data:image/png;base64,iVBORw0KGgo=",
-        "mime_type" => "image/png"
+      %Attachment{
+        id: "media_runner",
+        channel: "feishu",
+        kind: :image,
+        mime_type: "image/png",
+        filename: "runner-media.png",
+        local_path: image_path,
+        size_bytes: 8,
+        source: :inbound,
+        message_id: "om_runner",
+        platform_ref: %{"image_key" => "img_runner"},
+        metadata: %{}
       }
     ]
 
@@ -169,7 +180,7 @@ defmodule Nex.Agent.RunnerEvolutionTest do
              %{
                "type" => "image",
                "source" => %{
-                 "url" => "data:image/png;base64,iVBORw0KGgo=",
+                 "path" => ^image_path,
                  "media_type" => "image/png"
                }
              } ->

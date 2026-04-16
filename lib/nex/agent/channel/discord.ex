@@ -19,6 +19,7 @@ defmodule Nex.Agent.Channel.Discord do
   require Logger
 
   alias Nex.Agent.{Bus, Config}
+  alias Nex.Agent.Inbound.Envelope
 
   @discord_api "https://discord.com/api/v10"
   @gateway_url "wss://gateway.discord.gg/?v=10&encoding=json"
@@ -280,16 +281,20 @@ defmodule Nex.Agent.Channel.Discord do
         if clean_content != "" and allowed?(channel_id, state.allow_from) do
           Logger.info("[Discord] Inbound from #{author_id} in #{channel_id}")
 
-          Bus.publish(:inbound, %{
+          Bus.publish(:inbound, %Envelope{
             channel: "discord",
             chat_id: to_string(channel_id),
             sender_id: to_string(author_id),
-            content: clean_content,
+            text: clean_content,
+            message_type: :text,
+            raw: data,
             metadata: %{
               "guild_id" => guild_id,
               "message_id" => Map.get(data, "id"),
               "username" => get_in(data, ["author", "username"])
-            }
+            },
+            media_refs: [],
+            attachments: []
           })
         end
       end

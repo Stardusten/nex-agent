@@ -25,6 +25,7 @@ defmodule Nex.Agent.Channel.Slack do
   require Logger
 
   alias Nex.Agent.{Bus, Config}
+  alias Nex.Agent.Inbound.Envelope
 
   @slack_api "https://slack.com/api"
   @reconnect_delay_ms 5_000
@@ -235,15 +236,19 @@ defmodule Nex.Agent.Channel.Slack do
         if clean_text != "" do
           Logger.info("[Slack] Inbound from #{user} in #{channel}")
 
-          Bus.publish(:inbound, %{
+          Bus.publish(:inbound, %Envelope{
             channel: "slack",
             chat_id: to_string(channel),
             sender_id: to_string(user),
-            content: clean_text,
+            text: clean_text,
+            message_type: :text,
+            raw: event,
             metadata: %{
               "ts" => Map.get(event, "ts"),
               "thread_ts" => Map.get(event, "thread_ts")
-            }
+            },
+            media_refs: [],
+            attachments: []
           })
         end
     end
@@ -262,15 +267,19 @@ defmodule Nex.Agent.Channel.Slack do
       if clean_text != "" do
         Logger.info("[Slack] Mention from #{user} in #{channel}")
 
-        Bus.publish(:inbound, %{
+        Bus.publish(:inbound, %Envelope{
           channel: "slack",
           chat_id: to_string(channel),
           sender_id: to_string(user),
-          content: clean_text,
+          text: clean_text,
+          message_type: :text,
+          raw: event,
           metadata: %{
             "ts" => Map.get(event, "ts"),
             "thread_ts" => Map.get(event, "thread_ts")
-          }
+          },
+          media_refs: [],
+          attachments: []
         })
       end
     end

@@ -13,6 +13,9 @@ defmodule Nex.Agent.Channel.Feishu do
 
   alias Nex.Agent.{Bus, Config}
   alias Nex.Agent.Channel.Feishu.{Frame, WSClient}
+  alias Nex.Agent.Inbound.Envelope
+  alias Nex.Agent.IMIR.Renderers.Feishu, as: FeishuRenderer
+  alias Nex.Agent.Media.{Hydrator, Ref}
 
   @feishu_api "https://open.feishu.cn/open-apis"
   @feishu_ws_endpoint "https://open.feishu.cn/callback/ws/endpoint"
@@ -575,7 +578,7 @@ defmodule Nex.Agent.Channel.Feishu do
     case normalize_event(payload) do
       {:ok, inbound} ->
         Logger.info(
-          "[Feishu] Inbound sender=#{inbound[:sender_id]} chat=#{inbound[:chat_id]} content=#{inspect(inbound[:content])}"
+          "[Feishu] Inbound sender=#{inbound.sender_id} chat=#{inbound.chat_id} content=#{inspect(inbound.text)}"
         )
 
         process_inbound_message(inbound, state)
@@ -638,19 +641,19 @@ defmodule Nex.Agent.Channel.Feishu do
           state
         end
 
-      if allowed?(Map.get(inbound, :sender_id), state.allow_from) do
+      if allowed?(inbound.sender_id, state.allow_from) do
         add_reaction(message_id, state)
         {inbound, new_state} = maybe_attach_inbound_media(inbound, new_state)
 
         Logger.info(
-          "[Feishu] Publishing inbound to bus content=#{inspect(Map.get(inbound, :content))}"
+          "[Feishu] Publishing inbound to bus content=#{inspect(inbound.text)}"
         )
 
         Bus.publish(:inbound, inbound)
         new_state
       else
         Logger.warning(
-          "Feishu inbound denied sender=#{Map.get(inbound, :sender_id)} allow_from=#{inspect(state.allow_from)}"
+          "Feishu inbound denied sender=#{inbound.sender_id} allow_from=#{inspect(state.allow_from)}"
         )
 
         new_state
@@ -700,6 +703,8 @@ defmodule Nex.Agent.Channel.Feishu do
     normalized_content = normalize_inbound_content(msg_type, content_json, message_id)
     content = Map.get(normalized_content, "summary")
     resources = Map.get(normalized_content, "resources", [])
+    media_refs = resources |> Enum.map(&resource_to_media_ref(&1, message_id)) |> Enum.reject(&is_nil/1)
+    message_type_atom = inbound_message_type(msg_type)
 
     Logger.debug(
       "[Feishu] normalize_message msg_type=#{inspect(msg_type)} sender_type=#{inspect(sender_type)} sender_id=#{inspect(sender_id)} chat_id=#{inspect(chat_id)} content=#{inspect(content)}"
@@ -729,13 +734,14 @@ defmodule Nex.Agent.Channel.Feishu do
         reply_target = if to_string(chat_type) == "group", do: to_string(chat_id), else: sender_id
 
         {:ok,
-         %{
+         %Envelope{
            channel: "feishu",
            chat_id: reply_target,
            sender_id: sender_id,
            user_id: user_id,
            message_id: message_id,
-           content: content,
+           text: content,
+           message_type: message_type_atom,
            raw: raw_payload,
            metadata: %{
              "message_id" => message_id,
@@ -743,9 +749,10 @@ defmodule Nex.Agent.Channel.Feishu do
              "chat_type" => to_string(chat_type),
              "message_type" => msg_type,
              "raw_content_json" => content_json,
-             "normalized_content" => Map.delete(normalized_content, "summary"),
-             "resources" => resources
-           }
+             "normalized_content" => Map.delete(normalized_content, "summary")
+           },
+           media_refs: media_refs,
+           attachments: []
          }}
     end
   end
@@ -1045,68 +1052,35 @@ defmodule Nex.Agent.Channel.Feishu do
     end
   end
 
-  defp maybe_attach_inbound_media(%{metadata: metadata} = inbound, state) when is_map(metadata) do
-    resources = Map.get(metadata, "resources", [])
-
-    with resources when is_list(resources) and resources != [] <- resources,
-         {:ok, media, state} <- hydrate_inbound_media(resources, state),
-         true <- media != [] do
-      {put_in(inbound, [:metadata, "media"], media), state}
+  defp maybe_attach_inbound_media(%Envelope{media_refs: refs} = inbound, state) do
+    with refs when is_list(refs) and refs != [] <- refs,
+         {attachments, unresolved_refs, next_state} <- hydrate_inbound_refs(refs, state),
+         true <- attachments != [] or unresolved_refs != refs do
+      {%{inbound | attachments: attachments, media_refs: unresolved_refs}, next_state}
     else
       _ -> {inbound, state}
     end
   end
 
-  defp hydrate_inbound_media(resources, state) do
-    Enum.reduce(resources, {:ok, [], state}, fn resource, {:ok, media_acc, acc_state} ->
-      case hydrate_single_resource(resource, acc_state) do
-        {:ok, nil, next_state} ->
-          {:ok, media_acc, next_state}
+  defp hydrate_inbound_refs(refs, state) do
+    {attachments, unresolved_refs} =
+      Hydrator.hydrate_refs(refs,
+        workspace: nil,
+        fetch_binary_fun: &fetch_inbound_resource_binary(&1, state)
+      )
 
-        {:ok, media, next_state} ->
-          {:ok, media_acc ++ [media], next_state}
-
-        {:error, reason, next_state} ->
-          Logger.warning("[Feishu] Failed to hydrate inbound media: #{inspect(reason)}")
-          {:ok, media_acc, next_state}
-      end
-    end)
+    {attachments, unresolved_refs, state}
   end
 
-  defp hydrate_single_resource(resource, state) when is_map(resource) do
-    type = Map.get(resource, "type") || Map.get(resource, :type)
-
-    case type do
-      "image" ->
-        image_key = Map.get(resource, "image_key") || Map.get(resource, :image_key)
-        message_id = Map.get(resource, "message_id") || Map.get(resource, :message_id)
-
-        if is_binary(image_key) and image_key != "" do
-          case fetch_image_data_url(image_key, message_id, state) do
-            {:ok, data_url, mime_type, new_state} ->
-              {:ok,
-               %{
-                 "type" => "image",
-                 "url" => data_url,
-                 "mime_type" => mime_type,
-                 "image_key" => image_key
-               }, new_state}
-
-            {:error, reason, new_state} ->
-              {:error, reason, new_state}
-          end
-        else
-          {:ok, nil, state}
-        end
-
-      _ ->
-        {:ok, nil, state}
-    end
-  end
-
-  defp hydrate_single_resource(_resource, state), do: {:ok, nil, state}
-
-  defp fetch_image_data_url(image_key, message_id, state)
+  defp fetch_inbound_resource_binary(
+         %Ref{
+           channel: "feishu",
+           kind: :image,
+           message_id: message_id,
+           platform_ref: %{"image_key" => image_key}
+         },
+         state
+       )
        when is_binary(image_key) and image_key != "" and is_binary(message_id) and
               message_id != "" do
     with {:ok, token, state} <- get_tenant_access_token(state),
@@ -1120,16 +1094,71 @@ defmodule Nex.Agent.Channel.Feishu do
            ),
          {:ok, body} <- extract_binary_body(response) do
       mime_type = binary_response_content_type(response)
-      data_url = "data:#{mime_type};base64," <> Base.encode64(body)
-      {:ok, data_url, mime_type, state}
+      {:ok, body, mime_type}
     else
-      {:error, reason} -> {:error, reason, state}
+      {:error, reason} -> {:error, reason}
     end
   end
 
-  defp fetch_image_data_url(_image_key, _message_id, state) do
-    {:error, :missing_message_id_for_image_resource, state}
+  defp fetch_inbound_resource_binary(%Ref{}, _state), do: {:error, :unsupported_media_ref}
+
+  defp resource_to_media_ref(resource, message_id) when is_map(resource) do
+    type = Map.get(resource, "type") || Map.get(resource, :type)
+
+    case type do
+      "image" ->
+        image_key = Map.get(resource, "image_key") || Map.get(resource, :image_key)
+
+        %Ref{
+          channel: "feishu",
+          kind: :image,
+          message_id: message_id,
+          mime_type: nil,
+          filename: nil,
+          platform_ref: %{
+            "image_key" => image_key,
+            "message_id" => message_id
+          },
+          metadata: %{}
+        }
+
+      type when type in ["audio", "file", "media", "sticker"] ->
+        file_key = Map.get(resource, "file_key") || Map.get(resource, :file_key)
+        file_name = Map.get(resource, "file_name") || Map.get(resource, :file_name)
+        duration = Map.get(resource, "duration") || Map.get(resource, :duration)
+
+        %Ref{
+          channel: "feishu",
+          kind: media_kind_from_msg_type(type),
+          message_id: message_id,
+          mime_type: nil,
+          filename: file_name,
+          platform_ref: %{
+            "file_key" => file_key,
+            "message_id" => message_id,
+            "resource_type" => type
+          },
+          metadata:
+            %{}
+            |> maybe_put("duration", duration)
+        }
+
+      _ ->
+        nil
+    end
   end
+
+  defp inbound_message_type(msg_type), do: media_kind_from_msg_type(msg_type)
+
+  defp media_kind_from_msg_type("image"), do: :image
+  defp media_kind_from_msg_type("audio"), do: :audio
+  defp media_kind_from_msg_type("media"), do: :video
+  defp media_kind_from_msg_type("file"), do: :file
+  defp media_kind_from_msg_type("sticker"), do: :file
+  defp media_kind_from_msg_type(_), do: :text
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   defp extract_binary_body(%{body: body}) when is_binary(body) and body != "", do: {:ok, body}
   defp extract_binary_body(body) when is_binary(body) and body != "", do: {:ok, body}
@@ -1431,131 +1460,8 @@ defmodule Nex.Agent.Channel.Feishu do
   end
 
   defp build_interactive_card(content) do
-    elements = build_card_elements(content)
-
-    %{
-      "config" => %{"wide_screen_mode" => true},
-      "elements" => elements
-    }
+    FeishuRenderer.render_card(content)
   end
-
-  defp build_card_elements(content) do
-    content
-    |> String.split("\n")
-    |> chunk_by_type()
-    |> Enum.flat_map(&render_chunk/1)
-  end
-
-  defp chunk_by_type(lines) do
-    {chunks, current} =
-      Enum.reduce(lines, {[], nil}, fn line, {chunks, current} ->
-        cond do
-          String.starts_with?(line, "```") and current == nil ->
-            lang = String.trim_leading(line, "`") |> String.trim()
-            {chunks, {:code, lang, []}}
-
-          match?({:code, _, _}, current) and String.starts_with?(line, "```") ->
-            {:code, lang, code_lines} = current
-            {chunks ++ [{:code_block, lang, Enum.reverse(code_lines)}], nil}
-
-          match?({:code, _, _}, current) ->
-            {:code, lang, code_lines} = current
-            {chunks, {:code, lang, [line | code_lines]}}
-
-          Regex.match?(~r/^\#{1,3}\s/, line) ->
-            {chunks ++ [{:heading, line}], nil}
-
-          Regex.match?(~r/^[-*]\s/, line) ->
-            case current do
-              {:list, items} ->
-                {chunks, {:list, items ++ [line]}}
-
-              _ ->
-                chunks = if current, do: chunks ++ [current], else: chunks
-                {chunks, {:list, [line]}}
-            end
-
-          Regex.match?(~r/^\d+\.\s/, line) ->
-            case current do
-              {:list, items} ->
-                {chunks, {:list, items ++ [line]}}
-
-              _ ->
-                chunks = if current, do: chunks ++ [current], else: chunks
-                {chunks, {:list, [line]}}
-            end
-
-          String.trim(line) == "" ->
-            if current do
-              {chunks ++ [current], nil}
-            else
-              {chunks, nil}
-            end
-
-          true ->
-            case current do
-              {:text, text_lines} ->
-                {chunks, {:text, text_lines ++ [line]}}
-
-              _ ->
-                chunks = if current, do: chunks ++ [current], else: chunks
-                {chunks, {:text, [line]}}
-            end
-        end
-      end)
-
-    if current, do: chunks ++ [current], else: chunks
-  end
-
-  defp render_chunk({:heading, line}) do
-    {level, text} =
-      cond do
-        String.starts_with?(line, "### ") -> {3, String.trim_leading(line, "### ")}
-        String.starts_with?(line, "## ") -> {2, String.trim_leading(line, "## ")}
-        String.starts_with?(line, "# ") -> {1, String.trim_leading(line, "# ")}
-        true -> {3, line}
-      end
-
-    tag =
-      case level do
-        1 -> "lark_md"
-        _ -> "lark_md"
-      end
-
-    [%{"tag" => "div", "text" => %{"tag" => tag, "content" => "**#{text}**"}}]
-  end
-
-  defp render_chunk({:code_block, lang, lines}) do
-    code = Enum.join(lines, "\n")
-    lang_str = if lang != "", do: lang, else: "text"
-
-    [
-      %{
-        "tag" => "div",
-        "text" => %{
-          "tag" => "lark_md",
-          "content" => "```#{lang_str}\n#{code}\n```"
-        }
-      }
-    ]
-  end
-
-  defp render_chunk({:list, items}) do
-    md = Enum.join(items, "\n")
-    [%{"tag" => "div", "text" => %{"tag" => "lark_md", "content" => md}}]
-  end
-
-  defp render_chunk({:text, lines}) do
-    text = Enum.join(lines, "\n")
-
-    if String.trim(text) == "" do
-      []
-    else
-      [%{"tag" => "div", "text" => %{"tag" => "lark_md", "content" => text}}]
-    end
-  end
-
-  defp render_chunk(_), do: []
 
   defp extract_tenant_token(%{"code" => 0, "tenant_access_token" => token, "expire" => expire})
        when is_binary(token) and is_integer(expire) do

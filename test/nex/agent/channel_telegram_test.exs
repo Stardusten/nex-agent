@@ -113,16 +113,10 @@ defmodule Nex.Agent.Channel.TelegramTest do
     assert inbound.channel == "telegram"
     assert inbound.chat_id == "123"
     assert inbound.sender_id == "456|fenix"
-    assert inbound.content == "[image]"
-
-    assert inbound.metadata["media"] == [
-             %{
-               "type" => "image",
-               "url" => "data:image/jpeg;base64,/9j/",
-               "mime_type" => "image/jpeg",
-               "file_id" => "large"
-             }
-           ]
+    assert inbound.text == "[image]"
+    assert inbound.attachments == []
+    assert inbound.media_refs == []
+    assert inbound.metadata["telegram_media_dropped"] == true
   end
 
   test "poll keeps caption and appends image marker for image documents", %{pid: pid} do
@@ -177,16 +171,10 @@ defmodule Nex.Agent.Channel.TelegramTest do
     assert_receive {:bus_message, :inbound, inbound}
     assert inbound.chat_id == "124"
     assert inbound.sender_id == "457"
-    assert inbound.content == "看看这个 [image]"
-
-    assert inbound.metadata["media"] == [
-             %{
-               "type" => "image",
-               "url" => "data:image/png;base64,iVBORw0KGgo=",
-               "mime_type" => "image/png",
-               "file_id" => "doc-image"
-             }
-           ]
+    assert inbound.text == "看看这个 [image]"
+    assert inbound.attachments == []
+    assert inbound.media_refs == []
+    assert inbound.metadata["telegram_media_dropped"] == true
   end
 
   test "outbound long messages are chunked to telegram limit", %{pid: pid} do

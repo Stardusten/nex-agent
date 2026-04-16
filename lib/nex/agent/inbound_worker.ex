@@ -9,6 +9,7 @@ defmodule Nex.Agent.InboundWorker do
   require Logger
 
   alias Nex.Agent.{Bus, Config, MemoryUpdater, Outbound, Runtime, Workspace}
+  alias Nex.Agent.Inbound.Envelope
   alias Nex.Agent.Runtime.Snapshot
   alias Nex.Agent.Stream.{Event, Result, Transport}
 
@@ -81,14 +82,20 @@ defmodule Nex.Agent.InboundWorker do
   end
 
   @impl true
-  def handle_info({:bus_message, :inbound, payload}, state) when is_map(payload) do
-    {:noreply, dispatch_inbound(payload, state)}
+  def handle_info({:bus_message, :inbound, %Envelope{} = envelope}, state) do
+    {:noreply, dispatch_inbound(envelope, state)}
+  end
+
+  @impl true
+  def handle_info({:bus_message, :inbound, payload}, _state) when is_map(payload) do
+    raise ArgumentError,
+          "InboundWorker expects %Nex.Agent.Inbound.Envelope{} on :inbound, got: #{inspect(payload, limit: 20)}"
   end
 
   @impl true
   def handle_info({:async_result, key, {:ok, result, updated_agent}, payload}, state) do
-    from_cron = get_in(payload, [:metadata, "_from_cron"]) == true
-    from_subagent = get_in(payload, [:metadata, "_from_subagent"]) == true
+    from_cron = Map.get(payload.metadata, "_from_cron") == true
+    from_subagent = Map.get(payload.metadata, "_from_subagent") == true
 
     # Don't overwrite user agent with cron's ephemeral agent
     state =
@@ -114,8 +121,8 @@ defmodule Nex.Agent.InboundWorker do
 
   @impl true
   def handle_info({:async_result, key, {:error, reason, updated_agent}, payload}, state) do
-    from_cron = get_in(payload, [:metadata, "_from_cron"]) == true
-    from_subagent = get_in(payload, [:metadata, "_from_subagent"]) == true
+    from_cron = Map.get(payload.metadata, "_from_cron") == true
+    from_subagent = Map.get(payload.metadata, "_from_subagent") == true
 
     state =
       if from_cron, do: state, else: put_in(state.agents[key], updated_agent)
@@ -225,13 +232,12 @@ defmodule Nex.Agent.InboundWorker do
   @impl true
   def handle_info(_message, state), do: {:noreply, state}
 
-  defp dispatch_inbound(payload, state) do
-    channel = Map.get(payload, :channel) || Map.get(payload, "channel") || "unknown"
-    chat_id = payload_chat_id(payload)
+  defp dispatch_inbound(%Envelope{} = envelope, state) do
+    channel = envelope.channel
+    chat_id = envelope.chat_id |> to_string()
     session_key = session_key(channel, chat_id)
-    workspace = payload_workspace(payload)
-    content = Map.get(payload, :content) || Map.get(payload, "content") || ""
-    content = normalize_inbound_content(content)
+    workspace = payload_workspace(envelope)
+    content = normalize_inbound_content(envelope.text)
     cmd = String.trim(content)
     key = runtime_key(workspace, session_key)
 
@@ -245,7 +251,7 @@ defmodule Nex.Agent.InboundWorker do
 
       cmd == "/new" ->
         state = cancel_active_task(state, key)
-        publish_outbound(payload, "New session started.")
+        publish_outbound(envelope, "New session started.")
 
         %{
           state
@@ -259,7 +265,7 @@ defmodule Nex.Agent.InboundWorker do
         state = %{state | pending_queue: Map.delete(state.pending_queue, key)}
 
         publish_outbound(
-          payload,
+          envelope,
           "Stopped #{count} task(s)#{if dropped > 0, do: ", dropped #{dropped} queued message(s)", else: ""}."
         )
 
@@ -269,7 +275,7 @@ defmodule Nex.Agent.InboundWorker do
         if Map.has_key?(state.active_tasks, key) do
           # Session already has an active task — queue this message
           queue = Map.get(state.pending_queue, key, :queue.new())
-          queued = {session_key, workspace, content, payload}
+          queued = {session_key, workspace, content, envelope}
           queue = :queue.in(queued, queue)
           queue_len = :queue.len(queue)
 
@@ -289,19 +295,19 @@ defmodule Nex.Agent.InboundWorker do
 
           %{state | pending_queue: Map.put(state.pending_queue, key, queue)}
         else
-          dispatch_async(state, key, session_key, workspace, content, payload)
+          dispatch_async(state, key, session_key, workspace, content, envelope)
         end
     end
   end
 
-  defp dispatch_async(state, key, session_key, workspace, content, payload) do
+  defp dispatch_async(state, key, session_key, workspace, content, %Envelope{} = envelope) do
     {channel, chat_id} = parse_session_key(session_key)
 
     {:ok, agent, state} = ensure_agent(state, key, session_key, workspace)
     parent = self()
-    from_cron = get_in(payload, [:metadata, "_from_cron"]) == true
-    from_subagent = get_in(payload, [:metadata, "_from_subagent"]) == true
-    media = extract_media(payload)
+    from_cron = get_in(envelope.metadata, ["_from_cron"]) == true
+    from_subagent = get_in(envelope.metadata, ["_from_subagent"]) == true
+    attachments = envelope.attachments
 
     cron_opts =
       if from_cron,
@@ -318,7 +324,7 @@ defmodule Nex.Agent.InboundWorker do
       Nex.Agent.PersonalSummary.ensure_default_jobs(
         channel,
         chat_id,
-        metadata: extract_metadata(payload),
+        metadata: extract_metadata(envelope),
         workspace: workspace
       )
     end
@@ -330,7 +336,7 @@ defmodule Nex.Agent.InboundWorker do
             if from_cron do
               nil
             else
-              build_stream_sink(parent, key, channel, chat_id, payload)
+              build_stream_sink(parent, key, channel, chat_id, envelope, state.config)
             end
 
           result =
@@ -344,17 +350,17 @@ defmodule Nex.Agent.InboundWorker do
                 workspace: workspace,
                 schedule_memory_refresh: false
               ]
-              |> maybe_put_opt(:media, media)
+              |> maybe_put_opt(:media, attachments)
               |> Kernel.++(cron_opts)
             )
 
-          send(parent, {:async_result, key, result, payload})
+          send(parent, {:async_result, key, result, envelope})
         rescue
           e ->
-            send(parent, {:async_result, key, {:error, Exception.message(e)}, payload})
+            send(parent, {:async_result, key, {:error, Exception.message(e)}, envelope})
         catch
           kind, reason ->
-            send(parent, {:async_result, key, {:error, "#{kind}: #{inspect(reason)}"}, payload})
+            send(parent, {:async_result, key, {:error, "#{kind}: #{inspect(reason)}"}, envelope})
         end
       end)
 
@@ -368,10 +374,12 @@ defmodule Nex.Agent.InboundWorker do
     }
   end
 
-  defp build_stream_sink(parent, key, channel, chat_id, payload) do
-    metadata = extract_metadata(payload)
+  defp build_stream_sink(parent, key, channel, chat_id, envelope, config) do
+    metadata = extract_metadata(envelope)
+    channel_runtime = channel_runtime(envelope, channel, config)
+    context = %{metadata: metadata, channel_runtime: channel_runtime}
 
-    case Transport.open_session(key, channel, chat_id, metadata) do
+    case Transport.open_session(key, channel, chat_id, context) do
       {:ok, session} ->
         send(parent, {:stream_session_started, key, session})
 
@@ -385,6 +393,21 @@ defmodule Nex.Agent.InboundWorker do
     end
   end
 
+  defp channel_runtime(envelope, channel, config) do
+    workspace = payload_workspace(envelope)
+
+    case runtime_snapshot_for_workspace(workspace) do
+      %Snapshot{channels: channels} when is_map(channels) ->
+        Map.get(channels, to_string(channel), %{"streaming" => false})
+
+      %Snapshot{config: %Config{} = config} ->
+        Config.channel_runtime(config, channel)
+
+      _ ->
+        Config.channel_runtime(config, channel)
+    end
+  end
+
   defp maybe_drain_pending(state, key) do
     case Map.get(state.pending_queue, key) do
       nil ->
@@ -392,7 +415,7 @@ defmodule Nex.Agent.InboundWorker do
 
       queue ->
         case :queue.out(queue) do
-          {{:value, {session_key, workspace, content, payload}}, rest} ->
+          {{:value, {session_key, workspace, content, envelope}}, rest} ->
             remaining =
               if :queue.is_empty(rest),
                 do: Map.delete(state.pending_queue, key),
@@ -404,7 +427,7 @@ defmodule Nex.Agent.InboundWorker do
               "[InboundWorker] Draining queued message for #{inspect(key)} (remaining=#{:queue.len(rest)})"
             )
 
-            dispatch_async(state, key, session_key, workspace, content, payload)
+            dispatch_async(state, key, session_key, workspace, content, envelope)
 
           {:empty, _} ->
             %{state | pending_queue: Map.delete(state.pending_queue, key)}
@@ -573,20 +596,20 @@ defmodule Nex.Agent.InboundWorker do
     end
   end
 
-  defp publish_outbound(payload, content, extra_meta \\ []) do
-    channel = Map.get(payload, :channel) || Map.get(payload, "channel") || "unknown"
-    chat_id = payload_chat_id(payload)
+  defp publish_outbound(%Envelope{} = envelope, content, extra_meta \\ []) do
+    channel = envelope.channel
+    chat_id = payload_chat_id(envelope)
     outbound_topic = Outbound.topic_for_channel(channel)
 
     metadata =
-      payload
+      envelope
       |> extract_metadata()
       |> Map.put_new("channel", channel)
       |> Map.put_new("chat_id", chat_id)
       |> Map.merge(Map.new(extra_meta, fn {k, v} -> {to_string(k), v} end))
 
     # If a streaming card was created, update it instead of sending a new message
-    card_mid = Map.get(payload, :_card_message_id)
+    card_mid = Map.get(envelope.metadata, "_card_message_id")
 
     metadata =
       if is_binary(card_mid) and card_mid != "" do
@@ -601,7 +624,7 @@ defmodule Nex.Agent.InboundWorker do
   end
 
   defp extract_metadata(payload) do
-    existing = Map.get(payload, :metadata) || Map.get(payload, "metadata") || %{}
+    existing = payload.metadata || %{}
 
     base = %{}
 
@@ -609,24 +632,15 @@ defmodule Nex.Agent.InboundWorker do
       maybe_put(
         base,
         "message_id",
-        Map.get(payload, :message_id) || Map.get(payload, "message_id")
+        payload.message_id
       )
 
-    base = maybe_put(base, "user_id", Map.get(payload, :user_id) || Map.get(payload, "user_id"))
+    base = maybe_put(base, "user_id", payload.user_id)
 
     if is_map(existing) do
       Map.merge(existing, base)
     else
       base
-    end
-  end
-
-  defp extract_media(payload) do
-    metadata = Map.get(payload, :metadata) || Map.get(payload, "metadata") || %{}
-
-    case Map.get(metadata, "media") || Map.get(metadata, :media) do
-      media when is_list(media) and media != [] -> media
-      _ -> nil
     end
   end
 
@@ -729,13 +743,13 @@ defmodule Nex.Agent.InboundWorker do
   defp normalize_inbound_content(nil), do: ""
   defp normalize_inbound_content(content), do: inspect(content, printable_limit: 500, limit: 50)
 
-  defp payload_chat_id(payload) do
-    (Map.get(payload, :chat_id) || Map.get(payload, "chat_id") || "")
+  defp payload_chat_id(%Envelope{} = payload) do
+    payload.chat_id
     |> to_string()
   end
 
-  defp payload_workspace(payload) do
-    workspace = Map.get(payload, :workspace) || Map.get(payload, "workspace")
+  defp payload_workspace(%Envelope{} = payload) do
+    workspace = Map.get(payload.metadata || %{}, "workspace") || Map.get(payload.metadata || %{}, :workspace)
 
     if is_binary(workspace) and String.trim(workspace) != "" do
       Path.expand(workspace)

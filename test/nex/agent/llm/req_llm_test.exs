@@ -146,4 +146,52 @@ defmodule Nex.Agent.LLM.ReqLLMTest do
     assert_receive {:stream_event, {:done, metadata}}
     assert metadata[:finish_reason] == "stop"
   end
+
+  test "file-backed image content is converted to data url before req_llm call" do
+    parent = self()
+    image_path = Path.join(System.tmp_dir!(), "req-llm-image-#{System.unique_integer([:positive])}.png")
+    File.write!(image_path, <<137, 80, 78, 71, 13, 10, 26, 10>>)
+
+    on_exit(fn -> File.rm(image_path) end)
+
+    stream_text_fun = fn model_spec, messages, opts ->
+      send(parent, {:req_llm_call, model_spec, messages, opts})
+      {:ok, %{stream: [%{type: :content, text: "ok"}], finish_reason: :stop}}
+    end
+
+    callback = fn event -> send(parent, {:stream_event, event}) end
+
+    assert :ok =
+             AgentReqLLM.stream(
+               [
+                 %{
+                   "role" => "user",
+                   "content" => [
+                     %{
+                       "type" => "image",
+                       "source" => %{
+                         "type" => "file",
+                         "path" => image_path,
+                         "media_type" => "image/png"
+                       }
+                     },
+                     %{"type" => "text", "text" => "look"}
+                   ]
+                 }
+               ],
+               [
+                 provider: :anthropic,
+                 model: "claude-sonnet-4-20250514",
+                 api_key: "test-key",
+                 req_llm_stream_text_fun: stream_text_fun
+               ],
+               callback
+             )
+
+    assert_receive {:req_llm_call, _model_spec, [%Message{content: content_parts}], _opts}
+
+    assert Enum.any?(content_parts, fn part ->
+             inspect(part) =~ "data:image/png;base64,"
+           end)
+  end
 end

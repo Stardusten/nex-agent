@@ -3,6 +3,8 @@ defmodule Nex.Agent.Channel.FeishuTest do
 
   alias Nex.Agent.{Bus, Config}
   alias Nex.Agent.Channel.Feishu
+  alias Nex.Agent.Inbound.Envelope
+  alias Nex.Agent.Media.Attachment
   alias Nex.Agent.Stream.{FeishuSession, Result, Transport}
 
   setup do
@@ -63,6 +65,7 @@ defmodule Nex.Agent.Channel.FeishuTest do
     end
 
     config = %Config{Config.default() | feishu: %{"enabled" => false}}
+
     pid =
       start_supervised!(
         {Feishu,
@@ -153,13 +156,55 @@ defmodule Nex.Agent.Channel.FeishuTest do
     assert patch_body["content"] =~ "hello updated"
   end
 
+  test "interactive card rendering preserves code block table and new message separator", %{
+    pid: _pid
+  } do
+    markdown = """
+    # Title
+
+    ```elixir
+    IO.puts("hi")
+    ```
+
+    | name | score |
+    | --- | --- |
+    | alice | 10 |
+    <newmsg/>
+    next
+    """
+
+    assert {:ok, "om_123"} = Feishu.send_card("ou_123", markdown, %{})
+
+    assert_receive {:http_post, _auth_url, _auth_body, _auth_headers}
+    assert_receive {:http_post, send_url, body, _headers}
+    assert send_url =~ "/im/v1/messages"
+
+    card = Jason.decode!(body["content"])
+    assert card["config"]["wide_screen_mode"] == true
+
+    elements = card["elements"]
+
+    assert Enum.any?(elements, fn
+             %{"text" => %{"content" => content}} ->
+               content == "**Title**" or
+                 content == "```elixir\nIO.puts(\"hi\")\n```" or
+                 content == "| name | score |\n| --- | --- |\n| alice | 10 |" or
+                 content == "next"
+
+             _ ->
+               false
+           end)
+
+    assert Enum.any?(elements, &(&1 == %{"tag" => "hr"}))
+  end
+
   test "feishu session finalize_success patches final markdown content", %{pid: _pid} do
     {:ok, %FeishuSession{} = session} =
       Transport.open_session(
         {:workspace, "feishu:ou_123"},
         "feishu",
         "ou_123",
-        %{}
+        %{metadata: %{}, channel_runtime: %{"streaming" => true}}
       )
 
     streamed_session = %FeishuSession{session | visible_text: "#Title", user_visible: true}
@@ -169,8 +214,8 @@ defmodule Nex.Agent.Channel.FeishuTest do
 
     assert handled?
     assert final_session.completed
-    assert final_session.visible_text == "# Title\n\n- item 1\n- item 2\n"
-    assert actions == [{:update_card, "om_123", "# Title\n\n- item 1\n- item 2\n"}]
+    assert final_session.visible_text == "# Title\n\n- item 1\n- item 2"
+    assert actions == [{:update_card, "om_123", "# Title\n\n- item 1\n- item 2"}]
   end
 
   test "synchronous local image send uploads and delivers native image message", %{pid: pid} do
@@ -245,7 +290,7 @@ defmodule Nex.Agent.Channel.FeishuTest do
 
     assert_receive {:bus_message, :inbound, inbound}
     assert inbound.channel == "feishu"
-    assert inbound.content =~ "Shanghai Tower"
+    assert inbound.text =~ "Shanghai Tower"
     assert inbound.metadata["message_type"] == "location"
     assert inbound.metadata["raw_content_json"]["name"] == "Shanghai Tower"
     assert inbound.metadata["normalized_content"]["card"]["longitude"] == "121.499"
@@ -305,21 +350,13 @@ defmodule Nex.Agent.Channel.FeishuTest do
     assert :ok = GenServer.call(pid, {:ingest_event, payload})
 
     assert_receive {:bus_message, :inbound, inbound}
+    assert %Envelope{} = inbound
     assert inbound.metadata["message_type"] == "post"
-    assert inbound.content =~ "Title"
-    assert inbound.content =~ "link(https://example.com)"
-
-    assert Enum.any?(
-             inbound.metadata["resources"],
-             &(&1["image_key"] == "img_post_1" and &1["message_id"] == "om_post")
-           )
-
-    assert Enum.any?(inbound.metadata["media"], &(&1["image_key"] == "img_post_1"))
-
-    assert Enum.any?(
-             inbound.metadata["media"],
-             &String.starts_with?(&1["url"], "data:image/png;base64,")
-           )
+    assert inbound.text =~ "Title"
+    assert inbound.text =~ "link(https://example.com)"
+    assert [%Attachment{}] = inbound.attachments
+    assert Enum.all?(inbound.attachments, &File.exists?(&1.local_path))
+    assert inbound.media_refs == []
   end
 
   test "ingest_event hydrates image messages into media payloads", %{pid: pid} do
@@ -347,19 +384,11 @@ defmodule Nex.Agent.Channel.FeishuTest do
     assert Enum.any?(headers, fn {key, value} -> key == "Authorization" and value =~ "Bearer " end)
 
     assert_receive {:bus_message, :inbound, inbound}
+    assert %Envelope{} = inbound
     assert inbound.metadata["message_type"] == "image"
-
-    assert [
-             %{
-               "type" => "image",
-               "image_key" => "img_abc",
-               "mime_type" => "image/png",
-               "url" => data_url
-             }
-           ] =
-             inbound.metadata["media"]
-
-    assert String.starts_with?(data_url, "data:image/png;base64,")
+    assert inbound.media_refs == []
+    assert [%Attachment{platform_ref: %{"image_key" => "img_abc"}, mime_type: "image/png"}] = inbound.attachments
+    assert Enum.all?(inbound.attachments, &File.exists?(&1.local_path))
   end
 
   test "ingest_event accepts top-level post content without locale wrapper", %{pid: pid} do
@@ -390,14 +419,9 @@ defmodule Nex.Agent.Channel.FeishuTest do
 
     assert_receive {:bus_message, :inbound, inbound}
     assert inbound.metadata["message_type"] == "post"
-    assert inbound.content =~ "你好"
-    assert inbound.content =~ "[image]"
-
-    assert Enum.any?(
-             inbound.metadata["resources"],
-             &(&1["image_key"] == "img_flat_1" and &1["message_id"] == "om_post_flat")
-           )
-
-    assert Enum.any?(inbound.metadata["media"], &(&1["image_key"] == "img_flat_1"))
+    assert inbound.text =~ "你好"
+    assert inbound.text =~ "[image]"
+    assert [%Attachment{}] = inbound.attachments
+    assert inbound.media_refs == []
   end
 end

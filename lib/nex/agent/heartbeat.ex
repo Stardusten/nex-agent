@@ -18,6 +18,7 @@ defmodule Nex.Agent.Heartbeat do
   require Logger
 
   alias Nex.Agent.CodeUpgrade
+  alias Nex.Agent.Inbound.Envelope
 
   # 30 minutes
   @default_interval 30 * 60
@@ -553,11 +554,16 @@ defmodule Nex.Agent.Heartbeat do
     Logger.info("[Heartbeat] Running task: #{task.name}")
 
     Task.Supervisor.start_child(Nex.Agent.TaskSupervisor, fn ->
-      payload = %{
+      payload = %Envelope{
         channel: "heartbeat",
         chat_id: "",
-        content: task.message,
-        metadata: %{"_from_heartbeat" => true, "task_name" => task.name}
+        sender_id: "heartbeat",
+        text: task.message,
+        message_type: :text,
+        raw: %{"task_name" => task.name},
+        metadata: %{"_from_heartbeat" => true, "task_name" => task.name},
+        media_refs: [],
+        attachments: []
       }
 
       Nex.Agent.Bus.publish(:inbound, payload)
