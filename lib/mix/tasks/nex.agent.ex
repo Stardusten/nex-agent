@@ -507,25 +507,6 @@ defmodule Mix.Tasks.Nex.Agent do
         persist_config_update(:gateway_port, port)
         Mix.shell().info("Updated gateway.port = #{port}")
 
-      ["config", "set", "telegram.token", value] ->
-        persist_config_update(:telegram_token, value)
-        Mix.shell().info("Updated telegram.token")
-
-      ["config", "set", "telegram.enabled", value] ->
-        bool = parse_boolean!(value)
-        persist_config_update(:telegram_enabled, bool)
-        Mix.shell().info("Updated telegram.enabled = #{bool}")
-
-      ["config", "set", "telegram.allow_from", value] ->
-        allow_from = parse_csv_list(value)
-        persist_config_update(:telegram_allow_from, allow_from)
-        Mix.shell().info("Updated telegram.allow_from = #{Enum.join(allow_from, ",")}")
-
-      ["config", "set", "telegram.reply_to_message", value] ->
-        bool = parse_boolean!(value)
-        persist_config_update(:telegram_reply_to_message, bool)
-        Mix.shell().info("Updated telegram.reply_to_message = #{bool}")
-
       _ ->
         Mix.raise("Unknown config command")
     end
@@ -714,11 +695,8 @@ defmodule Mix.Tasks.Nex.Agent do
 
   defp enabled_channels(config) do
     []
-    |> maybe_enabled("telegram", Config.telegram_enabled?(config))
     |> maybe_enabled("feishu", Config.feishu_enabled?(config))
     |> maybe_enabled("discord", Config.discord_enabled?(config))
-    |> maybe_enabled("slack", Config.slack_enabled?(config))
-    |> maybe_enabled("dingtalk", Config.dingtalk_enabled?(config))
   end
 
   defp maybe_enabled(channels, name, true), do: channels ++ [name]

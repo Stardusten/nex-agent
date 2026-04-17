@@ -144,24 +144,9 @@ defmodule Nex.Agent.PersonalSummary do
     to_string(chat_type) == "p2p"
   end
 
-  defp personal_chat?("telegram", chat_id, opts) do
-    metadata = Keyword.get(opts, :metadata, %{})
-    user_id = Map.get(metadata, "user_id") || Map.get(metadata, :user_id)
-    is_binary(chat_id) and is_binary(user_id) and chat_id == user_id
-  end
-
   defp personal_chat?("discord", _chat_id, opts) do
     metadata = Keyword.get(opts, :metadata, %{})
     is_nil(Map.get(metadata, "guild_id") || Map.get(metadata, :guild_id))
-  end
-
-  defp personal_chat?("dingtalk", _chat_id, opts) do
-    metadata = Keyword.get(opts, :metadata, %{})
-
-    conversation_type =
-      Map.get(metadata, "conversation_type") || Map.get(metadata, :conversation_type)
-
-    to_string(conversation_type) in ["1", "singleChat"]
   end
 
   defp personal_chat?(_channel, _chat_id, _opts), do: false

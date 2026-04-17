@@ -2,7 +2,7 @@ defmodule Nex.Agent.Gateway do
   @moduledoc """
   Gateway - Channel orchestrator.
 
-  Manages the lifecycle of channel processes (Telegram, Feishu, Discord, Slack, DingTalk)
+  Manages the lifecycle of channel processes (Feishu, Discord)
   via the ChannelSupervisor (DynamicSupervisor). All infrastructure and worker services
   are managed by the OTP supervision tree in Application.
 
@@ -117,11 +117,8 @@ defmodule Nex.Agent.Gateway do
         tool_registry: Process.whereis(Nex.Agent.Tool.Registry) != nil,
         inbound_worker: Process.whereis(Nex.Agent.InboundWorker) != nil,
         subagent: Process.whereis(Nex.Agent.Subagent) != nil,
-        telegram_channel: Process.whereis(Nex.Agent.Channel.Telegram) != nil,
         feishu_channel: Process.whereis(Nex.Agent.Channel.Feishu) != nil,
-        discord_channel: Process.whereis(Nex.Agent.Channel.Discord) != nil,
-        slack_channel: Process.whereis(Nex.Agent.Channel.Slack) != nil,
-        dingtalk_channel: Process.whereis(Nex.Agent.Channel.DingTalk) != nil
+        discord_channel: Process.whereis(Nex.Agent.Channel.Discord) != nil
       }
     }
 
@@ -320,11 +317,6 @@ defmodule Nex.Agent.Gateway do
     specs = []
 
     specs =
-      if Nex.Agent.Config.telegram_enabled?(config),
-        do: [{Nex.Agent.Channel.Telegram, config: config} | specs],
-        else: specs
-
-    specs =
       if Nex.Agent.Config.feishu_enabled?(config),
         do: [{Nex.Agent.Channel.Feishu, config: config} | specs],
         else: specs
@@ -334,26 +326,13 @@ defmodule Nex.Agent.Gateway do
         do: [{Nex.Agent.Channel.Discord, config: config} | specs],
         else: specs
 
-    specs =
-      if Nex.Agent.Config.slack_enabled?(config),
-        do: [{Nex.Agent.Channel.Slack, config: config} | specs],
-        else: specs
-
-    specs =
-      if Nex.Agent.Config.dingtalk_enabled?(config),
-        do: [{Nex.Agent.Channel.DingTalk, config: config} | specs],
-        else: specs
-
     specs
   end
 
   defp channel_modules do
     [
-      {Nex.Agent.Channel.Telegram, :telegram_enabled?, &Nex.Agent.Config.telegram/1},
       {Nex.Agent.Channel.Feishu, :feishu_enabled?, &Nex.Agent.Config.feishu/1},
-      {Nex.Agent.Channel.Discord, :discord_enabled?, &Nex.Agent.Config.discord/1},
-      {Nex.Agent.Channel.Slack, :slack_enabled?, &Nex.Agent.Config.slack/1},
-      {Nex.Agent.Channel.DingTalk, :dingtalk_enabled?, &Nex.Agent.Config.dingtalk/1}
+      {Nex.Agent.Channel.Discord, :discord_enabled?, &Nex.Agent.Config.discord/1}
     ]
   end
 
