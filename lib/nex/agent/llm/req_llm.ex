@@ -6,6 +6,7 @@ defmodule Nex.Agent.LLM.ReqLLM do
 
   alias ReqLLM.Context
   alias ReqLLM.Message.ContentPart
+  alias ReqLLM.Response.Stream, as: ResponseStream
   alias ReqLLM.StreamChunk
   alias ReqLLM.StreamResponse
   alias ReqLLM.Tool
@@ -37,11 +38,13 @@ defmodule Nex.Agent.LLM.ReqLLM do
       case stream_text_fun.(model_spec, req_messages, req_options) do
         {:ok, %StreamResponse{} = response} ->
           state =
-            Enum.reduce(response.stream, %{tool_calls: [], started_at: started_at}, fn chunk, acc ->
+            Enum.reduce(response.stream, %{stream_chunks: [], started_at: started_at}, fn chunk, acc ->
               handle_stream_chunk(chunk, callback, acc)
             end)
 
-          emit_stream_done(callback, Enum.reverse(state.tool_calls), %{
+          tool_calls = summarized_tool_calls(state)
+
+          emit_stream_done(callback, tool_calls, %{
             finish_reason: normalize_finish_reason(StreamResponse.finish_reason(response)),
             usage: StreamResponse.usage(response),
             model: extract_stream_model(response)
@@ -50,7 +53,7 @@ defmodule Nex.Agent.LLM.ReqLLM do
           duration_ms = System.monotonic_time(:millisecond) - started_at
 
           Logger.info(
-            "[ReqLLM] stream success duration_ms=#{duration_ms} tool_calls=#{length(state.tool_calls)} " <>
+            "[ReqLLM] stream success duration_ms=#{duration_ms} tool_calls=#{length(tool_calls)} " <>
               "model=#{inspect(extract_stream_model(response))}"
           )
 
@@ -60,13 +63,15 @@ defmodule Nex.Agent.LLM.ReqLLM do
           state =
             Enum.reduce(
               Map.get(response, :stream) || Map.get(response, "stream") || [],
-              %{tool_calls: [], started_at: started_at},
+              %{stream_chunks: [], started_at: started_at},
               fn chunk, acc ->
                 handle_stream_chunk(chunk, callback, acc)
               end
             )
 
-          emit_stream_done(callback, Enum.reverse(state.tool_calls), %{
+          tool_calls = summarized_tool_calls(state)
+
+          emit_stream_done(callback, tool_calls, %{
             finish_reason:
               normalize_finish_reason(
                 Map.get(response, :finish_reason) || Map.get(response, "finish_reason")
@@ -78,7 +83,7 @@ defmodule Nex.Agent.LLM.ReqLLM do
           duration_ms = System.monotonic_time(:millisecond) - started_at
 
           Logger.info(
-            "[ReqLLM] stream success duration_ms=#{duration_ms} tool_calls=#{length(state.tool_calls)} " <>
+            "[ReqLLM] stream success duration_ms=#{duration_ms} tool_calls=#{length(tool_calls)} " <>
               "model=#{inspect(extract_stream_model(response))}"
           )
 
@@ -255,6 +260,8 @@ defmodule Nex.Agent.LLM.ReqLLM do
   end
 
   defp handle_stream_chunk(chunk, callback, state) do
+    state = %{state | stream_chunks: [summary_chunk(chunk) | Map.get(state, :stream_chunks, [])]}
+
     case normalize_stream_event(chunk) do
       {:delta, text} ->
         Logger.debug(
@@ -272,13 +279,46 @@ defmodule Nex.Agent.LLM.ReqLLM do
         callback.({:thinking, text})
         state
 
-      {:tool_call, tool_call} ->
-        %{state | tool_calls: [tool_call | state.tool_calls]}
+      {:tool_call, _tool_call} ->
+        state
 
       nil ->
         state
     end
   end
+
+  defp summarized_tool_calls(%{stream_chunks: chunks}) when is_list(chunks) do
+    chunks
+    |> Enum.reverse()
+    |> ResponseStream.summarize()
+    |> Map.get(:tool_calls, [])
+    |> Enum.map(&normalize_tool_call/1)
+  end
+
+  defp summarized_tool_calls(_), do: []
+
+  defp summary_chunk(%StreamChunk{} = chunk), do: chunk
+
+  defp summary_chunk(%{type: :content, text: text}) when is_binary(text),
+    do: StreamChunk.text(text)
+
+  defp summary_chunk(%{type: :thinking, text: text}) when is_binary(text),
+    do: StreamChunk.thinking(text)
+
+  defp summary_chunk(%{type: :tool_call, name: name, arguments: arguments} = chunk)
+       when is_binary(name) do
+    metadata =
+      chunk
+      |> Map.take([:id, :index])
+      |> Enum.into(%{})
+
+    StreamChunk.tool_call(name, normalize_summary_arguments(arguments), metadata)
+  end
+
+  defp summary_chunk(%{type: :meta, metadata: metadata}) when is_map(metadata),
+    do: StreamChunk.meta(metadata)
+
+  defp summary_chunk(_), do: StreamChunk.meta(%{})
 
   defp normalize_stream_event(%StreamChunk{type: :content, text: text}) when is_binary(text),
     do: {:delta, text}
@@ -417,6 +457,9 @@ defmodule Nex.Agent.LLM.ReqLLM do
   defp normalize_finish_reason(reason) when is_binary(reason), do: reason
   defp normalize_finish_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
   defp normalize_finish_reason(reason), do: to_string(reason)
+
+  defp normalize_summary_arguments(arguments) when is_map(arguments), do: arguments
+  defp normalize_summary_arguments(_), do: %{}
 
   defp normalize_error(%{message: _} = error), do: error
   defp normalize_error(error) when is_binary(error), do: error

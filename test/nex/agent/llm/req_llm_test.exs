@@ -194,4 +194,42 @@ defmodule Nex.Agent.LLM.ReqLLMTest do
              inspect(part) =~ "data:image/png;base64,"
            end)
   end
+
+  test "streamed tool call arguments are reconstructed before emitting tool calls" do
+    callback = fn event -> send(self(), {:stream_event, event}) end
+
+    stream_text_fun = fn _model_spec, _messages, _opts ->
+      {:ok,
+       %{
+         stream: [
+           %{type: :tool_call, name: "bash", arguments: %{}, id: "call_bash_1"},
+           %ReqLLM.StreamChunk{
+             type: :meta,
+             metadata: %{tool_call_args: %{index: 0, fragment: ~s({"command":"ps aux"})}}
+           }
+         ],
+         finish_reason: :tool_calls
+       }}
+    end
+
+    assert :ok =
+             AgentReqLLM.stream(
+               [%{"role" => "user", "content" => "run ps aux"}],
+               [
+                 provider: :openai_codex,
+                 model: "gpt-5.4",
+                 api_key: "test-key",
+                 base_url: "https://api.aicodemirror.com/api/codex/backend-api/codex",
+                 req_llm_stream_text_fun: stream_text_fun
+               ],
+               callback
+             )
+
+    assert_receive {:stream_event, {:tool_calls, [tool_call]}}
+    assert tool_call["function"]["name"] == "bash"
+    assert Jason.decode!(tool_call["function"]["arguments"]) == %{"command" => "ps aux"}
+
+    assert_receive {:stream_event, {:done, metadata}}
+    assert metadata[:finish_reason] == "tool_calls"
+  end
 end
