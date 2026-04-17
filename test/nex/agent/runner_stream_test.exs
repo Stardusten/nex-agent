@@ -2,7 +2,7 @@ defmodule Nex.Agent.RunnerStreamTest do
   use ExUnit.Case, async: false
 
   alias Nex.Agent.{Runner, Session}
-  alias Nex.Agent.Stream.{Event, Result}
+  alias Nex.Agent.Stream.Result
 
   test "runner emits unified stream events and preserves final session content" do
     parent = self()
@@ -22,7 +22,7 @@ defmodule Nex.Agent.RunnerStreamTest do
 
     on_exit(fn -> File.rm_rf!(workspace) end)
 
-    stream_sink = fn %Event{} = event ->
+    stream_sink = fn event ->
       send(parent, {:stream_event, event})
       :ok
     end
@@ -52,12 +52,7 @@ defmodule Nex.Agent.RunnerStreamTest do
 
     events = collect_stream_events([])
 
-    assert [
-             %Event{type: :message_start, seq: 1},
-             %Event{type: :text_delta, seq: 2, content: "he"},
-             %Event{type: :text_delta, seq: 3, content: "llo"},
-             %Event{type: :message_end, seq: 4, content: "hello"}
-           ] = events
+    assert [{:text, "he"}, {:text, "llo"}, :finish] = events
 
     assert List.last(session.messages)["content"] == "hello"
   end
@@ -80,7 +75,7 @@ defmodule Nex.Agent.RunnerStreamTest do
 
     on_exit(fn -> File.rm_rf!(workspace) end)
 
-    stream_sink = fn %Event{} = event ->
+    stream_sink = fn event ->
       send(parent, {:stream_event, event})
       :ok
     end
@@ -116,15 +111,14 @@ defmodule Nex.Agent.RunnerStreamTest do
              )
 
     assert [
-             %Event{type: :message_start, seq: 1},
-             %Event{type: :text_delta, seq: 2, content: "#"},
-             %Event{type: :text_delta, seq: 3, content: " Title"},
-             %Event{type: :text_delta, seq: 4, content: "\n\n"},
-             %Event{type: :text_delta, seq: 5, content: "-"},
-             %Event{type: :text_delta, seq: 6, content: " item 1"},
-             %Event{type: :text_delta, seq: 7, content: "\n"},
-             %Event{type: :text_delta, seq: 8, content: "- item 2\n"},
-             %Event{type: :message_end, seq: 9, content: ^markdown}
+             {:text, "#"},
+             {:text, " Title"},
+             {:text, "\n\n"},
+             {:text, "-"},
+             {:text, " item 1"},
+             {:text, "\n"},
+             {:text, "- item 2\n"},
+             :finish
            ] = collect_stream_events([])
   end
 
@@ -146,7 +140,7 @@ defmodule Nex.Agent.RunnerStreamTest do
 
     on_exit(fn -> File.rm_rf!(workspace) end)
 
-    stream_sink = fn %Event{} = event ->
+    stream_sink = fn event ->
       send(parent, {:stream_event, event})
       :ok
     end
@@ -173,11 +167,7 @@ defmodule Nex.Agent.RunnerStreamTest do
 
     first_events = collect_stream_events([])
 
-    assert [
-             %Event{type: :message_start, seq: 1},
-             %Event{type: :text_delta, seq: 2, content: "ok"},
-             %Event{type: :message_end, seq: 3, content: "ok"}
-           ] = first_events
+    assert [{:text, "ok"}, :finish] = first_events
 
     assert {:ok, %Result{handled?: true, final_content: "ok"}, _session} =
              Runner.run(Session.new("stream:test-2"), "again",
@@ -193,11 +183,7 @@ defmodule Nex.Agent.RunnerStreamTest do
 
     second_events = collect_stream_events([])
 
-    assert [
-             %Event{type: :message_start, seq: 1},
-             %Event{type: :text_delta, seq: 2, content: "ok"},
-             %Event{type: :message_end, seq: 3, content: "ok"}
-           ] = second_events
+    assert [{:text, "ok"}, :finish] = second_events
   end
 
   test "llm_stream_client injects native stream events without response replay in runner" do
@@ -218,7 +204,7 @@ defmodule Nex.Agent.RunnerStreamTest do
 
     on_exit(fn -> File.rm_rf!(workspace) end)
 
-    stream_sink = fn %Event{} = event ->
+    stream_sink = fn event ->
       send(parent, {:stream_event, event})
       :ok
     end
@@ -238,11 +224,7 @@ defmodule Nex.Agent.RunnerStreamTest do
                llm_stream_client: stream_client_from_response(response_fixture)
              )
 
-    assert [
-             %Event{type: :message_start, seq: 1},
-             %Event{type: :text_delta, seq: 2, content: "mock hello"},
-             %Event{type: :message_end, seq: 3, content: "mock hello"}
-           ] = collect_stream_events([])
+    assert [{:text, "mock hello"}, :finish] = collect_stream_events([])
   end
 
   defp collect_stream_events(acc) do

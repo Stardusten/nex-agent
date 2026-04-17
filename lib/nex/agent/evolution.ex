@@ -268,7 +268,7 @@ defmodule Nex.Agent.Evolution do
         tools: [evolution_report_tool()],
         tool_choice: tool_choice_for(provider, "evolution_report")
       ]
-      |> maybe_put_opt(:req_llm_generate_text_fun, Keyword.get(opts, :req_llm_generate_text_fun))
+      |> maybe_put_opt(:req_llm_stream_text_fun, Keyword.get(opts, :req_llm_stream_text_fun))
 
     llm_call_fun =
       Keyword.get(opts, :llm_call_fun, &Nex.Agent.Runner.call_llm_for_consolidation/2)

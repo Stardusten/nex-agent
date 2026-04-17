@@ -178,8 +178,8 @@ defmodule Nex.Agent.Memory do
             tool_choice: tool_choice_for(provider, "save_memory")
           ]
           |> maybe_put_llm_opt(
-            :req_llm_generate_text_fun,
-            Keyword.get(opts, :req_llm_generate_text_fun)
+            :req_llm_stream_text_fun,
+            Keyword.get(opts, :req_llm_stream_text_fun)
           )
 
         llm_call_fun =

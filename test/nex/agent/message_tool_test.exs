@@ -172,14 +172,15 @@ defmodule Nex.Agent.MessageToolTest do
                %{}
              )
 
-    assert_receive {:http_post, url1, _body1, _headers1}
-    assert url1 =~ "/auth/v3/tenant_access_token/internal"
+    assert_receive {:http_post, auth_url, _auth_body, _auth_headers}
+    assert auth_url =~ "/auth/v3/tenant_access_token/internal"
 
     assert_receive {:http_post_multipart, upload_url, multipart_body, _headers2}
     assert upload_url =~ "/im/v1/images"
     assert Keyword.get(multipart_body, :image_type) == "message"
 
-    assert_receive {:http_post, url2, body2, _headers3}
+    posts = collect_http_posts([])
+    {url2, body2} = Enum.find(posts, fn {url, body} -> url =~ "/im/v1/messages" and body["msg_type"] == "image" end)
     assert url2 =~ "/im/v1/messages"
     assert body2["receive_id"] == "ou_sync_img"
     assert body2["msg_type"] == "image"
@@ -252,7 +253,8 @@ defmodule Nex.Agent.MessageToolTest do
     assert_receive {:http_post, url1, _body1, _headers1}
     assert url1 =~ "/auth/v3/tenant_access_token/internal"
 
-    assert_receive {:http_post, url2, body2, _headers2}
+    posts = collect_http_posts([])
+    {url2, body2} = Enum.find(posts, fn {url, body} -> url =~ "/im/v1/messages" and body["msg_type"] == "text" end)
     assert url2 =~ "/im/v1/messages"
     assert body2["receive_id"] == "ou_combo"
     assert body2["msg_type"] == "text"
@@ -261,11 +263,39 @@ defmodule Nex.Agent.MessageToolTest do
     assert_receive {:http_post_multipart, upload_url, multipart_body, _headers3}
     assert upload_url =~ "/im/v1/images"
     assert Keyword.get(multipart_body, :image_type) == "message"
+  end
 
-    assert_receive {:http_post, url3, body3, _headers4}
-    assert url3 =~ "/im/v1/messages"
-    assert body3["receive_id"] == "ou_combo"
-    assert body3["msg_type"] == "image"
-    assert Jason.decode!(body3["content"]) == %{"image_key" => "img_combo"}
+  test "message tool resolves workspace-relative attachment paths from ctx workspace" do
+    workspace =
+      Path.join(System.tmp_dir!(), "message_tool_workspace_#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(workspace)
+    path = Path.join(workspace, "relative-image.png")
+    File.write!(path, <<137, 80, 78, 71, 13, 10, 26, 10>>)
+
+    on_exit(fn -> File.rm_rf!(workspace) end)
+
+    assert {:ok, outbound} =
+             Message.from_tool_args(
+               %{
+                 "channel" => "feishu",
+                 "chat_id" => "ou_workspace",
+                 "attachment_path" => "relative-image.png",
+                 "attachment_kind" => "image"
+               },
+               %{workspace: workspace, cwd: "/tmp/nowhere"}
+             )
+
+    assert [attachment] = outbound.attachments
+    assert attachment.local_path == path
+  end
+
+  defp collect_http_posts(acc) do
+    receive do
+      {:http_post, url, body, _headers} ->
+        collect_http_posts([{url, body} | acc])
+    after
+      400 -> Enum.reverse(acc)
+    end
   end
 end

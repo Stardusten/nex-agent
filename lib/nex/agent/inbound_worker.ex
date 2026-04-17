@@ -9,10 +9,12 @@ defmodule Nex.Agent.InboundWorker do
   require Logger
 
   alias Nex.Agent.{Bus, Config, MemoryUpdater, Outbound, Runtime, Workspace}
+  alias Nex.Agent.Channel.Discord
   alias Nex.Agent.Channel.Feishu
   alias Nex.Agent.Channel.Feishu.StreamConverter
   alias Nex.Agent.Channel.Feishu.StreamState, as: FeishuStreamState
   alias Nex.Agent.Inbound.Envelope
+  alias Nex.Agent.IMIR.Text, as: IMText
   alias Nex.Agent.Runtime.Snapshot
   alias Nex.Agent.Stream.Result
 
@@ -243,6 +245,16 @@ defmodule Nex.Agent.InboundWorker do
 
         {:noreply, put_in(state.stream_states[key], updated)}
 
+      {:ok, {:discord, discord_state}} ->
+        case apply_discord_stream_event(discord_state, event) do
+          {:ok, updated} ->
+            {:noreply, put_in(state.stream_states[key], {:discord, updated})}
+
+          {:error, reason} ->
+            Logger.warning("[InboundWorker] discord stream event failed: #{inspect(reason)}")
+            {:noreply, state}
+        end
+
       :error ->
         {:noreply, state}
     end
@@ -442,6 +454,23 @@ defmodule Nex.Agent.InboundWorker do
           end
         else
           nil
+        end
+
+      channel == "discord" and streaming? ->
+        send(parent, {:stream_state_started, key, {:discord, discord_stream_state(chat_id, metadata)}})
+
+        fn
+          {:text, chunk} when is_binary(chunk) ->
+            send(parent, {:stream_state_event, key, {:text, chunk}})
+            :ok
+
+          :finish ->
+            send(parent, {:stream_state_event, key, :finish})
+            :ok
+
+          {:error, message} ->
+            send(parent, {:stream_state_event, key, {:error, message}})
+            :ok
         end
 
       channel != "feishu" and streaming? ->
@@ -839,6 +868,25 @@ defmodule Nex.Agent.InboundWorker do
 
         {%{state | stream_states: Map.delete(state.stream_states, key)}, handled?}
 
+      {:ok, {:discord, discord_state}} ->
+        handled? =
+          case result do
+            {:ok, _value} ->
+              case flush_discord_stream(discord_state) do
+                {:ok, _updated} ->
+                  true
+
+                {:error, reason} ->
+                  Logger.warning("[InboundWorker] discord stream finalize failed: #{inspect(reason)}")
+                  true
+              end
+
+            _ ->
+              false
+          end
+
+        {%{state | stream_states: Map.delete(state.stream_states, key)}, handled?}
+
       :error ->
         {state, false}
     end
@@ -936,6 +984,107 @@ defmodule Nex.Agent.InboundWorker do
            flush_feishu_stream(cancel_feishu_flush(stream_state)),
          {:ok, updated_converter} <- StreamConverter.fail(converter, message) do
       {:ok, %{stream_state | converter: updated_converter}}
+    end
+  end
+
+  defp discord_stream_state(chat_id, metadata) do
+    %{
+      chat_id: chat_id,
+      metadata: metadata,
+      buffer: "",
+      current_message_id: nil,
+      last_content: nil
+    }
+  end
+
+  defp apply_discord_stream_event(stream_state, {:text, chunk}) when is_binary(chunk) do
+    flush_discord_stream(%{stream_state | buffer: stream_state.buffer <> chunk})
+  end
+
+  defp apply_discord_stream_event(stream_state, :finish) do
+    flush_discord_stream(stream_state)
+  end
+
+  defp apply_discord_stream_event(stream_state, {:error, _message}) do
+    {:ok, stream_state}
+  end
+
+  defp apply_discord_stream_event(stream_state, _event), do: {:ok, stream_state}
+
+  defp flush_discord_stream(%{buffer: ""} = stream_state), do: {:ok, stream_state}
+
+  defp flush_discord_stream(stream_state) do
+    case IMText.split_complete_messages(stream_state.buffer) do
+      {[], remainder} ->
+        update_or_create_discord_message(%{stream_state | buffer: remainder})
+
+      {segments, remainder} ->
+        with {:ok, updated} <- send_discord_segments(stream_state, segments) do
+          updated = %{updated | current_message_id: nil, last_content: nil}
+
+          if remainder == "" do
+            {:ok, %{updated | buffer: ""}}
+          else
+            update_or_create_discord_message(%{updated | buffer: remainder})
+          end
+        end
+    end
+  end
+
+  defp send_discord_segments(stream_state, segments) do
+    Enum.reduce_while(segments, {:ok, stream_state}, fn segment, {:ok, acc} ->
+      case send_discord_new_message(acc, segment) do
+        {:ok, updated} -> {:cont, {:ok, updated}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp update_or_create_discord_message(%{buffer: buffer} = stream_state) do
+    content = String.trim(buffer)
+
+    cond do
+      content == "" ->
+        {:ok, stream_state}
+
+      stream_state.current_message_id == nil ->
+        send_discord_new_message(stream_state, content)
+
+      stream_state.last_content == content ->
+        {:ok, stream_state}
+
+      true ->
+        case Discord.update_message(
+               stream_state.chat_id,
+               stream_state.current_message_id,
+               content,
+               stream_state.metadata
+             ) do
+          :ok -> {:ok, %{stream_state | last_content: content}}
+          {:error, reason} -> {:error, reason}
+        end
+    end
+  end
+
+  defp send_discord_new_message(stream_state, content) do
+    trimmed = String.trim(content)
+
+    if trimmed == "" do
+      {:ok, stream_state}
+    else
+      case Discord.deliver_message(stream_state.chat_id, trimmed, stream_state.metadata) do
+        {:ok, message_id} ->
+          {:ok,
+           %{
+             stream_state
+             | current_message_id: message_id,
+               last_content: trimmed,
+               buffer: trimmed
+           }}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
     end
   end
 end

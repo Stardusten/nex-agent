@@ -6,6 +6,9 @@ Load the repo-local skills before you start changing code when they match the ta
 
 - Do not end responses with soft follow-up prompts like “if you want” / “if you’d like” / “if you愿意”.
 - Distinguish clearly between a working draft for internal thinking and a polished document that can be shared directly. Do not leave meta-writing scaffolding in shareable docs.
+- During a phase/stage refactor, do not add compatibility shims just to keep an intermediate state compiling.
+- For repo-internal APIs, prefer deleting the old API first and using compile errors to drive the migration so every affected call site gets updated deliberately.
+- Only keep or add compatibility logic when the task explicitly requires preserving an external/public contract or a user-facing behavior across the migration.
 
 ## Browser Automation
 
@@ -33,6 +36,14 @@ This repository is developed directly on `main`.
 - Do not create or switch to a feature/topic branch unless the user explicitly asks for a branch or PR workflow.
 - If the user asks to commit or push without naming a branch, do that work on `main`.
 - Treat an unprompted branch switch in this repo as a mistake to avoid repeating.
+
+## Known Test Baseline
+
+- On 2026-04-16, the memory/consolidation failures below were reproduced on phase1-before baseline `cb06f0fbe14901d68b27187c288cf19f5b40f2e5` (`2311c99^`) after stashing phase3 work.
+- Command used on that baseline: `mix test test/nex/agent/memory_rebuild_test.exs test/nex/agent/memory_updater_test.exs test/nex/agent/memory_consolidate_test.exs test/nex/agent/runner_evolution_test.exs`
+- Baseline result: 24 tests, 6 failures.
+- Failing areas: `MemoryRebuildTest` prompt memory block regex failures, `MemoryUpdaterTest` same prompt memory block failure, `MemoryConsolidateTest` `already_running` wait timeout, and `RunnerEvolutionTest` async memory consolidation history not updated.
+- Do not treat those specific failures as phase3 streaming regressions unless they reproduce differently from this baseline or a task explicitly targets memory/consolidation stability.
 
 ## LLM API Conventions
 
@@ -101,10 +112,17 @@ Required rules:
    - Which scope expansions are explicitly out of bounds?
    - What observable result means the stage passed?
    - Which command or smoke flow verifies it?
-11. Do not turn a phase file into a full onboarding document.
+11. For stages that freeze core structs, contracts, or pipeline boundaries, do not describe them only in prose.
+   - Include concrete code or pseudocode for the decided shape.
+   - Prefer exact struct field names, function signatures, map shapes, and event/action tuples.
+   - If a later executor could plausibly “fill in the blanks” in multiple incompatible ways, the plan is not frozen enough.
+12. When a stage is intended to be directly executable, the plan should bias toward implementation detail over narrative summary.
+   - Include the exact modules, public functions, helper names, and data flow transitions expected in that stage.
+   - Use the smallest concrete code snippet needed to prevent drift.
+13. Do not turn a phase file into a full onboarding document.
    - Keep only the minimum background needed for implementation.
    - Point readers back to `CURRENT.md`, `task-plan/index.md`, `findings/index.md`, and `progress/index.md` for context recovery.
-12. A document that only gives direction, without stage structure, implementation steps, acceptance, and verification, is a design note, not a valid execution plan.
+14. A document that only gives direction, without stage structure, implementation steps, acceptance, and verification, is a design note, not a valid execution plan.
 
 Recommended phase template:
 

@@ -137,7 +137,7 @@ defmodule Nex.Agent do
         SessionManager.get_or_create(session_key, workspace: workspace)
       end
 
-    on_progress = Keyword.get(opts, :on_progress)
+    stream_sink = Keyword.get(opts, :stream_sink)
     tools_filter = Keyword.get(opts, :tools_filter)
     media = Keyword.get(opts, :media)
 
@@ -159,12 +159,12 @@ defmodule Nex.Agent do
       |> maybe_put(:runtime_snapshot, runtime_snapshot)
       |> maybe_put(:runtime_version, runtime_snapshot && runtime_snapshot.version)
       |> maybe_put(:project, project)
-      |> maybe_put(:on_progress, on_progress)
+      |> maybe_put(:stream_sink, stream_sink)
       |> maybe_put(:tools_filter, tools_filter)
       |> maybe_put(:media, media)
-      |> maybe_put(:llm_client, Keyword.get(opts, :llm_client))
+      |> maybe_put(:llm_stream_client, Keyword.get(opts, :llm_stream_client))
       |> maybe_put(:llm_call_fun, Keyword.get(opts, :llm_call_fun))
-      |> maybe_put(:req_llm_generate_text_fun, Keyword.get(opts, :req_llm_generate_text_fun))
+      |> maybe_put(:req_llm_stream_text_fun, Keyword.get(opts, :req_llm_stream_text_fun))
       |> maybe_put(:history_limit, Keyword.get(opts, :history_limit))
       |> maybe_put(:skip_consolidation, Keyword.get(opts, :skip_consolidation))
       |> maybe_put(:skip_skills, Keyword.get(opts, :skip_skills))
@@ -309,7 +309,7 @@ defmodule Nex.Agent do
       api_key: Keyword.get(runner_opts, :api_key),
       base_url: Keyword.get(runner_opts, :base_url),
       workspace: Keyword.get(runner_opts, :workspace),
-      req_llm_generate_text_fun: Keyword.get(runner_opts, :req_llm_generate_text_fun),
+      req_llm_stream_text_fun: Keyword.get(runner_opts, :req_llm_stream_text_fun),
       llm_call_fun: Keyword.get(runner_opts, :llm_call_fun)
     )
   end

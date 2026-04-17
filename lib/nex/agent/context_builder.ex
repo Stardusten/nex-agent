@@ -433,6 +433,7 @@ defmodule Nex.Agent.ContextBuilder do
   end
 
   defp build_user_content(text, nil), do: text
+  defp build_user_content(text, []), do: text
 
   defp build_user_content(text, attachments) when is_list(attachments) and attachments != [] do
     Projector.project_for_model(attachments, []) ++ [%{"type" => "text", "text" => text}]

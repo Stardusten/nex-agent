@@ -125,7 +125,7 @@ defmodule Nex.E2E.SkillRuntimeE2ETest do
 
     assert {:ok, "local runtime complete", session} =
              Runner.run(Session.new("e2e-local-runtime"), "restore the widget service",
-               llm_client: llm_client,
+               llm_stream_client: stream_client_from_response(llm_client),
                workspace: workspace,
                cwd: workspace,
                skill_runtime: %{"enabled" => true},
@@ -268,7 +268,7 @@ defmodule Nex.E2E.SkillRuntimeE2ETest do
 
     assert {:ok, "remote runtime complete", session} =
              Runner.run(Session.new("e2e-remote-runtime"), "handle the remote widget diagnosis",
-               llm_client: llm_client,
+               llm_stream_client: stream_client_from_response(llm_client),
                workspace: workspace,
                cwd: workspace,
                http_get: http_get,
@@ -334,7 +334,7 @@ defmodule Nex.E2E.SkillRuntimeE2ETest do
 
     assert {:ok, "captured", _session} =
              Runner.run(Session.new("capture-runtime-skill"), "save this as a reusable skill",
-               llm_client: capture_llm,
+               llm_stream_client: stream_client_from_response(capture_llm),
                workspace: workspace,
                cwd: workspace,
                skill_runtime: %{"enabled" => true},
@@ -393,7 +393,7 @@ defmodule Nex.E2E.SkillRuntimeE2ETest do
              Runner.run(
                Session.new("use-captured-runtime-skill"),
                "follow the incident checklist",
-               llm_client: use_llm,
+               llm_stream_client: stream_client_from_response(use_llm),
                workspace: workspace,
                cwd: workspace,
                skill_runtime: %{"enabled" => true},
@@ -453,7 +453,7 @@ defmodule Nex.E2E.SkillRuntimeE2ETest do
 
     assert {:ok, "runtime disabled", session} =
              Runner.run(Session.new("runtime-disabled"), "check skill discovery",
-               llm_client: llm_client,
+               llm_stream_client: stream_client_from_response(llm_client),
                workspace: workspace,
                cwd: workspace,
                skill_runtime: %{"enabled" => false},
@@ -557,4 +557,45 @@ defmodule Nex.E2E.SkillRuntimeE2ETest do
   defp sha256(content) do
     :crypto.hash(:sha256, content) |> Base.encode16(case: :lower)
   end
+
+  defp stream_client_from_response(fun) when is_function(fun, 2) do
+    fn messages, opts, callback ->
+      case fun.(messages, opts) do
+        {:ok, response} when is_map(response) ->
+          emit_mock_stream_response(callback, response)
+          :ok
+
+        {:error, reason} ->
+          {:error, reason}
+
+        response when is_map(response) ->
+          emit_mock_stream_response(callback, response)
+          :ok
+
+        other ->
+          other
+      end
+    end
+  end
+
+  defp emit_mock_stream_response(callback, response) do
+    content = Map.get(response, :content) || Map.get(response, "content") || ""
+
+    case render_mock_content(content) do
+      "" -> :ok
+      text -> callback.({:delta, text})
+    end
+
+    tool_calls = Map.get(response, :tool_calls) || Map.get(response, "tool_calls") || []
+
+    if tool_calls != [] do
+      callback.({:tool_calls, tool_calls})
+    end
+
+    callback.({:done, %{finish_reason: nil, usage: nil, model: nil}})
+  end
+
+  defp render_mock_content(nil), do: ""
+  defp render_mock_content(text) when is_binary(text), do: text
+  defp render_mock_content(text), do: inspect(text, printable_limit: 500, limit: 50)
 end

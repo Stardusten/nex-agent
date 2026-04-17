@@ -9,7 +9,6 @@ defmodule Nex.Agent.Runner do
     MemoryUpdater,
     RequestTrace,
     Session,
-    Stream.Assembler,
     Stream.Result
   }
 
@@ -82,7 +81,6 @@ defmodule Nex.Agent.Runner do
       |> Keyword.put(:request_trace, request_trace_config)
       |> Keyword.put(:skill_runtime, SkillRuntime.config(opts))
       |> Keyword.put_new(:_evolution_signals, default_evolution_signals())
-      |> init_stream_assembler()
 
     initial_message_count = length(session.messages)
     {session, runtime_system_messages} = prepare_evolution_turn(session, prompt, opts)
@@ -105,7 +103,8 @@ defmodule Nex.Agent.Runner do
         skip_skills: Keyword.get(opts, :skip_skills, false),
         workspace: workspace,
         runtime_system_messages: runtime_system_messages,
-        cwd: Keyword.get(opts, :cwd)
+        cwd: Keyword.get(opts, :cwd),
+        config: runtime_config
       )
 
     session =
@@ -333,8 +332,6 @@ defmodule Nex.Agent.Runner do
             emit_stream_error(opts, reason)
             {:error, stream_result(:error, opts, nil, %{error: reason}), session}
           else
-            {response, opts} = take_stream_assembler(response, opts)
-
             opts =
               if Map.get(response, :streamed_text, false) do
                 Keyword.put(opts, :_llm_text_streamed, true)
@@ -410,122 +407,109 @@ defmodule Nex.Agent.Runner do
       {new_messages, results, session, opts} =
         execute_tools(session, messages, tool_call_dicts, opts)
 
-      opts = maybe_emit_tool_result_events(opts, results)
       maybe_publish_tool_results(results, opts)
 
       run_loop(session, new_messages, iteration + 1, max_iterations, opts)
     else
-    tool_call_dicts = normalize_tool_calls(tool_calls)
+      tool_call_dicts = normalize_tool_calls(tool_calls)
 
-    current_signatures =
-      tool_call_dicts
-      |> Enum.map(fn tc ->
-        name = get_in(tc, ["function", "name"])
-        args = get_in(tc, ["function", "arguments"]) || ""
-        {name, tool_loop_signature(name, args)}
-      end)
-      |> Enum.sort()
+      current_signatures =
+        tool_call_dicts
+        |> Enum.map(fn tc ->
+          name = get_in(tc, ["function", "name"])
+          args = get_in(tc, ["function", "arguments"]) || ""
+          {name, tool_loop_signature(name, args)}
+        end)
+        |> Enum.sort()
 
-    tool_history = Keyword.get(opts, :_tool_history, [])
-    tool_history = [current_signatures | tool_history] |> Enum.take(@max_loop_repeats)
+      tool_history = Keyword.get(opts, :_tool_history, [])
+      tool_history = [current_signatures | tool_history] |> Enum.take(@max_loop_repeats)
 
-    # Detect loop: exact same {tool_name, args} pattern repeated N times consecutively
-    if length(tool_history) >= @max_loop_repeats and
-         tool_history |> Enum.take(@max_loop_repeats) |> Enum.uniq() |> length() == 1 do
-      Logger.warning(
-        "[Runner] Loop detected: #{inspect(current_signatures)} repeated #{@max_loop_repeats}x, breaking"
-      )
+      # Detect loop: exact same {tool_name, args} pattern repeated N times consecutively
+      if length(tool_history) >= @max_loop_repeats and
+           tool_history |> Enum.take(@max_loop_repeats) |> Enum.uniq() |> length() == 1 do
+        Logger.warning(
+          "[Runner] Loop detected: #{inspect(current_signatures)} repeated #{@max_loop_repeats}x, breaking"
+        )
 
-      final_content =
-        render_text(content) ||
-          "I detected a repeated action loop and stopped. Please try a different approach."
+        final_content =
+          render_text(content) ||
+            "I detected a repeated action loop and stopped. Please try a different approach."
 
-      opts =
-        opts
-        |> maybe_emit_text_delta(final_content)
-        |> maybe_emit_message_end(final_content)
+        opts =
+          opts
+          |> maybe_stream_text(final_content)
+          |> maybe_finish_stream()
 
-      {:ok, stream_result(:ok, opts, final_content), session}
-    else
-      opts = Keyword.put(opts, :_tool_history, tool_history)
+        {:ok, stream_result(:ok, opts, final_content), session}
+      else
+        opts = Keyword.put(opts, :_tool_history, tool_history)
 
-      existing_suppress? = Keyword.get(opts, :_suppress_current_reply_stream, false)
+        existing_suppress? = Keyword.get(opts, :_suppress_current_reply_stream, false)
 
-      suppress_current_reply_stream? =
-        existing_suppress? or
-          Enum.any?(tool_call_dicts, fn tc ->
-            get_in(tc, ["function", "name"]) == "message" and
-              message_tool_call_targets_current_conversation?(tc, opts)
+        suppress_current_reply_stream? =
+          existing_suppress? or
+            Enum.any?(tool_call_dicts, fn tc ->
+              get_in(tc, ["function", "name"]) == "message" and
+                message_tool_call_targets_current_conversation?(tc, opts)
+            end)
+
+        opts =
+          if suppress_current_reply_stream? do
+            Keyword.put(opts, :_suppress_current_reply_stream, true)
+          else
+            opts
+          end
+
+        messages =
+          ContextBuilder.add_assistant_message(
+            messages,
+            content,
+            tool_call_dicts,
+            reasoning_content
+          )
+
+        session =
+          Session.add_message(session, "assistant", content,
+            tool_calls: tool_call_dicts,
+            reasoning_content: reasoning_content
+          )
+
+        {new_messages, results, session, opts} =
+          execute_tools(session, messages, tool_call_dicts, opts)
+
+        maybe_publish_tool_results(results, opts)
+
+        message_sent_to_current_channel =
+          Enum.any?(results, fn {_id, name, _r, args} ->
+            name == "message" and message_targets_current_conversation?(args, opts)
           end)
 
-      opts =
-        if suppress_current_reply_stream? do
-          opts
-          |> Keyword.put(:_suppress_current_reply_stream, true)
-          |> suppress_stream_output(true)
-        else
-          opts
+        effective_max =
+          if iteration + 1 >= max_iterations and iteration + 1 < @max_iterations_hard_limit and
+               not Keyword.has_key?(opts, :tools_filter) and
+               not Keyword.get(opts, :_expanded, false) do
+            new_max = min(max_iterations * 2, @max_iterations_hard_limit)
+            Logger.info("[Runner] Auto-expanding max_iterations #{max_iterations} -> #{new_max}")
+            new_max
+          else
+            max_iterations
+          end
+
+        opts =
+          if effective_max > max_iterations,
+            do: Keyword.put(opts, :_expanded, true),
+            else: opts
+
+        case run_loop(session, new_messages, iteration + 1, effective_max, opts) do
+          {:ok, _final_content, final_session} when message_sent_to_current_channel ->
+            {:ok, stream_result(:ok, opts, nil, %{message_sent: true}), final_session}
+
+          other ->
+            other
         end
-
-      opts =
-        if suppress_current_reply_stream? do
-          opts
-        else
-          maybe_emit_text_commit(opts, content)
-        end
-
-      opts = maybe_emit_tool_call_start_events(opts, tool_call_dicts)
-
-      messages =
-        ContextBuilder.add_assistant_message(
-          messages,
-          content,
-          tool_call_dicts,
-          reasoning_content
-        )
-
-      session =
-        Session.add_message(session, "assistant", content,
-          tool_calls: tool_call_dicts,
-          reasoning_content: reasoning_content
-        )
-
-      {new_messages, results, session, opts} =
-        execute_tools(session, messages, tool_call_dicts, opts)
-
-      opts = maybe_emit_tool_result_events(opts, results)
-      maybe_publish_tool_results(results, opts)
-
-      message_sent_to_current_channel =
-        Enum.any?(results, fn {_id, name, _r, args} ->
-          name == "message" and message_targets_current_conversation?(args, opts)
-        end)
-
-      effective_max =
-        if iteration + 1 >= max_iterations and iteration + 1 < @max_iterations_hard_limit and
-             not Keyword.has_key?(opts, :tools_filter) and
-             not Keyword.get(opts, :_expanded, false) do
-          new_max = min(max_iterations * 2, @max_iterations_hard_limit)
-          Logger.info("[Runner] Auto-expanding max_iterations #{max_iterations} -> #{new_max}")
-          new_max
-        else
-          max_iterations
-        end
-
-      opts =
-        if effective_max > max_iterations,
-          do: Keyword.put(opts, :_expanded, true),
-          else: opts
-
-      case run_loop(session, new_messages, iteration + 1, effective_max, opts) do
-        {:ok, _final_content, final_session} when message_sent_to_current_channel ->
-          {:ok, stream_result(:ok, opts, nil, %{message_sent: true}), final_session}
-
-        other ->
-          other
       end
     end
-  end
   end
 
   defp handle_response(
@@ -544,13 +528,17 @@ defmodule Nex.Agent.Runner do
     Logger.info("[Runner] LLM finished: #{String.slice(content_text, 0, 100)}")
 
     opts =
-      unless Keyword.get(opts, :_llm_text_streamed, false) or
-               Keyword.get(opts, :_suppress_current_reply_stream, false) do
-        opts
-        |> maybe_emit_text_delta(content_text)
-        |> maybe_emit_message_end(content_text)
-      else
-        opts
+      cond do
+        Keyword.get(opts, :_suppress_current_reply_stream, false) ->
+          opts
+
+        Keyword.get(opts, :_llm_text_streamed, false) ->
+          maybe_finish_stream(opts)
+
+        true ->
+          opts
+          |> maybe_stream_text(content_text)
+          |> maybe_finish_stream()
       end
 
     session =
@@ -562,7 +550,9 @@ defmodule Nex.Agent.Runner do
       if Keyword.get(opts, :_suppress_current_reply_stream, false), do: nil, else: content_text
 
     metadata =
-      if Keyword.get(opts, :_suppress_current_reply_stream, false), do: %{message_sent: true}, else: %{}
+      if Keyword.get(opts, :_suppress_current_reply_stream, false),
+        do: %{message_sent: true},
+        else: %{}
 
     {:ok, stream_result(:ok, opts, final_content, metadata), session}
   end
@@ -590,23 +580,40 @@ defmodule Nex.Agent.Runner do
     end)
   end
 
-  defp maybe_emit_text_delta(opts, text),
-    do: update_stream_assembler(opts, &Assembler.emit_text_delta(&1, text))
+  defp maybe_stream_text(opts, text) when is_binary(text) and text != "" do
+    case Keyword.get(opts, :stream_sink) do
+      sink when is_function(sink, 1) ->
+        _ = sink.({:text, text})
+        Keyword.put(opts, :_llm_text_streamed, true)
 
-  defp maybe_emit_text_commit(opts, content),
-    do: update_stream_assembler(opts, &Assembler.emit_text_commit(&1, content))
+      _ ->
+        opts
+    end
+  end
 
-  defp maybe_emit_tool_call_start_events(opts, tool_call_dicts),
-    do: update_stream_assembler(opts, &Assembler.emit_tool_call_start_events(&1, tool_call_dicts))
+  defp maybe_stream_text(opts, _text), do: opts
 
-  defp maybe_emit_tool_result_events(opts, results),
-    do: update_stream_assembler(opts, &Assembler.emit_tool_result_events(&1, results))
+  defp maybe_finish_stream(opts) do
+    case Keyword.get(opts, :stream_sink) do
+      sink when is_function(sink, 1) ->
+        _ = sink.(:finish)
+        opts
 
-  defp maybe_emit_message_end(opts, _content_text),
-    do: update_stream_assembler(opts, &Assembler.emit_message_end/1)
+      _ ->
+        opts
+    end
+  end
 
-  defp emit_stream_error(opts, reason),
-    do: update_stream_assembler(opts, &Assembler.emit_error(&1, reason))
+  defp emit_stream_error(opts, reason) do
+    case Keyword.get(opts, :stream_sink) do
+      sink when is_function(sink, 1) ->
+        _ = sink.({:error, format_stream_error(reason)})
+        opts
+
+      _ ->
+        opts
+    end
+  end
 
   defp stream_result(status, opts, final_content, metadata \\ %{})
 
@@ -962,17 +969,6 @@ defmodule Nex.Agent.Runner do
   end
 
   defp call_llm_stream(messages, opts) do
-    assembler =
-      Keyword.get_lazy(opts, :_stream_assembler, fn ->
-        Assembler.new(
-          mode: :conversation,
-          run_id: Keyword.get(opts, :run_id) || "run_unknown",
-          sink: Keyword.get(opts, :stream_sink),
-          suppress_output?: Keyword.get(opts, :_suppress_current_reply_stream, false)
-        )
-      end)
-      |> Assembler.prepare_next_response()
-
     stream_fun = fn callback ->
       if opts[:llm_stream_client] do
         opts[:llm_stream_client].(messages, opts, callback)
@@ -981,19 +977,7 @@ defmodule Nex.Agent.Runner do
       end
     end
 
-    case Assembler.drain_stream(stream_fun, assembler, :runner_stream_event) do
-      {:ok, assembler} ->
-        {assembler, response} = Assembler.finalize(assembler)
-
-        if response.error do
-          {:error, response.error}
-        else
-          {:ok, Map.put(response, :_stream_assembler, assembler)}
-        end
-
-      {:error, reason} ->
-        {:error, reason}
-    end
+    drain_llm_stream(stream_fun, opts, stream_output?: true)
   end
 
   defp call_req_llm_stream(messages, opts, callback) do
@@ -1258,24 +1242,13 @@ defmodule Nex.Agent.Runner do
   end
 
   defp call_llm_stream_for_consolidation(messages, opts) do
-    assembler = Assembler.new(mode: :consolidation)
-
     stream_fun = fn callback ->
       Nex.Agent.LLM.ReqLLM.stream(messages, opts, callback)
     end
 
-    case Assembler.drain_stream(stream_fun, assembler, :runner_consolidation_stream_event) do
-      {:ok, assembler} ->
-        {_assembler, response} = Assembler.finalize(assembler)
-
-        if response.error do
-          {:error, response.error}
-        else
-          {:ok, Map.delete(response, :streamed_text)}
-        end
-
-      {:error, reason} ->
-        {:error, reason}
+    case drain_llm_stream(stream_fun, opts, stream_output?: false) do
+      {:ok, response} -> {:ok, Map.delete(response, :streamed_text)}
+      error -> error
     end
   end
 
@@ -1649,39 +1622,102 @@ defmodule Nex.Agent.Runner do
 
   defp trace_tool_definition(tool), do: %{"definition" => inspect(tool)}
 
-  defp init_stream_assembler(opts) do
-    if streaming_result?(opts) do
-      assembler =
-        Assembler.new(
-          mode: :conversation,
-          run_id: Keyword.get(opts, :run_id) || "run_unknown",
-          sink: Keyword.get(opts, :stream_sink),
-          suppress_output?: Keyword.get(opts, :_suppress_current_reply_stream, false)
-        )
+  defp drain_llm_stream(stream_fun, opts, drain_opts) do
+    key = {:runner_stream_state, make_ref()}
 
-      Keyword.put(opts, :_stream_assembler, assembler)
-    else
-      opts
+    Process.put(key, %{
+      content_parts: [],
+      reasoning_parts: [],
+      tool_calls: [],
+      finish_reason: nil,
+      usage: nil,
+      model: nil,
+      error: nil,
+      streamed_text: false
+    })
+
+    callback = fn event ->
+      state = Process.get(key)
+      Process.put(key, handle_stream_event(state, event, opts, drain_opts))
+    end
+
+    result = stream_fun.(callback)
+    state = Process.get(key)
+    Process.delete(key)
+
+    cond do
+      match?({:error, reason} when not is_nil(reason), result) ->
+        {:error, elem(result, 1)}
+
+      state.error ->
+        {:error, state.error}
+
+      true ->
+        {:ok,
+         %{
+           content: Enum.reverse(state.content_parts) |> IO.iodata_to_binary(),
+           reasoning_content: Enum.reverse(state.reasoning_parts) |> IO.iodata_to_binary(),
+           tool_calls: Enum.reverse(state.tool_calls),
+           finish_reason: state.finish_reason,
+           usage: state.usage,
+           model: state.model,
+           streamed_text: state.streamed_text
+         }}
     end
   end
 
-  defp suppress_stream_output(opts, suppress?) do
-    update_stream_assembler(opts, &Assembler.suppress_output(&1, suppress?))
+  defp handle_stream_event(state, {:delta, text}, opts, drain_opts) when is_binary(text) do
+    state =
+      %{
+        state
+        | content_parts: [text | state.content_parts],
+          streamed_text: state.streamed_text or text != ""
+      }
+
+    if Keyword.get(drain_opts, :stream_output?, false) and
+         not Keyword.get(opts, :_suppress_current_reply_stream, false) and
+         text != "" do
+      maybe_call_stream_sink(opts, {:text, text})
+    end
+
+    state
   end
 
-  defp update_stream_assembler(opts, fun) when is_function(fun, 1) do
-    case Keyword.get(opts, :_stream_assembler) do
-      %Assembler{} = assembler ->
-        Keyword.put(opts, :_stream_assembler, fun.(assembler))
+  defp handle_stream_event(state, {:thinking, text}, _opts, _drain_opts) when is_binary(text) do
+    %{state | reasoning_parts: [text | state.reasoning_parts]}
+  end
+
+  defp handle_stream_event(state, {:tool_calls, tool_calls}, _opts, _drain_opts)
+       when is_list(tool_calls) do
+    %{state | tool_calls: Enum.reverse(tool_calls) ++ state.tool_calls}
+  end
+
+  defp handle_stream_event(state, {:done, metadata}, _opts, _drain_opts) when is_map(metadata) do
+    %{
+      state
+      | finish_reason: Map.get(metadata, :finish_reason) || Map.get(metadata, "finish_reason"),
+        usage: Map.get(metadata, :usage) || Map.get(metadata, "usage"),
+        model: Map.get(metadata, :model) || Map.get(metadata, "model")
+    }
+  end
+
+  defp handle_stream_event(state, {:error, reason}, _opts, _drain_opts) do
+    %{state | error: reason}
+  end
+
+  defp handle_stream_event(state, _event, _opts, _drain_opts), do: state
+
+  defp maybe_call_stream_sink(opts, event) do
+    case Keyword.get(opts, :stream_sink) do
+      sink when is_function(sink, 1) ->
+        _ = sink.(event)
+        :ok
 
       _ ->
-        opts
+        :ok
     end
   end
 
-  defp take_stream_assembler(%{_stream_assembler: %Assembler{} = assembler} = response, opts) do
-    {Map.delete(response, :_stream_assembler), Keyword.put(opts, :_stream_assembler, assembler)}
-  end
-
-  defp take_stream_assembler(response, opts), do: {response, opts}
+  defp format_stream_error(reason) when is_binary(reason), do: reason
+  defp format_stream_error(reason), do: inspect(reason)
 end

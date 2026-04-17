@@ -92,23 +92,23 @@ defmodule Nex.Agent.MemoryConsolidationTest do
     parent = self()
     session = build_session()
 
-    llm_generate_text_fun = fn _model_spec, _messages, opts ->
+    llm_stream_text_fun = fn _model_spec, _messages, opts ->
       send(parent, {:llm_opts, opts})
 
       # No retry needed - tool_choice is nil
       {:ok,
        %{
-         tool_calls: [
+         stream: [
            %{
-             function: %{
-               name: "save_memory",
-               arguments: %{
-                 "history_entry" => "[2026-03-18 12:00] Consolidated without tool_choice.",
-                 "memory_update" => "# Long-term Memory\n\nConsolidation succeeded.\n"
-               }
+             type: :tool_call,
+             name: "save_memory",
+             arguments: %{
+               "history_entry" => "[2026-03-18 12:00] Consolidated without tool_choice.",
+               "memory_update" => "# Long-term Memory\n\nConsolidation succeeded.\n"
              }
            }
-         ]
+         ],
+         finish_reason: :stop
        }}
     end
 
@@ -117,7 +117,7 @@ defmodule Nex.Agent.MemoryConsolidationTest do
                archive_all: true,
                workspace: workspace,
                llm_call_fun: &Runner.call_llm_for_consolidation/2,
-               req_llm_generate_text_fun: llm_generate_text_fun
+               req_llm_stream_text_fun: llm_stream_text_fun
              )
 
     assert_receive {:llm_opts, opts}

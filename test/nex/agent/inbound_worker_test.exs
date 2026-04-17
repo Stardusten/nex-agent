@@ -2,7 +2,7 @@ defmodule Nex.Agent.InboundWorkerTest do
   use ExUnit.Case, async: false
 
   alias Nex.Agent.{Bus, InboundWorker, Memory, Runner, Runtime, Session, Skills}
-  alias Nex.Agent.Channel.Feishu
+  alias Nex.Agent.Channel.{Discord, Feishu}
   alias Nex.Agent.Inbound.Envelope
   alias Nex.Agent.Media.Attachment
   alias Nex.Agent.Stream.Result
@@ -48,7 +48,8 @@ defmodule Nex.Agent.InboundWorkerTest do
     config = %Nex.Agent.Config{
       Nex.Agent.Config.default()
       | feishu: %{"enabled" => true, "streaming" => true},
-        telegram: %{"enabled" => true, "streaming" => true}
+        telegram: %{"enabled" => true, "streaming" => true},
+        discord: %{"enabled" => true, "streaming" => true}
     }
 
     prompt_fun = fn agent, prompt, opts ->
@@ -723,6 +724,80 @@ defmodule Nex.Agent.InboundWorkerTest do
 
     payloads = collect_telegram_payloads([])
     assert Enum.map(payloads, & &1.content) == ["hello"]
+  end
+
+  test "discord stream sink edits current message and opens a new message on newmsg" do
+    parent = self()
+    worker_config = %Nex.Agent.Config{
+      Nex.Agent.Config.default()
+      | discord: %{"enabled" => true, "streaming" => true}
+    }
+
+    if Process.whereis(Discord), do: GenServer.stop(Discord)
+
+    start_supervised!(
+      {Discord,
+       config: %Nex.Agent.Config{Nex.Agent.Config.default() | discord: %{"enabled" => false}},
+       http_post_fun: fn url, body, headers ->
+         send(parent, {:discord_http_post, url, body, headers})
+         {:ok, %{"id" => "msg_" <> Integer.to_string(System.unique_integer([:positive]))}}
+       end,
+       http_patch_fun: fn url, body, headers ->
+         send(parent, {:discord_http_patch, url, body, headers})
+         {:ok, %{"id" => "patched"}}
+       end}
+    )
+
+    :sys.replace_state(Process.whereis(Discord), fn state ->
+      %{state | enabled: true, token: "discord-token"}
+    end)
+
+    worker_name =
+      String.to_atom("inbound_worker_discord_stream_#{System.unique_integer([:positive])}")
+
+    prompt_fun = fn agent, _prompt, opts ->
+      sink = Keyword.fetch!(opts, :stream_sink)
+      run_id = "run_discord_stream_test"
+
+      sink.({:text, "第一段"})
+      sink.({:text, "\n<newmsg/>\n第二"})
+      sink.({:text, "段"})
+      sink.(:finish)
+
+      {:ok, Result.ok(run_id, "第一段\n<newmsg/>\n第二段", %{"transport" => "discord"}), agent}
+    end
+
+    start_supervised!(
+      {InboundWorker, name: worker_name, config: worker_config, agent_prompt_fun: prompt_fun}
+    )
+
+    send(Process.whereis(worker_name), {
+      :bus_message,
+      :inbound,
+      %Envelope{
+        channel: "discord",
+        chat_id: "discord-chat",
+        sender_id: "tester",
+        text: "hello",
+        message_type: :text,
+        raw: %{},
+        metadata: %{},
+        media_refs: [],
+        attachments: []
+      }
+    })
+
+    assert_receive {:discord_http_post, url1, %{"content" => "第一段"}, headers1}, 1_000
+    assert url1 =~ "/channels/discord-chat/messages"
+    assert {"authorization", "Bot discord-token"} in headers1
+
+    assert_receive {:discord_http_post, url2, %{"content" => "第二"}, _headers2}, 1_000
+    assert url2 =~ "/channels/discord-chat/messages"
+
+    assert_receive {:discord_http_patch, patch_url, %{"content" => "第二段"}, _headers3}, 1_000
+    assert patch_url =~ "/channels/discord-chat/messages/msg_"
+
+    refute_receive {:bus_message, :discord_outbound, _payload}, 300
   end
 
   defp collect_feishu_payloads(acc) do

@@ -122,7 +122,7 @@ defmodule Nex.Agent.ToolAlignmentTest do
 
     assert {:ok, "ok", _session} =
              Runner.run(Session.new("tool-dedupe"), "show available tools",
-               llm_client: llm_client,
+               llm_stream_client: stream_client_from_response(llm_client),
                workspace: workspace,
                skip_consolidation: true
              )
@@ -203,7 +203,7 @@ defmodule Nex.Agent.ToolAlignmentTest do
 
     assert {:ok, "ok", session} =
              Runner.run(Session.new("raw-prefix"), "/code keep this literal",
-               llm_client: llm_client,
+               llm_stream_client: stream_client_from_response(llm_client),
                workspace: workspace,
                cwd: workspace,
                skip_consolidation: true
@@ -333,7 +333,7 @@ defmodule Nex.Agent.ToolAlignmentTest do
 
     assert {:ok, result, _updated_agent} =
              Nex.Agent.prompt(agent, "检查记忆状态",
-               llm_client: llm_client,
+               llm_stream_client: stream_client_from_response(llm_client),
                workspace: workspace,
                skip_consolidation: true,
                channel: "feishu",
@@ -359,4 +359,45 @@ defmodule Nex.Agent.ToolAlignmentTest do
         wait_for_registry_tool(name, module, attempts - 1)
     end
   end
+
+  defp stream_client_from_response(fun) when is_function(fun, 2) do
+    fn messages, opts, callback ->
+      case fun.(messages, opts) do
+        {:ok, response} when is_map(response) ->
+          emit_mock_stream_response(callback, response)
+          :ok
+
+        {:error, reason} ->
+          {:error, reason}
+
+        response when is_map(response) ->
+          emit_mock_stream_response(callback, response)
+          :ok
+
+        other ->
+          other
+      end
+    end
+  end
+
+  defp emit_mock_stream_response(callback, response) do
+    content = Map.get(response, :content) || Map.get(response, "content") || ""
+
+    case render_mock_content(content) do
+      "" -> :ok
+      text -> callback.({:delta, text})
+    end
+
+    tool_calls = Map.get(response, :tool_calls) || Map.get(response, "tool_calls") || []
+
+    if tool_calls != [] do
+      callback.({:tool_calls, tool_calls})
+    end
+
+    callback.({:done, %{finish_reason: nil, usage: nil, model: nil}})
+  end
+
+  defp render_mock_content(nil), do: ""
+  defp render_mock_content(text) when is_binary(text), do: text
+  defp render_mock_content(text), do: inspect(text, printable_limit: 500, limit: 50)
 end

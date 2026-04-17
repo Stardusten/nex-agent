@@ -3,7 +3,7 @@ defmodule Nex.Agent.ContextBuilderTest do
 
   Code.require_file("layer_contract_helper.exs", __DIR__)
 
-  alias Nex.Agent.ContextBuilder
+  alias Nex.Agent.{Config, ContextBuilder}
   alias Nex.Agent.LayerContractHelper
 
   setup do
@@ -39,6 +39,42 @@ defmodule Nex.Agent.ContextBuilderTest do
              "Empty `MEMORY.md` does not imply this is the first conversation or that no prior session history exists."
   end
 
+  test "system prompt includes channel output rules and newmsg guidance", %{workspace: workspace} do
+    prompt = ContextBuilder.build_system_prompt(workspace: workspace)
+
+    assert prompt =~ "## Channel Output Rules"
+    assert prompt =~ "`<newmsg/>` is a platform text IR separator"
+    assert prompt =~ "Do not place `<newmsg/>` inside fenced code blocks."
+    assert prompt =~ "Use `<newmsg/>` only when you intentionally want the runtime to split"
+  end
+
+  test "runtime context includes feishu channel ir and streaming mode", %{} do
+    config = %Config{Config.default() | feishu: %{"enabled" => true, "streaming" => true}}
+
+    context =
+      ContextBuilder.build_runtime_context("feishu", "chat-1",
+        config: config,
+        cwd: File.cwd!()
+      )
+
+    assert context =~ "Channel: feishu"
+    assert context =~ "Chat ID: chat-1"
+    assert context =~ "Channel Streaming: streaming"
+    assert context =~ "Channel IR: feishu markdown-like text IR"
+
+    assert context =~
+             "Feishu IR supports headings, lists, quotes, fenced code blocks, tables, and `<newmsg/>`."
+  end
+
+  test "runtime context falls back to plain text guidance for non-feishu channels", %{} do
+    config = %Config{Config.default() | telegram: %{"enabled" => true, "streaming" => false}}
+
+    context = ContextBuilder.build_runtime_context("telegram", "chat-1", config: config)
+
+    assert context =~ "Channel Streaming: single"
+    assert context =~ "Channel IR: markdown-like plain text"
+  end
+
   test "runtime system messages are merged into system prompt", %{
     workspace: workspace
   } do
@@ -54,7 +90,7 @@ defmodule Nex.Agent.ContextBuilderTest do
 
     # The system message should contain both the base prompt and the nudge
     system_content = hd(system_messages)["content"]
-    assert system_content =~ "Nex Agent"
+    assert system_content =~ "## Runtime Identity"
     assert system_content =~ "[Runtime Evolution Nudge]"
 
     # User message should not contain the nudge
@@ -106,8 +142,8 @@ defmodule Nex.Agent.ContextBuilderTest do
     assert matrix["SOUL"].authority == "persona, values, style, and optional identity framing"
 
     prompt = ContextBuilder.build_system_prompt(workspace: Path.join(System.tmp_dir!(), "noop"))
-    assert prompt =~ "## Runtime Identity (Default)"
-    assert prompt =~ "Default runtime identity: Nex Agent"
+    assert prompt =~ "## Runtime Identity"
+    assert prompt =~ "No default persona is imposed by the runtime."
   end
 
   test "prompt precedence keeps Nex Agent authoritative with conflicting bootstrap files", %{
@@ -141,9 +177,9 @@ defmodule Nex.Agent.ContextBuilderTest do
     assert prompt =~ "You are ChatGPT"
     assert prompt =~ "GPT-4"
     assert prompt =~ "Act as Claude"
-    assert prompt =~ "## Runtime Identity (Default)"
-    assert prompt =~ "Workspace layers may refine or replace this identity"
-    assert String.split(prompt, "Runtime Identity (Default)") |> length() == 2
+    assert prompt =~ "## Runtime Identity"
+    assert prompt =~ "Identity is defined by workspace layers"
+    assert String.split(prompt, "## Runtime Identity") |> length() == 2
     assert prompt =~ "Interpretation: Persona, values, style, and optional identity framing"
     assert prompt =~ "Interpretation: User profile and collaboration preferences only"
     assert Enum.map(diagnostics, & &1.source_layer) == [:agents, :user]
@@ -156,8 +192,8 @@ defmodule Nex.Agent.ContextBuilderTest do
   test "rendered prompt keeps a single default identity section", %{workspace: workspace} do
     prompt = ContextBuilder.build_system_prompt(workspace: workspace)
 
-    assert String.split(prompt, "Runtime Identity (Default)") |> length() == 2
-    assert String.split(prompt, "Default runtime identity: Nex Agent") |> length() == 2
+    assert String.split(prompt, "## Runtime Identity") |> length() == 2
+    assert String.split(prompt, "No default persona is imposed by the runtime.") |> length() == 2
   end
 
   test "system prompt strips legacy soul footer before sending bootstrap context", %{
@@ -281,7 +317,7 @@ defmodule Nex.Agent.ContextBuilderTest do
     {prompt, diagnostics} =
       ContextBuilder.build_system_prompt_with_diagnostics(workspace: workspace)
 
-    assert prompt =~ "## Runtime Identity (Default)"
+    assert prompt =~ "## Runtime Identity"
     assert prompt =~ "## Runtime"
     assert prompt =~ "## Runtime Evolution"
     assert diagnostics == []
@@ -290,7 +326,7 @@ defmodule Nex.Agent.ContextBuilderTest do
       ContextBuilder.build_messages([], "still works", "telegram", "1", nil, workspace: workspace)
 
     assert hd(messages)["role"] == "system"
-    assert hd(messages)["content"] =~ "## Runtime Identity (Default)"
+    assert hd(messages)["content"] =~ "## Runtime Identity"
     assert List.last(messages)["role"] == "user"
     assert List.last(messages)["content"] =~ "Channel: telegram"
     assert List.last(messages)["content"] =~ "Chat ID: 1"

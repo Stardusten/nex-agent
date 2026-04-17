@@ -5,6 +5,8 @@ defmodule Nex.Agent.Config do
 
   alias Nex.Agent.Auth.Codex
 
+  @channel_names ~w(telegram feishu discord slack dingtalk)
+
   @default_config_path Path.join(System.get_env("HOME", "~"), ".nex/agent/config.json")
 
   defstruct provider: "openai",
@@ -340,6 +342,42 @@ defmodule Nex.Agent.Config do
   @spec skill_runtime(t()) :: map()
   def skill_runtime(%__MODULE__{} = config) do
     Map.merge(default_skill_runtime(), config.skill_runtime || %{})
+  end
+
+  @doc """
+  Get runtime-facing configuration for a single channel.
+  """
+  @spec channel_runtime(t(), String.t() | atom()) :: map()
+  def channel_runtime(%__MODULE__{} = config, channel) do
+    case to_string(channel) do
+      "telegram" -> %{"streaming" => Map.get(telegram(config), "streaming", false) == true}
+      "feishu" -> %{"streaming" => Map.get(feishu(config), "streaming", true) == true}
+      "discord" -> %{"streaming" => Map.get(discord(config), "streaming", false) == true}
+      "slack" -> %{"streaming" => Map.get(slack(config), "streaming", false) == true}
+      "dingtalk" -> %{"streaming" => Map.get(dingtalk(config), "streaming", false) == true}
+      _ -> %{"streaming" => false}
+    end
+  end
+
+  @doc """
+  Build runtime-facing configuration for all supported channels.
+  """
+  @spec channels_runtime(t()) :: %{optional(String.t()) => map()}
+  def channels_runtime(%__MODULE__{} = config) do
+    Enum.into(@channel_names, %{}, fn channel ->
+      {channel, channel_runtime(config, channel)}
+    end)
+  end
+
+  @doc """
+  Whether a channel should flush assistant text incrementally.
+  """
+  @spec channel_streaming?(t(), String.t() | atom()) :: boolean()
+  def channel_streaming?(%__MODULE__{} = config, channel) do
+    config
+    |> channel_runtime(channel)
+    |> Map.get("streaming", false)
+    |> Kernel.==(true)
   end
 
   @doc """
@@ -696,6 +734,7 @@ defmodule Nex.Agent.Config do
 
   defp provider_env_api_key("anthropic"), do: System.get_env("ANTHROPIC_API_KEY")
   defp provider_env_api_key("openai"), do: System.get_env("OPENAI_API_KEY")
+
   defp provider_env_api_key("openai-codex") do
     case System.get_env("OPENAI_CODEX_ACCESS_TOKEN") do
       token when is_binary(token) and token != "" ->
@@ -813,6 +852,7 @@ defmodule Nex.Agent.Config do
       "enabled" => false,
       "token" => "",
       "allow_from" => [],
+      "streaming" => false,
       "reply_to_message" => false,
       "proxy" => nil
     }
@@ -826,6 +866,7 @@ defmodule Nex.Agent.Config do
       "encrypt_key" => "",
       "verification_token" => "",
       "allow_from" => [],
+      "streaming" => true,
       "react_emoji" => "THUMBSUP"
     }
   end
@@ -835,6 +876,7 @@ defmodule Nex.Agent.Config do
       "enabled" => false,
       "token" => "",
       "allow_from" => [],
+      "streaming" => false,
       "guild_id" => nil
     }
   end
@@ -844,6 +886,7 @@ defmodule Nex.Agent.Config do
       "enabled" => false,
       "app_token" => "",
       "bot_token" => "",
+      "streaming" => false,
       "allow_from" => []
     }
   end
@@ -854,6 +897,7 @@ defmodule Nex.Agent.Config do
       "app_key" => "",
       "app_secret" => "",
       "robot_code" => "",
+      "streaming" => false,
       "allow_from" => []
     }
   end

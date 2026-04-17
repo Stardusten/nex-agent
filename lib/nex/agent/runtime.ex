@@ -168,6 +168,7 @@ defmodule Nex.Agent.Runtime do
          version: version,
          config: config,
          workspace: workspace,
+         channels: Config.channels_runtime(config),
          prompt: prompt_data,
          tools: tools_data,
          skills: skills_data,

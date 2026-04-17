@@ -50,8 +50,8 @@ defmodule Nex.Agent.Tool.MemoryConsolidate do
     base_url = Map.get(ctx, :base_url) || Map.get(ctx, "base_url")
     llm_call_fun = Map.get(ctx, :llm_call_fun) || Map.get(ctx, "llm_call_fun")
 
-    req_llm_generate_text_fun =
-      Map.get(ctx, :req_llm_generate_text_fun) || Map.get(ctx, "req_llm_generate_text_fun")
+    req_llm_stream_text_fun =
+      Map.get(ctx, :req_llm_stream_text_fun) || Map.get(ctx, "req_llm_stream_text_fun")
 
     session_key =
       Map.get(args, "session_key") ||
@@ -85,7 +85,7 @@ defmodule Nex.Agent.Tool.MemoryConsolidate do
                 workspace: workspace
               ]
               |> maybe_put(:llm_call_fun, llm_call_fun)
-              |> maybe_put(:req_llm_generate_text_fun, req_llm_generate_text_fun)
+              |> maybe_put(:req_llm_stream_text_fun, req_llm_stream_text_fun)
 
             case Memory.refresh(session, provider, model, opts) do
               {:ok, updated_session, refresh_status} ->

@@ -16,7 +16,7 @@ defmodule Nex.Agent.MemoryUpdater do
           model: String.t(),
           api_key: String.t() | nil,
           base_url: String.t() | nil,
-          req_llm_generate_text_fun: any(),
+          req_llm_stream_text_fun: any(),
           llm_call_fun: any()
         }
 
@@ -134,7 +134,7 @@ defmodule Nex.Agent.MemoryUpdater do
         api_key: job.api_key,
         base_url: job.base_url
       ]
-      |> maybe_put(:req_llm_generate_text_fun, job.req_llm_generate_text_fun)
+      |> maybe_put(:req_llm_stream_text_fun, job.req_llm_stream_text_fun)
       |> maybe_put(:llm_call_fun, job.llm_call_fun)
 
     case Memory.refresh(job.session, job.provider, job.model, opts) do
@@ -175,11 +175,12 @@ defmodule Nex.Agent.MemoryUpdater do
       model: Keyword.get(opts, :model, "claude-sonnet-4-20250514"),
       api_key: Keyword.get(opts, :api_key),
       base_url: Keyword.get(opts, :base_url),
-      req_llm_generate_text_fun:
-        Keyword.get(opts, :req_llm_generate_text_fun) ||
-          Map.get(runtime_metadata, "memory_refresh_req_llm_generate_text_fun"),
+      req_llm_stream_text_fun:
+        Keyword.get(opts, :req_llm_stream_text_fun) ||
+          Map.get(runtime_metadata, "memory_refresh_req_llm_stream_text_fun"),
       llm_call_fun:
-        Keyword.get(opts, :llm_call_fun) || Map.get(runtime_metadata, "memory_refresh_llm_call_fun")
+        Keyword.get(opts, :llm_call_fun) ||
+          Map.get(runtime_metadata, "memory_refresh_llm_call_fun")
     }
   end
 
@@ -197,7 +198,7 @@ defmodule Nex.Agent.MemoryUpdater do
       session.metadata
       |> Kernel.||(%{})
       |> Map.delete("memory_refresh_llm_call_fun")
-      |> Map.delete("memory_refresh_req_llm_generate_text_fun")
+      |> Map.delete("memory_refresh_req_llm_stream_text_fun")
 
     %{session | metadata: metadata}
   end

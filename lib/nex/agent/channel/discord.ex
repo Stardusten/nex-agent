@@ -19,7 +19,10 @@ defmodule Nex.Agent.Channel.Discord do
   require Logger
 
   alias Nex.Agent.{Bus, Config}
+  alias Nex.Agent.Channel.Discord.WSClient
   alias Nex.Agent.Inbound.Envelope
+  alias Nex.Agent.IMIR.Renderers.Discord, as: DiscordRenderer
+  alias Nex.Agent.IMIR.Text, as: IMText
 
   @discord_api "https://discord.com/api/v10"
   @gateway_url "wss://gateway.discord.gg/?v=10&encoding=json"
@@ -31,6 +34,8 @@ defmodule Nex.Agent.Channel.Discord do
     :allow_from,
     :guild_id,
     :enabled,
+    :http_post_fun,
+    :http_patch_fun,
     :ws_pid,
     :ws_ref,
     :heartbeat_interval,
@@ -46,6 +51,8 @@ defmodule Nex.Agent.Channel.Discord do
           allow_from: [String.t()],
           guild_id: String.t() | nil,
           enabled: boolean(),
+          http_post_fun: (String.t(), map(), keyword() -> {:ok, map()} | {:error, term()}),
+          http_patch_fun: (String.t(), map(), keyword() -> {:ok, map()} | {:error, term()}),
           ws_pid: pid() | nil,
           ws_ref: reference() | nil,
           heartbeat_interval: integer() | nil,
@@ -73,6 +80,31 @@ defmodule Nex.Agent.Channel.Discord do
     })
   end
 
+  @doc "Send a Discord message synchronously and return the created message_id."
+  @spec deliver_message(String.t(), String.t(), map()) ::
+          {:ok, String.t()} | {:error, term()}
+  def deliver_message(channel_id, content, metadata \\ %{}) do
+    if Process.whereis(__MODULE__) do
+      GenServer.call(__MODULE__, {:deliver_message, channel_id, content, metadata}, 15_000)
+    else
+      {:error, :discord_not_running}
+    end
+  end
+
+  @doc "Edit an existing Discord message synchronously."
+  @spec update_message(String.t(), String.t(), String.t(), map()) :: :ok | {:error, term()}
+  def update_message(channel_id, message_id, content, metadata \\ %{}) do
+    if Process.whereis(__MODULE__) do
+      GenServer.call(
+        __MODULE__,
+        {:update_message, channel_id, message_id, content, metadata},
+        15_000
+      )
+    else
+      {:error, :discord_not_running}
+    end
+  end
+
   # Server
 
   @impl true
@@ -88,12 +120,30 @@ defmodule Nex.Agent.Channel.Discord do
       allow_from: Config.discord_allow_from(config),
       guild_id: Map.get(discord, "guild_id"),
       enabled: Config.discord_enabled?(config),
+      http_post_fun: Keyword.get(opts, :http_post_fun, &default_http_post/3),
+      http_patch_fun: Keyword.get(opts, :http_patch_fun, &default_http_patch/3),
       sequence: nil,
       session_id: nil
     }
 
     Bus.subscribe(:discord_outbound)
     {:ok, state, {:continue, :connect}}
+  end
+
+  @impl true
+  def handle_call({:deliver_message, channel_id, content, metadata}, _from, state) do
+    case create_message(channel_id, content, metadata, state) do
+      {:ok, message_id} -> {:reply, {:ok, message_id}, state}
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  @impl true
+  def handle_call({:update_message, channel_id, message_id, content, metadata}, _from, state) do
+    case edit_message(channel_id, message_id, content, metadata, state) do
+      :ok -> {:reply, :ok, state}
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
   end
 
   @impl true
@@ -132,7 +182,13 @@ defmodule Nex.Agent.Channel.Discord do
   end
 
   @impl true
-  def handle_info({:ws_message, frame}, state) do
+  def handle_info({:discord_ws_connected, pid}, state) do
+    ref = Process.monitor(pid)
+    {:noreply, %{state | ws_pid: pid, ws_ref: ref}}
+  end
+
+  @impl true
+  def handle_info({:discord_ws_message, pid, frame}, %{ws_pid: pid} = state) do
     case Jason.decode(frame) do
       {:ok, payload} ->
         state = handle_gateway_event(payload, state)
@@ -144,11 +200,11 @@ defmodule Nex.Agent.Channel.Discord do
   end
 
   @impl true
-  def handle_info({:ws_closed, _reason}, state) do
-    Logger.warning("[Discord] WebSocket closed, reconnecting...")
+  def handle_info({:discord_ws_disconnected, pid, reason}, %{ws_pid: pid} = state) do
+    Logger.warning("[Discord] WebSocket closed: #{inspect(reason)}, reconnecting...")
     state = cancel_heartbeat(state)
     Process.send_after(self(), :reconnect, @reconnect_delay_ms)
-    {:noreply, %{state | ws_pid: nil}}
+    {:noreply, %{state | ws_pid: nil, ws_ref: nil}}
   end
 
   @impl true
@@ -304,37 +360,85 @@ defmodule Nex.Agent.Channel.Discord do
   # REST API
 
   defp do_send(%{chat_id: channel_id, content: content}, state) do
-    url = "#{@discord_api}/channels/#{channel_id}/messages"
+    channel_id = to_string(channel_id || "")
 
-    # Discord has a 2000 char limit per message
-    chunks = chunk_message(content, 2000)
-
-    Enum.each(chunks, fn chunk ->
-      case Req.post(url,
-             json: %{content: chunk},
-             headers: [{"authorization", "Bot #{state.token}"}],
-             retry: false
-           ) do
-        {:ok, %{status: status}} when status in 200..299 ->
-          :ok
-
-        {:ok, %{status: 429, body: body}} ->
-          retry_after = get_in(body, ["retry_after"]) || 1
-          Logger.warning("[Discord] Rate limited, retry after #{retry_after}s")
-          Process.sleep(trunc(retry_after * 1000))
-          do_send(%{chat_id: channel_id, content: chunk}, state)
-
-        {:ok, resp} ->
-          Logger.error("[Discord] Send failed: #{inspect(resp.status)} #{inspect(resp.body)}")
-
-        {:error, reason} ->
-          Logger.error("[Discord] Send error: #{inspect(reason)}")
+    content
+    |> normalize_outbound_text()
+    |> Enum.each(fn segment ->
+      for chunk <- chunk_message(segment, 2000) do
+        case create_message(channel_id, chunk, %{}, state) do
+          {:ok, _message_id} -> :ok
+          {:error, reason} -> Logger.error("[Discord] Send failed: #{inspect(reason)}")
+        end
       end
     end)
   end
 
   defp do_send(payload, _state) do
     Logger.error("[Discord] Invalid outbound payload: #{inspect(payload)}")
+  end
+
+  defp create_message(channel_id, content, metadata, state) do
+    content = render_discord_content(content)
+
+    with :ok <- validate_outbound_message(channel_id, content, state),
+         {:ok, response} <-
+           state.http_post_fun.(
+             "#{@discord_api}/channels/#{channel_id}/messages",
+             %{"content" => content},
+             request_headers(metadata, state)
+           ) do
+      case Map.get(response, "id") || Map.get(response, :id) do
+        id when is_binary(id) and id != "" -> {:ok, id}
+        _ -> {:error, {:missing_message_id, response}}
+      end
+    end
+  end
+
+  defp edit_message(channel_id, message_id, content, metadata, state) do
+    content = render_discord_content(content)
+
+    with :ok <- validate_outbound_message(channel_id, content, state),
+         true <- is_binary(message_id) and message_id != "" or {:error, :invalid_message_id},
+         {:ok, _response} <-
+           state.http_patch_fun.(
+             "#{@discord_api}/channels/#{channel_id}/messages/#{message_id}",
+             %{"content" => content},
+             request_headers(metadata, state)
+           ) do
+      :ok
+    end
+  end
+
+  defp render_discord_content(content) when is_binary(content), do: DiscordRenderer.render_text(content)
+  defp render_discord_content(content), do: content
+
+  defp validate_outbound_message(channel_id, content, state) do
+    cond do
+      not is_binary(channel_id) or channel_id == "" ->
+        {:error, :invalid_channel_id}
+
+      not is_binary(content) or String.trim(content) == "" ->
+        {:error, :invalid_content}
+
+      state.token in [nil, ""] ->
+        {:error, :missing_token}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp normalize_outbound_text(content) when is_binary(content) do
+    content
+    |> IMText.split_messages()
+    |> Enum.reject(&(&1 == ""))
+  end
+
+  defp normalize_outbound_text(_content), do: []
+
+  defp request_headers(_metadata, state) do
+    [{"authorization", "Bot #{state.token}"}]
   end
 
   defp chunk_message(text, max_len) do
@@ -348,45 +452,27 @@ defmodule Nex.Agent.Channel.Discord do
 
   # WebSocket helpers
 
-  defp connect_gateway(_state) do
-    parent = self()
+  defp connect_gateway(state) do
+    url =
+      case state.resume_gateway_url do
+        url when is_binary(url) and url != "" -> "#{url}?v=10&encoding=json"
+        _ -> @gateway_url
+      end
 
-    if Code.ensure_loaded?(:websocket_client) and
-         function_exported?(:websocket_client, :start_link, 4) do
-      _pid =
-        spawn_link(fn ->
-          case :erlang.apply(:websocket_client, :start_link, [
-                 String.to_charlist(@gateway_url),
-                 __MODULE__.WsHandler,
-                 [parent: parent],
-                 []
-               ]) do
-            {:ok, ws_pid} ->
-              send(parent, {:ws_connected, ws_pid})
-              ref = Process.monitor(ws_pid)
-              send(parent, {:ws_monitor, ref})
-              Process.sleep(:infinity)
+    case WSClient.start_link(url, [], self()) do
+      {:ok, pid} ->
+        ref = Process.monitor(pid)
+        {:ok, %{state | ws_pid: pid, ws_ref: ref}}
 
-            {:error, reason} ->
-              send(parent, {:ws_error, reason})
-          end
-        end)
-
-      {:ok, %{ws_pid: nil, ws_ref: nil}}
-    else
-      {:error, :websocket_unavailable}
+      {:error, reason} ->
+        {:error, reason}
     end
-
-    # For now, use a simple WebSocket approach via Mint
-    # The actual WebSocket implementation will use Mint.WebSocket
-  rescue
-    _ -> {:error, :websocket_unavailable}
   end
 
   defp send_ws(nil, _payload), do: :ok
 
   defp send_ws(ws_pid, payload) do
-    send(ws_pid, {:send, Jason.encode!(payload)})
+    WSClient.send_json(ws_pid, payload)
   rescue
     _ -> :ok
   end
@@ -411,5 +497,43 @@ defmodule Nex.Agent.Channel.Discord do
 
   defp allowed?(channel_id, allow_from) do
     to_string(channel_id) in allow_from
+  end
+
+  defp default_http_post(url, body, headers) do
+    case Req.post(url, json: body, headers: headers, retry: false) do
+      {:ok, %{status: status, body: response}} when status in 200..299 and is_map(response) ->
+        {:ok, response}
+
+      {:ok, %{status: 429, body: body}} ->
+        retry_after = get_in(body, ["retry_after"]) || get_in(body, [:retry_after]) || 1
+        Logger.warning("[Discord] Rate limited, retry after #{retry_after}s")
+        Process.sleep(trunc(retry_after * 1000))
+        default_http_post(url, body, headers)
+
+      {:ok, %{status: status, body: response}} ->
+        {:error, {:http_error, status, response}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp default_http_patch(url, body, headers) do
+    case Req.patch(url, json: body, headers: headers, retry: false) do
+      {:ok, %{status: status, body: response}} when status in 200..299 and is_map(response) ->
+        {:ok, response}
+
+      {:ok, %{status: 429, body: body}} ->
+        retry_after = get_in(body, ["retry_after"]) || get_in(body, [:retry_after]) || 1
+        Logger.warning("[Discord] Rate limited, retry after #{retry_after}s")
+        Process.sleep(trunc(retry_after * 1000))
+        default_http_patch(url, body, headers)
+
+      {:ok, %{status: status, body: response}} ->
+        {:error, {:http_error, status, response}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 end

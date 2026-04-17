@@ -379,7 +379,7 @@ defmodule Nex.Agent.Gateway do
       {:ok, agent} ->
         case Nex.Agent.prompt(agent, message) do
           {:ok, response, _agent} ->
-            {:ok, response}
+            {:ok, render_prompt_result(response)}
 
           {:error, reason, _agent} ->
             {:error, reason}
@@ -406,4 +406,7 @@ defmodule Nex.Agent.Gateway do
 
   defp maybe_put(opts, _key, nil), do: opts
   defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
+
+  defp render_prompt_result(%Nex.Agent.Stream.Result{} = result), do: to_string(result)
+  defp render_prompt_result(result), do: result
 end

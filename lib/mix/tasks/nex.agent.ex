@@ -581,7 +581,7 @@ defmodule Mix.Tasks.Nex.Agent do
       )
 
     {:ok, result, _} = Nex.Agent.prompt(agent, opts[:message], workspace: target.workspace)
-    Mix.shell().info(result)
+    Mix.shell().info(render_prompt_result(result))
   end
 
   defp run_interactive(target) do
@@ -622,7 +622,7 @@ defmodule Mix.Tasks.Nex.Agent do
         else
           if input != "" do
             {:ok, result, _} = Nex.Agent.prompt(agent, input, workspace: workspace)
-            Mix.shell().info(result)
+            Mix.shell().info(render_prompt_result(result))
           end
 
           loop(agent, workspace)
@@ -635,6 +635,9 @@ defmodule Mix.Tasks.Nex.Agent do
     :ok = Onboarding.ensure_initialized()
     :ok = Onboarding.ensure_workspace_initialized(target.workspace)
   end
+
+  defp render_prompt_result(%Nex.Agent.Stream.Result{} = result), do: to_string(result)
+  defp render_prompt_result(result), do: result
 
   defp with_cli_targeting(opts, fun) do
     target = resolve_target(opts, true)
