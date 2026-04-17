@@ -10,6 +10,10 @@ defmodule Nex.Agent.Runtime.Snapshot do
           config: Config.t(),
           workspace: String.t(),
           channels: %{optional(String.t()) => map()},
+          commands: %{
+            definitions: [map()],
+            hash: String.t()
+          },
           prompt: %{
             system_prompt: String.t(),
             diagnostics: [map()],
@@ -32,6 +36,10 @@ defmodule Nex.Agent.Runtime.Snapshot do
             config: nil,
             workspace: nil,
             channels: %{},
+            commands: %{
+              definitions: [],
+              hash: ""
+            },
             prompt: %{
               system_prompt: "",
               diagnostics: [],

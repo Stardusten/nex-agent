@@ -102,6 +102,7 @@ defmodule Nex.Agent.InboundWorkerTest do
     })
 
     Bus.subscribe(:feishu_outbound)
+    Bus.subscribe(:discord_outbound)
 
     on_exit(fn ->
       Application.delete_env(:nex_agent, :workspace_path)
@@ -109,6 +110,95 @@ defmodule Nex.Agent.InboundWorkerTest do
     end)
 
     {:ok, workspace: workspace, worker_name: worker_name}
+  end
+
+  test "slash commands listing is handled without calling the llm", %{worker_name: worker_name} do
+    send(Process.whereis(worker_name), {
+      :bus_message,
+      :inbound,
+      %Envelope{
+        channel: "feishu",
+        chat_id: "chat-commands",
+        sender_id: "tester",
+        text: "/commands",
+        message_type: :text,
+        raw: %{},
+        metadata: %{},
+        media_refs: [],
+        attachments: []
+      }
+    })
+
+    payloads = collect_feishu_payloads([])
+    [payload] = Enum.filter(payloads, &is_binary(&1.content))
+
+    assert payload.content =~ "Available slash commands:"
+    assert payload.content =~ "/new - reset the current chat session"
+    assert payload.content =~ "/stop - stop the current task and clear queued messages"
+    assert payload.content =~ "/commands - list supported slash commands for this chat"
+    refute_received :llm_finished
+  end
+
+  test "unknown slash-prefixed text still goes through the llm path", %{workspace: workspace} do
+    parent = self()
+    worker_name = String.to_atom("inbound_worker_unknown_slash_#{System.unique_integer([:positive])}")
+
+    prompt_fun = fn agent, prompt, _opts ->
+      send(parent, {:prompt_received, prompt})
+      {:ok, "done", %{agent | workspace: workspace}}
+    end
+
+    start_supervised!({InboundWorker, name: worker_name, agent_prompt_fun: prompt_fun})
+
+    send(Process.whereis(worker_name), {
+      :bus_message,
+      :inbound,
+      %Envelope{
+        channel: "feishu",
+        chat_id: "chat-unknown-slash",
+        sender_id: "tester",
+        text: "/code keep this literal",
+        message_type: :text,
+        raw: %{},
+        metadata: %{},
+        media_refs: [],
+        attachments: []
+      }
+    })
+
+    assert_receive {:prompt_received, "/code keep this literal"}, 1_000
+  end
+
+  test "built-in slash new command bypasses llm execution", %{workspace: workspace} do
+    parent = self()
+    worker_name = String.to_atom("inbound_worker_new_command_#{System.unique_integer([:positive])}")
+
+    prompt_fun = fn _agent, _prompt, _opts ->
+      send(parent, :prompt_called)
+      raise "slash command should not call llm"
+    end
+
+    start_supervised!({InboundWorker, name: worker_name, agent_prompt_fun: prompt_fun})
+
+    send(Process.whereis(worker_name), {
+      :bus_message,
+      :inbound,
+      %Envelope{
+        channel: "feishu",
+        chat_id: "chat-new",
+        sender_id: "tester",
+        text: "/new",
+        message_type: :text,
+        raw: %{},
+        metadata: %{"workspace" => workspace},
+        media_refs: [],
+        attachments: []
+      }
+    })
+
+    assert_receive {:bus_message, :feishu_outbound, payload}, 1_000
+    assert payload.content == "New session started."
+    refute_received :prompt_called
   end
 
   test "feishu outbound only sends final user reply, not progress chatter", %{

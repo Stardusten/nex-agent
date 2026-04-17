@@ -8,7 +8,8 @@ defmodule Nex.Agent.InboundWorker do
   use GenServer
   require Logger
 
-  alias Nex.Agent.{Bus, Config, MemoryUpdater, Outbound, Runtime, Workspace}
+  alias Nex.Agent.{Bus, Command, Config, MemoryUpdater, Outbound, Runtime, Workspace}
+  alias Nex.Agent.Command.Invocation
   alias Nex.Agent.Channel.Discord
   alias Nex.Agent.Channel.Discord.StreamConverter, as: DiscordStreamConverter
   alias Nex.Agent.Channel.Discord.StreamState, as: DiscordStreamState
@@ -348,58 +349,102 @@ defmodule Nex.Agent.InboundWorker do
       "InboundWorker received channel=#{channel} chat_id=#{chat_id} workspace=#{workspace} cmd=#{inspect(cmd)}"
     )
 
-    cond do
-      cmd == "" ->
-        state
-
-      cmd == "/new" ->
-        state = cancel_active_task(state, key)
-        publish_outbound(envelope, "New session started.")
-
-        %{
-          state
-          | agents: Map.delete(state.agents, key),
-            pending_queue: Map.delete(state.pending_queue, key)
-        }
-
-      cmd == "/stop" ->
-        {count, state} = stop_session(state, key, session_key, workspace)
-        dropped = :queue.len(Map.get(state.pending_queue, key, :queue.new()))
-        state = %{state | pending_queue: Map.delete(state.pending_queue, key)}
-
-        publish_outbound(
-          envelope,
-          "Stopped #{count} task(s)#{if dropped > 0, do: ", dropped #{dropped} queued message(s)", else: ""}."
-        )
-
-        state
-
+    with false <- cmd == "",
+         {:command, %Invocation{} = invocation, definition} when is_map(definition) <-
+           resolve_command(envelope, workspace) do
+      dispatch_command(state, key, session_key, workspace, envelope, invocation, definition)
+    else
       true ->
-        if Map.has_key?(state.active_tasks, key) do
-          # Session already has an active task — queue this message
-          queue = Map.get(state.pending_queue, key, :queue.new())
-          queued = {session_key, workspace, content, envelope}
-          queue = :queue.in(queued, queue)
-          queue_len = :queue.len(queue)
+        state
 
-          Logger.info(
-            "[InboundWorker] Queued message for busy session #{inspect(key)} (queue=#{queue_len})"
-          )
+      :no_match ->
+        maybe_dispatch_prompt(state, key, session_key, workspace, content, envelope)
 
-          # Keep max 5 pending messages per session to prevent unbounded growth
-          queue =
-            if queue_len > 5 do
-              {_, trimmed} = :queue.out(queue)
-              Logger.warning("[InboundWorker] Dropped oldest queued message for #{inspect(key)}")
-              trimmed
-            else
-              queue
-            end
+      {:command, _invocation, nil} ->
+        maybe_dispatch_prompt(state, key, session_key, workspace, content, envelope)
+    end
+  end
 
-          %{state | pending_queue: Map.put(state.pending_queue, key, queue)}
+  defp resolve_command(%Envelope{} = envelope, workspace) do
+    Command.resolve(envelope, runtime_command_definitions(workspace))
+  end
+
+  defp dispatch_command(
+         state,
+         key,
+         session_key,
+         workspace,
+         %Envelope{} = envelope,
+         %Invocation{} = invocation,
+         definition
+       ) do
+    bypass_busy? = Map.get(definition, "bypass_busy?", false) == true
+
+    if Map.has_key?(state.active_tasks, key) and not bypass_busy? do
+      maybe_dispatch_prompt(state, key, session_key, workspace, invocation.raw, envelope)
+    else
+      case Map.get(definition, "handler") do
+        "new" -> handle_new_command(state, key, envelope)
+        "stop" -> handle_stop_command(state, key, session_key, workspace, envelope)
+        "commands" -> handle_commands_command(state, envelope)
+        _ -> maybe_dispatch_prompt(state, key, session_key, workspace, invocation.raw, envelope)
+      end
+    end
+  end
+
+  defp handle_new_command(state, key, %Envelope{} = envelope) do
+    state = cancel_active_task(state, key)
+    publish_outbound(envelope, "New session started.")
+
+    %{
+      state
+      | agents: Map.delete(state.agents, key),
+        pending_queue: Map.delete(state.pending_queue, key)
+    }
+  end
+
+  defp handle_stop_command(state, key, session_key, workspace, %Envelope{} = envelope) do
+    {count, state} = stop_session(state, key, session_key, workspace)
+    dropped = :queue.len(Map.get(state.pending_queue, key, :queue.new()))
+    state = %{state | pending_queue: Map.delete(state.pending_queue, key)}
+
+    publish_outbound(
+      envelope,
+      "Stopped #{count} task(s)#{if dropped > 0, do: ", dropped #{dropped} queued message(s)", else: ""}."
+    )
+
+    state
+  end
+
+  defp handle_commands_command(state, %Envelope{} = envelope) do
+    commands = commands_for_channel(envelope.channel, payload_workspace(envelope))
+    publish_outbound(envelope, render_commands_help(commands))
+    state
+  end
+
+  defp maybe_dispatch_prompt(state, key, session_key, workspace, content, envelope) do
+    if Map.has_key?(state.active_tasks, key) do
+      queue = Map.get(state.pending_queue, key, :queue.new())
+      queued = {session_key, workspace, content, envelope}
+      queue = :queue.in(queued, queue)
+      queue_len = :queue.len(queue)
+
+      Logger.info(
+        "[InboundWorker] Queued message for busy session #{inspect(key)} (queue=#{queue_len})"
+      )
+
+      queue =
+        if queue_len > 5 do
+          {_, trimmed} = :queue.out(queue)
+          Logger.warning("[InboundWorker] Dropped oldest queued message for #{inspect(key)}")
+          trimmed
         else
-          dispatch_async(state, key, session_key, workspace, content, envelope)
+          queue
         end
+
+      %{state | pending_queue: Map.put(state.pending_queue, key, queue)}
+    else
+      dispatch_async(state, key, session_key, workspace, content, envelope)
     end
   end
 
@@ -753,6 +798,40 @@ defmodule Nex.Agent.InboundWorker do
       _ ->
         nil
     end
+  end
+
+  defp commands_for_channel(channel, workspace) do
+    workspace
+    |> runtime_command_definitions()
+    |> Enum.filter(fn definition ->
+      channels = Map.get(definition, "channels", [])
+      channels == [] or to_string(channel) in channels
+    end)
+  end
+
+  defp runtime_command_definitions(workspace) do
+    case runtime_snapshot_for_workspace(workspace) do
+      %Snapshot{commands: %{definitions: definitions}} when is_list(definitions) and definitions != [] ->
+        definitions
+
+      _ ->
+        Nex.Agent.Command.Catalog.runtime_definitions()
+    end
+  end
+
+  defp render_commands_help([]), do: "No slash commands are available in this chat."
+
+  defp render_commands_help(definitions) do
+    body =
+      definitions
+      |> Enum.map(fn definition ->
+        usage = Map.get(definition, "usage", "/#{Map.get(definition, "name", "unknown")}")
+        description = Map.get(definition, "description", "")
+        "#{usage} - #{description}"
+      end)
+      |> Enum.join("\n")
+
+    "Available slash commands:\n" <> body
   end
 
   defp stale_agent?(%Nex.Agent{} = agent) do

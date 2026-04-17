@@ -7,6 +7,7 @@ defmodule Nex.Agent.Runtime do
   require Logger
 
   alias Nex.Agent.{Config, ContextBuilder, Skills, Workspace}
+  alias Nex.Agent.Command.Catalog, as: CommandCatalog
   alias Nex.Agent.Runtime.Snapshot
   alias Nex.Agent.Tool.Registry, as: ToolRegistry
 
@@ -135,6 +136,7 @@ defmodule Nex.Agent.Runtime do
   defp build_snapshot(%__MODULE__{} = state, opts, version) do
     with {:ok, workspace} <- resolve_workspace(opts),
          {:ok, config} <- call_builder(config_loader(opts, state), [opts]),
+         {:ok, command_definitions} <- call_builder(command_builder(opts), []),
          {:ok, prompt, diagnostics} <-
            call_prompt_builder(prompt_builder(opts, state), [
              Keyword.put(opts, :workspace, workspace)
@@ -149,6 +151,11 @@ defmodule Nex.Agent.Runtime do
         system_prompt: prompt,
         diagnostics: diagnostics,
         hash: hash({prompt, diagnostics})
+      }
+
+      commands_data = %{
+        definitions: command_definitions,
+        hash: hash(command_definitions)
       }
 
       tools_data = %{
@@ -169,6 +176,7 @@ defmodule Nex.Agent.Runtime do
          config: config,
          workspace: workspace,
          channels: Config.channels_runtime(config),
+         commands: commands_data,
          prompt: prompt_data,
          tools: tools_data,
          skills: skills_data,
@@ -223,6 +231,7 @@ defmodule Nex.Agent.Runtime do
     do: Keyword.get(opts, :tool_definitions_builder, state.tool_definitions_builder)
 
   defp skills_builder(opts, state), do: Keyword.get(opts, :skills_builder, state.skills_builder)
+  defp command_builder(opts), do: Keyword.get(opts, :command_builder, &CommandCatalog.runtime_definitions/0)
 
   defp changed_paths(opts) do
     opts

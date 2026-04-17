@@ -4,6 +4,7 @@ defmodule Nex.Agent.Inbound.Envelope do
   """
 
   alias Nex.Agent.Media.{Attachment, Ref}
+  alias Nex.Agent.Command.Invocation
 
   @type message_type :: :text | :image | :audio | :video | :file
 
@@ -15,6 +16,7 @@ defmodule Nex.Agent.Inbound.Envelope do
     :user_id,
     :message_id,
     :text,
+    :command,
     :message_type,
     :raw,
     :metadata,
@@ -29,6 +31,7 @@ defmodule Nex.Agent.Inbound.Envelope do
           user_id: String.t() | nil,
           message_id: String.t() | nil,
           text: String.t(),
+          command: Invocation.t() | nil,
           message_type: message_type(),
           raw: map(),
           metadata: map(),

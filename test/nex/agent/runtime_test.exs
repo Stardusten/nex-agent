@@ -54,6 +54,10 @@ defmodule Nex.Agent.RuntimeTest do
     assert snapshot.prompt.system_prompt =~ "Runtime AGENTS layer."
     assert is_list(snapshot.prompt.diagnostics)
     assert is_binary(snapshot.prompt.hash)
+    assert snapshot.commands.definitions != []
+    assert Enum.any?(snapshot.commands.definitions, &(&1["name"] == "new"))
+    assert Enum.any?(snapshot.commands.definitions, &(&1["name"] == "commands"))
+    assert is_binary(snapshot.commands.hash)
     assert snapshot.tools.definitions_all != []
     assert snapshot.tools.definitions_subagent != []
     assert snapshot.tools.definitions_cron != []

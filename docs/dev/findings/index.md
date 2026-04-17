@@ -9,3 +9,4 @@
 - [2026-04-16 Streaming Phase4 Polish](./2026-04-16-streaming-phase4-polish.md)
 - [2026-04-17 Feishu Post, Interactive, And CardKit Rendering](./2026-04-17-feishu-post-interactive-cardkit-rendering.md)
 - [2026-04-17 Feishu Streaming Converter Boundary](./2026-04-17-feishu-streaming-converter-boundary.md)
+- [2026-04-17 Cross-Platform Slash Command Foundation](./2026-04-17-cross-platform-slash-command-foundation.md)
