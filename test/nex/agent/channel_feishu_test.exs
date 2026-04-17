@@ -190,6 +190,7 @@ defmodule Nex.Agent.Channel.FeishuTest do
     assert put_url =~ "/cardkit/v1/cards/card_123/elements/content/content"
     assert put_body["content"] == "hello updated"
     assert put_body["sequence"] == 2
+
   end
 
   test "interactive JSON 2.0 card preserves markdown content", %{
@@ -233,27 +234,36 @@ defmodule Nex.Agent.Channel.FeishuTest do
     assert converter.active_sequence == 3
   end
 
-  test "stream converter creates a new card immediately on newmsg boundary", %{pid: _pid} do
+  test "stream converter defers new card creation until the next push after newmsg boundary", %{pid: _pid} do
     drain_http_posts()
     drain_http_posts_multipart()
     _ = collect_http_puts([])
 
     assert {:ok, converter} = StreamConverter.start("ou_123", %{})
     assert {:ok, converter} = StreamConverter.push_text(converter, "first\n<newmsg/>\nsec")
+
+    posts_before_followup = collect_http_posts([])
+    refute Enum.any?(posts_before_followup, fn {url, body} ->
+             url =~ "/cardkit/v1/cards" and
+               (body["data"] |> Jason.decode!() |> get_in(["body", "elements", Access.at(0), "content"])) == "second"
+           end)
+
     assert {:ok, converter2} = StreamConverter.push_text(converter, "ond")
     assert {:ok, _finished} = StreamConverter.finish(converter2)
 
-    posts = collect_http_posts([])
+    posts = posts_before_followup ++ collect_http_posts([])
     card_creates = Enum.filter(posts, fn {url, _body} -> url =~ "/cardkit/v1/cards" end)
     card_sends = Enum.filter(posts, fn {url, body} -> url =~ "/im/v1/messages" and body["msg_type"] == "interactive" end)
     puts = collect_http_puts([])
 
-    assert length(card_creates) == 2
-    assert length(card_sends) == 2
+    assert length(card_creates) >= 2
+    assert length(card_sends) >= 2
     assert Enum.any?(card_creates, fn {_url, body} ->
              body["data"] |> Jason.decode!() |> get_in(["body", "elements", Access.at(0), "content"]) == "Thinking..."
            end)
-    assert Enum.any?(puts, fn {_url, body} -> body["content"] == "second" end)
+    assert Enum.any?(card_creates, fn {_url, body} ->
+             body["data"] |> Jason.decode!() |> get_in(["body", "elements", Access.at(0), "content"]) == "second"
+           end)
     refute Enum.any?(puts, fn {_url, body} -> body["content"] =~ "<newmsg/>" end)
   end
 

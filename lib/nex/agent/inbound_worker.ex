@@ -431,12 +431,31 @@ defmodule Nex.Agent.InboundWorker do
     cond do
       channel == "feishu" and streaming? ->
         if Process.whereis(Feishu) do
+          trace_id = "feishu-stream-#{System.unique_integer([:positive])}"
+          started_at_ms = System.monotonic_time(:millisecond)
+          metadata =
+            metadata
+            |> Map.put("_feishu_stream_trace_id", trace_id)
+            |> Map.put("_feishu_stream_started_at_ms", started_at_ms)
+
           {:ok, converter} = StreamConverter.start(chat_id, metadata)
+
+          feishu_stream_trace(
+            trace_id,
+            started_at_ms,
+            "stream_started chat_id=#{chat_id} key=#{inspect(key)}"
+          )
+
           send(
             parent,
             {:stream_state_started,
              key,
-             {:feishu, %FeishuStreamState{converter: converter}}}
+             {:feishu,
+              %FeishuStreamState{
+                converter: converter,
+                trace_id: trace_id,
+                started_at_ms: started_at_ms
+              }}}
           )
 
           fn
@@ -934,7 +953,14 @@ defmodule Nex.Agent.InboundWorker do
   defp streaming_error_message(reason), do: format_reason(reason)
 
   defp schedule_feishu_flush(%FeishuStreamState{flush_timer_ref: nil} = stream_state, key) do
-    %{stream_state | flush_timer_ref: Process.send_after(self(), {:flush_feishu_stream, key}, @feishu_stream_flush_ms)}
+    ref = Process.send_after(self(), {:flush_feishu_stream, key}, @feishu_stream_flush_ms)
+
+    feishu_stream_trace(
+      stream_state,
+      "schedule_flush delay_ms=#{@feishu_stream_flush_ms} pending_bytes=#{byte_size(stream_state.pending_text)}"
+    )
+
+    %{stream_state | flush_timer_ref: ref}
   end
 
   defp schedule_feishu_flush(stream_state, _key), do: stream_state
@@ -943,21 +969,34 @@ defmodule Nex.Agent.InboundWorker do
 
   defp cancel_feishu_flush(%FeishuStreamState{flush_timer_ref: ref} = stream_state) do
     Process.cancel_timer(ref)
+    feishu_stream_trace(stream_state, "cancel_flush pending_bytes=#{byte_size(stream_state.pending_text)}")
     %{stream_state | flush_timer_ref: nil}
   end
 
   defp flush_feishu_stream(%FeishuStreamState{pending_text: ""} = stream_state) do
+    feishu_stream_trace(stream_state, "flush_skip pending_empty=true")
     {:ok, %{stream_state | flush_timer_ref: nil}}
   end
 
   defp flush_feishu_stream(
          %FeishuStreamState{converter: converter, pending_text: pending_text} = stream_state
        ) do
+    feishu_stream_trace(
+      stream_state,
+      "flush_start pending_bytes=#{byte_size(pending_text)} preview=#{inspect(String.slice(pending_text, 0, 120))}"
+    )
+
     case StreamConverter.push_text(converter, pending_text) do
       {:ok, updated_converter} ->
+        feishu_stream_trace(
+          stream_state,
+          "flush_done active_card_id=#{inspect(updated_converter.active_card_id)} active_len=#{byte_size(updated_converter.active_text)}"
+        )
+
         {:ok, %{stream_state | converter: updated_converter, pending_text: "", flush_timer_ref: nil}}
 
       {:error, reason} ->
+        feishu_stream_trace(stream_state, "flush_error reason=#{inspect(reason)}")
         {:error, reason}
     end
   end
@@ -972,19 +1011,44 @@ defmodule Nex.Agent.InboundWorker do
       %{stream_state | pending_text: pending_text <> chunk}
       |> schedule_feishu_flush(key)
 
+    feishu_stream_trace(
+      updated,
+      "chunk bytes=#{byte_size(chunk)} pending_bytes=#{byte_size(updated.pending_text)} preview=#{inspect(String.slice(chunk, 0, 80))}"
+    )
+
     {:ok, updated}
   end
 
   defp apply_feishu_stream_event(stream_state, _key, :finish) do
+    feishu_stream_trace(stream_state, "finish_event pending_bytes=#{byte_size(stream_state.pending_text)}")
     flush_feishu_stream(cancel_feishu_flush(stream_state))
   end
 
   defp apply_feishu_stream_event(stream_state, _key, {:error, message}) do
+    feishu_stream_trace(
+      stream_state,
+      "error_event pending_bytes=#{byte_size(stream_state.pending_text)} message=#{inspect(message)}"
+    )
+
     with {:ok, %FeishuStreamState{converter: converter} = stream_state} <-
            flush_feishu_stream(cancel_feishu_flush(stream_state)),
          {:ok, updated_converter} <- StreamConverter.fail(converter, message) do
       {:ok, %{stream_state | converter: updated_converter}}
     end
+  end
+
+  defp feishu_stream_trace(%FeishuStreamState{} = stream_state, message) do
+    feishu_stream_trace(stream_state.trace_id, stream_state.started_at_ms, message)
+  end
+
+  defp feishu_stream_trace(trace_id, started_at_ms, message) do
+    elapsed_ms =
+      case started_at_ms do
+        value when is_integer(value) -> System.monotonic_time(:millisecond) - value
+        _ -> 0
+      end
+
+    Logger.info("[FeishuStream][#{trace_id}][+#{elapsed_ms}ms] #{message}")
   end
 
   defp discord_stream_state(chat_id, metadata) do

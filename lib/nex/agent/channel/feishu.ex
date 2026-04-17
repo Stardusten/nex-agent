@@ -151,6 +151,11 @@ defmodule Nex.Agent.Channel.Feishu do
   @spec open_stream_card(String.t(), String.t(), map()) ::
           {:ok, %{message_id: String.t(), card_id: String.t()}} | {:error, term()}
   def open_stream_card(chat_id, content, metadata \\ %{}) do
+    feishu_stream_trace(
+      metadata,
+      "api_open_stream_card chat_id=#{chat_id} content_len=#{byte_size(content)} preview=#{inspect(String.slice(content, 0, 80))}"
+    )
+
     if Process.whereis(__MODULE__) do
       GenServer.call(__MODULE__, {:open_stream_card, chat_id, content, metadata}, 15_000)
     else
@@ -161,11 +166,32 @@ defmodule Nex.Agent.Channel.Feishu do
   @doc "Update an existing CardKit card content element."
   @spec update_card(String.t(), String.t(), pos_integer()) :: :ok | {:error, term()}
   def update_card(card_id, content, sequence) do
+    Logger.info(
+      "[FeishuStream][card=#{card_id}] api_update_card sequence=#{sequence} content_len=#{byte_size(content)} preview=#{inspect(String.slice(content, 0, 80))}"
+    )
+
     if Process.whereis(__MODULE__) do
       GenServer.call(__MODULE__, {:update_card, card_id, content, sequence}, 15_000)
     else
       {:error, :feishu_not_running}
     end
+  end
+
+  defp feishu_stream_trace(metadata, message) when is_map(metadata) do
+    trace_id = Map.get(metadata, "_feishu_stream_trace_id")
+    started_at_ms = Map.get(metadata, "_feishu_stream_started_at_ms")
+
+    elapsed_ms =
+      case started_at_ms do
+        value when is_integer(value) -> System.monotonic_time(:millisecond) - value
+        _ -> 0
+      end
+
+    Logger.info("[FeishuStream][#{trace_id}][+#{elapsed_ms}ms] #{message}")
+  end
+
+  defp feishu_stream_trace(_metadata, message) do
+    Logger.info("[FeishuStream][no-trace] #{message}")
   end
 
   @spec ingest_event(map()) :: :ok | {:ok, map()} | {:error, term()}

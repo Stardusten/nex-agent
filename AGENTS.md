@@ -37,6 +37,17 @@ This repository is developed directly on `main`.
 - If the user asks to commit or push without naming a branch, do that work on `main`.
 - Treat an unprompted branch switch in this repo as a mistake to avoid repeating.
 
+## Gateway Restart
+
+When the user asks to restart the gateway quickly:
+
+1. Kill the existing gateway process first if one exists. Do not waste time with extra status checks once the target process is known.
+2. Wait a few seconds after the kill so sockets and channel connections can drop cleanly.
+3. Start the new gateway in a background terminal / PTY session, not with `nohup`.
+4. Mirror startup output into a log file that is easy to inspect from the workspace, for example `/tmp/nex-agent-gateway.log`.
+5. If startup needs access to `~/.nex/agent` or other out-of-sandbox paths, escalate immediately instead of retrying multiple sandboxed variants.
+6. For this repo, prefer the direct command `mise exec -- mix nex.agent gateway` for the restarted process.
+
 ## Known Test Baseline
 
 - On 2026-04-16, the memory/consolidation failures below were reproduced on phase1-before baseline `cb06f0fbe14901d68b27187c288cf19f5b40f2e5` (`2311c99^`) after stashing phase3 work.
