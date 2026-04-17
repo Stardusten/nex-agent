@@ -389,6 +389,7 @@ defmodule Nex.Agent.Runner do
 
     if Keyword.get(opts, :_suppress_current_reply_stream, false) do
       tool_call_dicts = normalize_tool_calls(tool_calls)
+      emit_stream_tool_call_notice(opts, tool_call_dicts)
 
       messages =
         ContextBuilder.add_assistant_message(
@@ -460,6 +461,8 @@ defmodule Nex.Agent.Runner do
           else
             opts
           end
+
+        emit_stream_tool_call_notice(opts, tool_call_dicts)
 
         messages =
           ContextBuilder.add_assistant_message(
@@ -579,6 +582,77 @@ defmodule Nex.Agent.Runner do
       }
     end)
   end
+
+  defp emit_stream_tool_call_notice(opts, tool_calls) when is_list(tool_calls) and tool_calls != [] do
+    case Keyword.get(opts, :stream_sink) do
+      sink when is_function(sink, 1) ->
+        notice = render_tool_call_notice(tool_calls)
+
+        if notice != "" do
+          _ = sink.({:text, notice})
+        end
+
+        :ok
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp emit_stream_tool_call_notice(_opts, _tool_calls), do: :ok
+
+  defp render_tool_call_notice(tool_calls) do
+    tool_calls
+    |> Enum.map(&render_tool_call_notice_line/1)
+    |> Enum.reject(&(&1 == ""))
+    |> case do
+      [] -> ""
+      lines -> Enum.join(lines, "\n") <> "\n\n"
+    end
+  end
+
+  defp render_tool_call_notice_line(tool_call) when is_map(tool_call) do
+    tool_name = get_in(tool_call, ["function", "name"]) || "unknown_tool"
+
+    args =
+      tool_call
+      |> get_in(["function", "arguments"])
+      |> parse_args()
+      |> then(&summarize_args(tool_name, &1))
+
+    case render_tool_call_notice_args(tool_name, args) do
+      "" -> "[tool] #{tool_name}"
+      rendered_args -> "[tool] #{tool_name} - #{rendered_args}"
+    end
+  end
+
+  defp render_tool_call_notice_line(_tool_call), do: ""
+
+  defp render_tool_call_notice_args("bash", %{"command" => cmd}) when is_binary(cmd) do
+    cmd
+    |> String.replace("\n", " ")
+    |> String.trim()
+    |> String.slice(0, 120)
+  end
+
+  defp render_tool_call_notice_args(_tool_name, args) when is_map(args) do
+    args
+    |> Enum.sort_by(fn {k, _v} -> to_string(k) end)
+    |> Enum.map(fn {k, v} -> "#{k}=#{render_tool_call_notice_value(v)}" end)
+    |> Enum.join(", ")
+    |> String.slice(0, 120)
+  end
+
+  defp render_tool_call_notice_args(_tool_name, _args), do: ""
+
+  defp render_tool_call_notice_value(value) when is_binary(value) do
+    value
+    |> String.replace("\n", " ")
+    |> String.trim()
+    |> String.slice(0, 80)
+  end
+
+  defp render_tool_call_notice_value(value), do: inspect(value, printable_limit: 80, limit: 5)
 
   defp maybe_stream_text(opts, text) when is_binary(text) and text != "" do
     case Keyword.get(opts, :stream_sink) do
