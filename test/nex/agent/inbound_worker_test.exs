@@ -48,7 +48,6 @@ defmodule Nex.Agent.InboundWorkerTest do
     config = %Nex.Agent.Config{
       Nex.Agent.Config.default()
       | feishu: %{"enabled" => true, "streaming" => true},
-        telegram: %{"enabled" => true, "streaming" => true},
         discord: %{"enabled" => true, "streaming" => true}
     }
 
@@ -103,7 +102,6 @@ defmodule Nex.Agent.InboundWorkerTest do
     })
 
     Bus.subscribe(:feishu_outbound)
-    Bus.subscribe(:telegram_outbound)
 
     on_exit(fn ->
       Application.delete_env(:nex_agent, :workspace_path)
@@ -674,56 +672,10 @@ defmodule Nex.Agent.InboundWorkerTest do
     _posts = collect_http_posts([])
     puts = collect_http_puts([])
 
-    assert length(puts) == 1
-    assert Enum.at(puts, 0) |> elem(1) |> Map.fetch!("content") == "你好，哥"
-  end
-
-  test "non-feishu channels receive unified stream sink and suppress default final outbound" do
-    parent = self()
-    worker_config = %Nex.Agent.Config{
-      Nex.Agent.Config.default()
-      | telegram: %{"enabled" => true, "streaming" => true}
-    }
-
-    worker_name =
-      String.to_atom("inbound_worker_telegram_stream_#{System.unique_integer([:positive])}")
-
-    prompt_fun = fn agent, _prompt, opts ->
-      sink = Keyword.fetch!(opts, :stream_sink)
-      run_id = "run_telegram_stream_test"
-      send(parent, {:prompt_channel, Keyword.fetch!(opts, :channel)})
-
-      sink.({:text, "hel"})
-      sink.({:text, "lo"})
-      sink.(:finish)
-
-      {:ok, Result.ok(run_id, "hello"), agent}
-    end
-
-    start_supervised!(
-      {InboundWorker, name: worker_name, config: worker_config, agent_prompt_fun: prompt_fun}
-    )
-
-    send(Process.whereis(worker_name), {
-      :bus_message,
-      :inbound,
-      %Envelope{
-        channel: "telegram",
-        chat_id: "chat-stream",
-        sender_id: "tester",
-        text: "hello",
-        message_type: :text,
-        raw: %{},
-        metadata: %{},
-        media_refs: [],
-        attachments: []
-      }
-    })
-
-    assert_receive {:prompt_channel, "telegram"}, 1_000
-
-    payloads = collect_telegram_payloads([])
-    assert Enum.map(payloads, & &1.content) == ["hello"]
+    assert length(puts) == 2
+    content_puts = Enum.filter(puts, fn {url, _body} -> url =~ "/elements/" end)
+    assert length(content_puts) == 1
+    assert Enum.at(content_puts, 0) |> elem(1) |> Map.fetch!("content") == "你好，哥"
   end
 
   test "discord stream sink edits current message and opens a new message on newmsg" do
@@ -787,17 +739,33 @@ defmodule Nex.Agent.InboundWorkerTest do
       }
     })
 
-    assert_receive {:discord_http_post, url1, %{"content" => "第一段"}, headers1}, 1_000
-    assert url1 =~ "/channels/discord-chat/messages"
-    assert {"authorization", "Bot discord-token"} in headers1
+    # Converter batches all chunks via 1s throttle, then splits by <newmsg/>.
+    # First message: "第一段", Second message: "第二段"
+    posts = collect_discord_posts([], 2_000)
 
-    assert_receive {:discord_http_post, url2, %{"content" => "第二"}, _headers2}, 1_000
-    assert url2 =~ "/channels/discord-chat/messages"
+    message_posts =
+      Enum.filter(posts, fn {url, _body, _headers} ->
+        url =~ "/channels/discord-chat/messages" and not (url =~ "/threads")
+      end)
 
-    assert_receive {:discord_http_patch, patch_url, %{"content" => "第二段"}, _headers3}, 1_000
-    assert patch_url =~ "/channels/discord-chat/messages/msg_"
+    contents = Enum.map(message_posts, fn {_url, body, _headers} -> body["content"] end)
+
+    assert "第一段" in contents or Enum.any?(contents, &String.starts_with?(&1, "第一段"))
+    assert "第二段" in contents or Enum.any?(contents, &String.contains?(&1, "第二段"))
+    assert length(message_posts) >= 2
 
     refute_receive {:bus_message, :discord_outbound, _payload}, 300
+  end
+
+  defp collect_discord_posts(acc, timeout) do
+    receive do
+      {:discord_http_post, url, body, headers} ->
+        collect_discord_posts([{url, body, headers} | acc], timeout)
+      {:discord_http_patch, url, body, headers} ->
+        collect_discord_posts([{url, body, headers} | acc], timeout)
+    after
+      timeout -> Enum.reverse(acc)
+    end
   end
 
   defp collect_feishu_payloads(acc) do
@@ -822,15 +790,6 @@ defmodule Nex.Agent.InboundWorkerTest do
     receive do
       {:http_post, url, body, _headers} ->
         collect_http_posts([{url, body} | acc])
-    after
-      300 -> Enum.reverse(acc)
-    end
-  end
-
-  defp collect_telegram_payloads(acc) do
-    receive do
-      {:bus_message, :telegram_outbound, payload} ->
-        collect_telegram_payloads([payload | acc])
     after
       300 -> Enum.reverse(acc)
     end

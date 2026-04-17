@@ -234,24 +234,23 @@ defmodule Nex.Agent.Channel.FeishuTest do
     assert converter.active_sequence == 3
   end
 
-  test "stream converter defers new card creation until the next push after newmsg boundary", %{pid: _pid} do
+  test "stream converter creates new card immediately after newmsg boundary", %{pid: _pid} do
     drain_http_posts()
     drain_http_posts_multipart()
     _ = collect_http_puts([])
 
     assert {:ok, converter} = StreamConverter.start("ou_123", %{})
-    assert {:ok, converter} = StreamConverter.push_text(converter, "first\n<newmsg/>\nsec")
+    assert {:ok, converter} = StreamConverter.push_text(converter, "first\n\n<newmsg/>\n\nsec")
 
-    posts_before_followup = collect_http_posts([])
-    refute Enum.any?(posts_before_followup, fn {url, body} ->
-             url =~ "/cardkit/v1/cards" and
-               (body["data"] |> Jason.decode!() |> get_in(["body", "elements", Access.at(0), "content"])) == "second"
-           end)
+    # New card for "sec" should already be created (no deferral)
+    posts_after_push = collect_http_posts([])
+    card_creates_after_push = Enum.filter(posts_after_push, fn {url, _body} -> url =~ "/cardkit/v1/cards" end)
+    assert length(card_creates_after_push) >= 2
 
     assert {:ok, converter2} = StreamConverter.push_text(converter, "ond")
     assert {:ok, _finished} = StreamConverter.finish(converter2)
 
-    posts = posts_before_followup ++ collect_http_posts([])
+    posts = posts_after_push ++ collect_http_posts([])
     card_creates = Enum.filter(posts, fn {url, _body} -> url =~ "/cardkit/v1/cards" end)
     card_sends = Enum.filter(posts, fn {url, body} -> url =~ "/im/v1/messages" and body["msg_type"] == "interactive" end)
     puts = collect_http_puts([])
@@ -261,10 +260,7 @@ defmodule Nex.Agent.Channel.FeishuTest do
     assert Enum.any?(card_creates, fn {_url, body} ->
              body["data"] |> Jason.decode!() |> get_in(["body", "elements", Access.at(0), "content"]) == "Thinking..."
            end)
-    assert Enum.any?(card_creates, fn {_url, body} ->
-             body["data"] |> Jason.decode!() |> get_in(["body", "elements", Access.at(0), "content"]) == "second"
-           end)
-    refute Enum.any?(puts, fn {_url, body} -> body["content"] =~ "<newmsg/>" end)
+    refute Enum.any?(puts, fn {_url, body} -> is_binary(body["content"]) and body["content"] =~ "<newmsg/>" end)
   end
 
   test "synchronous local image send uploads and delivers native image message", %{pid: pid} do

@@ -73,7 +73,7 @@ defmodule Nex.Agent.Channel.DiscordTest do
     assert {"authorization", "Bot discord-token"} in headers
   end
 
-  test "outbound tables are downgraded to code blocks for Discord", %{pid: pid} do
+  test "outbound tables are passed through as-is for Discord (tables: false)", %{pid: pid} do
     table = """
     | name | score |
     | --- | --- |
@@ -83,10 +83,12 @@ defmodule Nex.Agent.Channel.DiscordTest do
     send(pid, {:bus_message, :discord_outbound, %{chat_id: "123", content: table, metadata: %{}}})
 
     assert_receive {:http_post, _url, %{"content" => content}, _headers}
-    assert content == "```text\n| name | score |\n| --- | --- |\n| alice | 10 |\n```"
+    # With tables: false, table lines are treated as paragraphs, no code block wrapping
+    assert content =~ "| name | score |"
+    refute content =~ "```text"
   end
 
-  test "mentioned inbound message is published to inbound bus", %{pid: pid} do
+  test "mentioned inbound message auto-creates thread and publishes to inbound bus", %{pid: pid} do
     ws_pid = self()
 
     :sys.replace_state(pid, fn state ->
@@ -126,11 +128,78 @@ defmodule Nex.Agent.Channel.DiscordTest do
        })}
     )
 
+    # Thread creation POST
+    assert_receive {:http_post, thread_url, _body, _headers}
+    assert thread_url =~ "/threads"
+
     assert_receive {:bus_message, :inbound, inbound}
     assert inbound.channel == "discord"
-    assert inbound.chat_id == "123"
+    # chat_id is the auto-created thread ID, not the original channel
+    refute inbound.chat_id == "123"
     assert inbound.sender_id == "user-1"
     assert inbound.text == "hello discord"
     assert inbound.metadata["message_id"] == "msg-1"
+  end
+
+  test "message inside a thread responds without @mention", %{pid: pid} do
+    ws_pid = self()
+
+    :sys.replace_state(pid, fn state ->
+      %{state | ws_pid: ws_pid}
+    end)
+
+    send(
+      pid,
+      {:discord_ws_message, ws_pid,
+       Jason.encode!(%{
+         "op" => 0,
+         "t" => "READY",
+         "s" => 1,
+         "d" => %{
+           "user" => %{"id" => "bot-1", "username" => "nex-bot"},
+           "session_id" => "session-1",
+           "resume_gateway_url" => "wss://gateway.discord.gg"
+         }
+       })}
+    )
+
+    # GUILD_CREATE caches thread-1 as a known thread (mirrors discord.py's guild._threads)
+    send(
+      pid,
+      {:discord_ws_message, ws_pid,
+       Jason.encode!(%{
+         "op" => 0,
+         "t" => "GUILD_CREATE",
+         "s" => 2,
+         "d" => %{
+           "id" => "guild-1",
+           "threads" => [%{"id" => "thread-1", "type" => 11, "guild_id" => "guild-1"}]
+         }
+       })}
+    )
+
+    # Message in the cached thread — no @mention required
+    send(
+      pid,
+      {:discord_ws_message, ws_pid,
+       Jason.encode!(%{
+         "op" => 0,
+         "t" => "MESSAGE_CREATE",
+         "s" => 3,
+         "d" => %{
+           "id" => "msg-2",
+           "channel_id" => "thread-1",
+           "guild_id" => "guild-1",
+           "content" => "follow up question",
+           "author" => %{"id" => "user-1", "username" => "alice"},
+           "mentions" => []
+         }
+       })}
+    )
+
+    assert_receive {:bus_message, :inbound, inbound}
+    assert inbound.channel == "discord"
+    assert inbound.chat_id == "thread-1"
+    assert inbound.text == "follow up question"
   end
 end

@@ -6,8 +6,15 @@ defmodule Nex.Agent.Channel.Feishu.StreamConverter do
   alias Nex.Agent.Channel.Feishu
 
   @new_message_token "<newmsg/>"
-  @code_fence "```"
   @placeholder_text "Thinking..."
+
+  # Regex that matches <newmsg/> on its own line (with optional surrounding whitespace),
+  # preceded and followed by a newline. Used to split text into card segments.
+  @newmsg_split_re ~r/\n[ \t]*<newmsg\/>[ \t]*\n/
+
+  # Maximum bytes of a partial <newmsg/> prefix that could sit at the end of a chunk.
+  # "<newmsg/>" is 9 bytes; we hold back up to 8 bytes (incomplete prefix).
+  @newmsg_holdback_bytes byte_size(@new_message_token) - 1
 
   defstruct [
     :chat_id,
@@ -16,8 +23,6 @@ defmodule Nex.Agent.Channel.Feishu.StreamConverter do
     :active_sequence,
     active_text: "",
     pending_buffer: "",
-    current_line: "",
-    in_code_block?: false,
     completed: false
   ]
 
@@ -28,8 +33,6 @@ defmodule Nex.Agent.Channel.Feishu.StreamConverter do
           active_sequence: pos_integer() | nil,
           active_text: String.t(),
           pending_buffer: String.t(),
-          current_line: String.t(),
-          in_code_block?: boolean(),
           completed: boolean()
         }
 
@@ -37,14 +40,7 @@ defmodule Nex.Agent.Channel.Feishu.StreamConverter do
   def start(chat_id, metadata) when is_binary(chat_id) and is_map(metadata) do
     state = %__MODULE__{
       chat_id: chat_id,
-      metadata: metadata,
-      active_card_id: nil,
-      active_sequence: nil,
-      active_text: "",
-      pending_buffer: "",
-      current_line: "",
-      in_code_block?: false,
-      completed: false
+      metadata: metadata
     }
 
     open_card(state, @placeholder_text)
@@ -53,26 +49,39 @@ defmodule Nex.Agent.Channel.Feishu.StreamConverter do
   @spec push_text(t(), String.t()) :: {:ok, t()} | {:error, term()}
   def push_text(%__MODULE__{} = state, text_chunk) when is_binary(text_chunk) do
     trace(state, "push_text bytes=#{byte_size(text_chunk)} preview=#{inspect(String.slice(text_chunk, 0, 80))}")
-    data = state.pending_buffer <> text_chunk
 
-    {processable, pending_buffer} = split_processable(data)
+    data = state.pending_buffer <> text_chunk
+    {processable, holdback} = split_processable(data)
 
     trace(
       state,
-      "push_text_split processable_bytes=#{byte_size(processable)} pending_buffer_bytes=#{byte_size(pending_buffer)}"
+      "push_text_split processable_bytes=#{byte_size(processable)} holdback_bytes=#{byte_size(holdback)}"
     )
 
-    with {:ok, state} <- consume(%{state | pending_buffer: ""}, processable, defer_new_message?: true) do
-      {:ok, %{state | pending_buffer: state.pending_buffer <> pending_buffer}}
+    with {:ok, state} <- consume(%{state | pending_buffer: ""}, processable) do
+      {:ok, %{state | pending_buffer: state.pending_buffer <> holdback}}
     end
   end
+
+  @empty_message_text "_(Empty Message)_"
 
   @spec finish(t()) :: {:ok, t()} | {:error, term()}
   def finish(%__MODULE__{} = state) do
     trace(state, "finish pending_buffer_bytes=#{byte_size(state.pending_buffer)}")
 
-    with {:ok, state} <-
-           consume(%{state | pending_buffer: ""}, state.pending_buffer, defer_new_message?: false) do
+    with {:ok, state} <- consume(%{state | pending_buffer: ""}, state.pending_buffer) do
+      # If still showing "Thinking..." (LLM returned no text), replace with empty message hint
+      state =
+        if state.active_text == @placeholder_text and state.active_sequence == 1 do
+          case put_active_text(state, @empty_message_text) do
+            {:ok, updated} -> updated
+            {:error, _} -> state
+          end
+        else
+          state
+        end
+
+      close_active_card(state)
       {:ok, %{state | completed: true, pending_buffer: ""}}
     end
   end
@@ -92,6 +101,7 @@ defmodule Nex.Agent.Channel.Feishu.StreamConverter do
 
       true ->
         trace(state, "fail message=#{inspect(message)}")
+
         text =
           case String.trim(state.active_text) do
             "" -> "Error: " <> message
@@ -104,171 +114,81 @@ defmodule Nex.Agent.Channel.Feishu.StreamConverter do
     end
   end
 
+  # ── consume: split by <newmsg/> and process each segment ──────────────
+
+  defp consume(state, ""), do: {:ok, state}
+
+  defp consume(state, data) do
+    case String.split(data, @newmsg_split_re, parts: 2) do
+      [single] ->
+        append_segment(state, single)
+
+      [before, after_text] ->
+        trace(
+          state,
+          "newmsg_match before_bytes=#{byte_size(before)} after_bytes=#{byte_size(after_text)}"
+        )
+
+        with {:ok, state} <- append_segment(state, String.trim_trailing(before)),
+             {:ok, state} <- rotate_card(state) do
+          consume(state, String.trim_leading(after_text, "\n"))
+        end
+    end
+  end
+
+  # ── split_processable: hold back incomplete <newmsg/> at chunk boundary ─
+
   defp split_processable(""), do: {"", ""}
 
   defp split_processable(data) do
-    suffix =
-      [@new_message_token, @code_fence]
-      |> Enum.reduce("", fn token, acc ->
-        cond do
-          String.ends_with?(data, token) ->
-            acc
+    data_len = byte_size(data)
+    # Check if data ends with an incomplete prefix of <newmsg/> or a \n that
+    # could be the start of \n<newmsg/>\n. We look at the tail region.
+    tail_start = max(data_len - @newmsg_holdback_bytes - 1, 0)
+    tail = binary_part(data, tail_start, data_len - tail_start)
 
-          true ->
-            token
-            |> token_prefixes()
-            |> Enum.sort_by(&String.length/1, :desc)
-            |> Enum.find(acc, fn prefix ->
-              String.ends_with?(data, prefix)
-            end)
-        end
-      end)
+    # If the tail contains a partial "<newmsg" prefix that hasn't completed,
+    # hold it back. We check for any proper prefix of the token that appears
+    # at the end of the tail (but not the full token — that can pass through).
+    holdback = find_incomplete_newmsg_suffix(tail)
 
-    if suffix == "" do
+    if holdback == "" do
       {data, ""}
     else
-      cut = String.length(data) - String.length(suffix)
-      {String.slice(data, 0, cut), suffix}
+      cut = data_len - byte_size(holdback)
+      {binary_part(data, 0, cut), holdback}
     end
   end
 
-  defp consume(state, "", _opts), do: {:ok, state}
+  defp find_incomplete_newmsg_suffix(tail) do
+    # We're looking for a suffix of `tail` that is a proper prefix of
+    # "\n<newmsg/>\n" (the boundary pattern including surrounding newlines).
+    # The full boundary is 11 bytes: \n<newmsg/>\n
+    # We check longest-first so we hold back as much as needed.
+    boundary = "\n" <> @new_message_token
+    max_check = min(byte_size(tail), byte_size(boundary) - 1)
 
-  defp consume(%__MODULE__{} = state, binary, opts) when is_binary(binary) do
-    do_consume(binary, state, "", opts)
-  end
+    Enum.find_value(max_check..1//-1, "", fn len ->
+      prefix = binary_part(boundary, 0, len)
 
-  defp do_consume("", state, segment, _opts), do: append_segment(state, segment)
-
-  defp do_consume(string, %__MODULE__{} = state, segment, opts) when is_binary(string) do
-    cond do
-      String.starts_with?(string, @code_fence) ->
-        rest = String.replace_prefix(string, @code_fence, "")
-
-        do_consume(
-          rest,
-          %{state | in_code_block?: not state.in_code_block?},
-          segment <> @code_fence,
-          opts
-        )
-
-      not state.in_code_block? ->
-        case consume_new_message_boundary(string, state, segment, opts) do
-          {:match, cleaned_segment, rest} ->
-            trace(
-              state,
-              "newmsg_match segment_bytes=#{byte_size(cleaned_segment)} rest_preview=#{inspect(String.slice(rest, 0, 80))}"
-            )
-
-            with {:ok, state} <- append_segment(state, cleaned_segment) do
-              maybe_defer_after_new_message(state, rest, opts)
-            end
-
-          :no_match ->
-            {grapheme, rest} = String.next_grapheme(string)
-            do_consume(rest, state, segment <> grapheme, opts)
-        end
-
-      true ->
-        {grapheme, rest} = String.next_grapheme(string)
-        do_consume(rest, state, segment <> grapheme, opts)
-    end
-  end
-
-  defp consume_new_message_boundary(string, state, segment, opts) do
-    case Regex.run(~r/\A[ \t]*<newmsg\/>[ \t]*(?:\n|$)/, string) do
-      [match] ->
-        if separator_line_start?(state, segment) do
-          rest = String.replace_prefix(string, match, "")
-          rest = String.trim_leading(rest, "\n")
-
-          trace(
-            state,
-            "newmsg_boundary defer=#{Keyword.get(opts, :defer_new_message?, false)} rest_bytes=#{byte_size(rest)}"
-          )
-
-          {:match, strip_separator_indent(segment), rest}
-        else
-          :no_match
-        end
-
-      _ ->
-        :no_match
-    end
-  end
-
-  defp separator_line_start?(state, segment) do
-    line_prefix = line_prefix_for_segment(state, segment)
-    line_prefix == nil or Regex.match?(~r/^[ \t]*$/, line_prefix)
-  end
-
-  defp line_prefix_for_segment(%__MODULE__{current_line: current_line}, "") do
-    current_line
-  end
-
-  defp line_prefix_for_segment(%__MODULE__{current_line: current_line}, segment) do
-    case String.split(segment, "\n") do
-      [single] ->
-        current_line <> single
-
-      parts ->
-        List.last(parts)
-    end
-  end
-
-  defp strip_separator_indent(segment) do
-    case String.split(segment, "\n") do
-      [_single] ->
-        String.trim_trailing(segment)
-
-      parts ->
-        {head, [last]} = Enum.split(parts, length(parts) - 1)
-        Enum.join(head ++ [String.trim_trailing(last)], "\n")
-    end
-  end
-
-  defp token_prefixes(token) do
-    max_prefix_length =
-      case token do
-        @new_message_token -> String.length(token)
-        _ -> String.length(token) - 1
+      if String.ends_with?(tail, prefix) do
+        prefix
+      else
+        nil
       end
-
-    1..max_prefix_length
-    |> Enum.map(&String.slice(token, 0, &1))
+    end)
   end
 
-  defp maybe_defer_after_new_message(%__MODULE__{} = state, "", opts) do
-    with {:ok, state} <- force_flush_active_card_animation(state) do
-      do_consume("", rotate_card(state), "", opts)
-    end
-  end
-
-  defp maybe_defer_after_new_message(%__MODULE__{} = state, rest, opts) do
-    if Keyword.get(opts, :defer_new_message?, false) do
-      trace(
-        state,
-        "newmsg_defer rest_bytes=#{byte_size(rest)} rest_preview=#{inspect(String.slice(rest, 0, 80))}"
-      )
-
-      with {:ok, state} <- force_flush_active_card_animation(state) do
-        {:ok, %{rotate_card(state) | pending_buffer: state.pending_buffer <> rest}}
-      end
-    else
-      with {:ok, state} <- force_flush_active_card_animation(state) do
-        do_consume(rest, rotate_card(state), "", opts)
-      end
-    end
-  end
+  # ── card lifecycle ──────────────────────────────────────────────────────
 
   defp append_segment(state, ""), do: {:ok, state}
 
   defp append_segment(%__MODULE__{active_card_id: nil} = state, segment) do
     segment =
-      if state.active_text == "" and String.trim(segment) == "" do
-        ""
-      else
+      if state.active_text == "" do
         String.trim_leading(segment, "\n")
+      else
+        segment
       end
 
     if segment == "" do
@@ -292,21 +212,20 @@ defmodule Nex.Agent.Channel.Feishu.StreamConverter do
       "append_segment_update add_bytes=#{byte_size(segment)} next_len=#{byte_size(next_text)}"
     )
 
-    with {:ok, state} <- put_active_text(state, next_text) do
-      {:ok, %{state | current_line: next_current_line(next_text)}}
-    end
+    put_active_text(state, next_text)
   end
 
   defp rotate_card(%__MODULE__{} = state) do
     trace(state, "rotate_card previous_card_id=#{inspect(state.active_card_id)} previous_len=#{byte_size(state.active_text)}")
-    %{
-      state
-      | active_card_id: nil,
-        active_sequence: nil,
-        active_text: "",
-        current_line: "",
-        in_code_block?: false
-    }
+    close_active_card(state)
+
+    {:ok,
+     %{
+       state
+       | active_card_id: nil,
+         active_sequence: nil,
+         active_text: ""
+     }}
   end
 
   defp open_card(%__MODULE__{} = state, content) do
@@ -315,14 +234,13 @@ defmodule Nex.Agent.Channel.Feishu.StreamConverter do
     with {:ok, %{card_id: card_id}} <-
            Feishu.open_stream_card(state.chat_id, content, state.metadata) do
       trace(state, "open_card_done card_id=#{card_id}")
+
       {:ok,
        %{
          state
          | active_card_id: card_id,
            active_sequence: 1,
-           active_text: content,
-           current_line: next_current_line(content),
-           in_code_block?: false
+           active_text: content
        }}
     end
   end
@@ -346,30 +264,22 @@ defmodule Nex.Agent.Channel.Feishu.StreamConverter do
     end
   end
 
-  defp force_flush_active_card_animation(%__MODULE__{active_card_id: nil} = state), do: {:ok, state}
+  # ── streaming mode lifecycle ────────────────────────────────────────────
 
-  defp force_flush_active_card_animation(%__MODULE__{} = state) do
-    next_sequence = max((state.active_sequence || 0) + 1, 2)
+  defp close_active_card(%__MODULE__{active_card_id: nil}), do: :ok
 
-    trace(
-      state,
-      "dummy_update_card card_id=#{inspect(state.active_card_id)} sequence=#{next_sequence} content_len=#{byte_size(state.active_text)}"
-    )
+  defp close_active_card(%__MODULE__{active_card_id: card_id} = state) do
+    trace(state, "close_streaming_mode card_id=#{inspect(card_id)}")
 
-    case Feishu.update_card(state.active_card_id, state.active_text, next_sequence) do
-      :ok ->
-        {:ok, %{state | active_sequence: next_sequence}}
-
+    case Feishu.close_streaming_mode(card_id) do
+      :ok -> :ok
       {:error, reason} ->
-        {:error, reason}
+        trace(state, "close_streaming_mode_failed card_id=#{inspect(card_id)} reason=#{inspect(reason)}")
+        :ok
     end
   end
 
-  defp next_current_line(text) when is_binary(text) do
-    text
-    |> String.split("\n")
-    |> List.last()
-  end
+  # ── trace ────────────────────────────────────────────────────────────────
 
   defp trace(%__MODULE__{metadata: metadata}, message) do
     trace_id = Map.get(metadata || %{}, "_feishu_stream_trace_id")

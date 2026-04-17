@@ -24,6 +24,9 @@ defmodule Nex.Agent.Channel.Feishu do
   @feishu_ws_endpoint "https://open.feishu.cn/callback/ws/endpoint"
   @default_send_timeout_ms 15_000
   @dedup_cache_max 1000
+  @feishu_inbound_emoji "EYES"
+  @feishu_done_emoji "THUMBSUP"
+  @feishu_error_emoji "FACEPALM"
 
   defstruct [
     :app_id,
@@ -31,7 +34,6 @@ defmodule Nex.Agent.Channel.Feishu do
     :encrypt_key,
     :verification_token,
     :allow_from,
-    :react_emoji,
     :enabled,
     :http_post_fun,
     :http_put_fun,
@@ -55,7 +57,6 @@ defmodule Nex.Agent.Channel.Feishu do
           encrypt_key: String.t() | nil,
           verification_token: String.t() | nil,
           allow_from: [String.t()],
-          react_emoji: String.t(),
           enabled: boolean(),
           http_post_fun: (String.t(), map(), keyword() -> {:ok, map()} | {:error, term()}),
           http_put_fun: (String.t(), map(), keyword() -> {:ok, map()} | {:error, term()}),
@@ -177,6 +178,18 @@ defmodule Nex.Agent.Channel.Feishu do
     end
   end
 
+  @doc "Close streaming mode on a CardKit card so the typing animation stops."
+  @spec close_streaming_mode(String.t()) :: :ok | {:error, term()}
+  def close_streaming_mode(card_id) do
+    Logger.info("[FeishuStream][card=#{card_id}] api_close_streaming_mode")
+
+    if Process.whereis(__MODULE__) do
+      GenServer.call(__MODULE__, {:close_streaming_mode, card_id}, 15_000)
+    else
+      {:error, :feishu_not_running}
+    end
+  end
+
   defp feishu_stream_trace(metadata, message) when is_map(metadata) do
     trace_id = Map.get(metadata, "_feishu_stream_trace_id")
     started_at_ms = Map.get(metadata, "_feishu_stream_started_at_ms")
@@ -192,6 +205,16 @@ defmodule Nex.Agent.Channel.Feishu do
 
   defp feishu_stream_trace(_metadata, message) do
     Logger.info("[FeishuStream][no-trace] #{message}")
+  end
+
+  @doc "Add an emoji reaction to a Feishu message. Fire-and-forget."
+  @spec add_message_reaction(String.t(), String.t()) :: :ok
+  def add_message_reaction(message_id, emoji_type) do
+    if Process.whereis(__MODULE__) do
+      GenServer.cast(__MODULE__, {:add_reaction, message_id, emoji_type})
+    end
+
+    :ok
   end
 
   @spec ingest_event(map()) :: :ok | {:ok, map()} | {:error, term()}
@@ -222,7 +245,6 @@ defmodule Nex.Agent.Channel.Feishu do
       encrypt_key: Config.feishu_encrypt_key(config),
       verification_token: Config.feishu_verification_token(config),
       allow_from: Config.feishu_allow_from(config),
-      react_emoji: Config.feishu_react_emoji(config),
       enabled: Config.feishu_enabled?(config),
       http_post_fun: Keyword.get(opts, :http_post_fun, &default_http_post/3),
       http_put_fun: Keyword.get(opts, :http_put_fun, &default_http_put/3),
@@ -242,6 +264,7 @@ defmodule Nex.Agent.Channel.Feishu do
     }
 
     Bus.subscribe(:feishu_outbound)
+    Bus.subscribe(:task_complete)
 
     state =
       if state.enabled do
@@ -394,6 +417,24 @@ defmodule Nex.Agent.Channel.Feishu do
   end
 
   @impl true
+  def handle_call({:close_streaming_mode, card_id}, _from, state) do
+    case do_close_streaming_mode(card_id, state) do
+      {:ok, new_state} ->
+        {:reply, :ok, new_state}
+
+      {:error, reason, new_state} ->
+        Logger.warning("[Feishu] CardKit close_streaming_mode failed: #{inspect(reason)}")
+        {:reply, {:error, reason}, new_state}
+    end
+  end
+
+  @impl true
+  def handle_cast({:add_reaction, message_id, emoji_type}, state) do
+    do_add_reaction(message_id, emoji_type, state)
+    {:noreply, state}
+  end
+
+  @impl true
   def handle_info({:bus_message, :feishu_outbound, payload}, state) when is_map(payload) do
     outbound = outbound_from_payload(payload)
 
@@ -406,6 +447,21 @@ defmodule Nex.Agent.Channel.Feishu do
         {:noreply, new_state}
     end
   end
+
+  @impl true
+  def handle_info({:bus_message, :task_complete, %{channel: "feishu"} = payload}, state) do
+    message_id = payload.message_id
+
+    if is_binary(message_id) and message_id != "" do
+      final_emoji = if payload.status == :ok, do: @feishu_done_emoji, else: @feishu_error_emoji
+      do_add_reaction(message_id, final_emoji, state)
+    end
+
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info({:bus_message, _topic, _payload}, state), do: {:noreply, state}
 
   @impl true
   def handle_info({:feishu_ws_event, pid, raw_frame, event_json}, %{ws_pid: pid} = state) do
@@ -499,20 +555,26 @@ defmodule Nex.Agent.Channel.Feishu do
   @impl true
   def handle_info(_msg, state), do: {:noreply, state}
 
-  defp add_reaction(_message_id, %{react_emoji: ""}), do: :ok
   defp add_reaction(_, %{enabled: false}), do: :ok
 
   defp add_reaction(message_id, state) when is_binary(message_id) and message_id != "" do
+    do_add_reaction(message_id, @feishu_inbound_emoji, state)
+  end
+
+  defp add_reaction(_, _), do: :ok
+
+  defp do_add_reaction(message_id, emoji_type, state)
+       when is_binary(message_id) and message_id != "" and is_binary(emoji_type) and emoji_type != "" do
     Task.start(fn ->
       with {:ok, token, _} <- get_tenant_access_token(state),
            {:ok, _} <-
              feishu_post(
                state,
                "/im/v1/messages/#{message_id}/reactions",
-               %{"reaction_type" => %{"emoji_type" => state.react_emoji}},
+               %{"reaction_type" => %{"emoji_type" => emoji_type}},
                [{"Authorization", "Bearer #{token}"}]
              ) do
-        Logger.debug("Added #{state.react_emoji} reaction to #{message_id}")
+        Logger.debug("Added #{emoji_type} reaction to #{message_id}")
       else
         {:error, reason} ->
           Logger.warning("Failed to add reaction: #{inspect(reason)}")
@@ -520,7 +582,7 @@ defmodule Nex.Agent.Channel.Feishu do
     end)
   end
 
-  defp add_reaction(_, _), do: :ok
+  defp do_add_reaction(_, _, _), do: :ok
 
   defp maybe_start_websocket(%{ws_pid: nil, enabled: true} = state) do
     case start_ws_connection(state) do
@@ -1591,6 +1653,30 @@ defmodule Nex.Agent.Channel.Feishu do
                  "content" => content,
                  "sequence" => sequence,
                  "uuid" => "nex_#{System.unique_integer([:positive])}"
+               },
+               [{"Authorization", "Bearer #{token}"}]
+             ) do
+        {:ok, state}
+      else
+        {:error, reason} -> {:error, reason, state}
+      end
+    end
+  end
+
+  defp do_close_streaming_mode(card_id, state) do
+    if not state.enabled or state.app_id == "" or state.app_secret == "" do
+      {:error, :not_configured, state}
+    else
+      settings = Jason.encode!(%{"config" => %{"streaming_mode" => false}})
+
+      with {:ok, token, state} <- get_tenant_access_token(state),
+           {:ok, _body} <-
+             feishu_put(
+               state,
+               "/cardkit/v1/cards/#{card_id}/settings",
+               %{
+                 "settings" => settings,
+                 "uuid" => "nex_close_#{System.unique_integer([:positive])}"
                },
                [{"Authorization", "Bearer #{token}"}]
              ) do

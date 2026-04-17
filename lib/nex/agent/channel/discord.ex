@@ -28,6 +28,9 @@ defmodule Nex.Agent.Channel.Discord do
   @gateway_url "wss://gateway.discord.gg/?v=10&encoding=json"
   @heartbeat_jitter 0.9
   @reconnect_delay_ms 5_000
+  @eyes_emoji "👀"
+  @done_emoji "✅"
+  @error_emoji "❌"
 
   defstruct [
     :token,
@@ -43,7 +46,8 @@ defmodule Nex.Agent.Channel.Discord do
     :sequence,
     :session_id,
     :resume_gateway_url,
-    :bot_user_id
+    :bot_user_id,
+    known_threads: MapSet.new()
   ]
 
   @type t :: %__MODULE__{
@@ -105,6 +109,36 @@ defmodule Nex.Agent.Channel.Discord do
     end
   end
 
+  @doc "Add a Unicode emoji reaction to a message. Fire-and-forget."
+  @spec add_reaction(String.t(), String.t(), String.t()) :: :ok
+  def add_reaction(channel_id, message_id, emoji) do
+    if Process.whereis(__MODULE__) do
+      GenServer.cast(__MODULE__, {:add_reaction, channel_id, message_id, emoji})
+    end
+
+    :ok
+  end
+
+  @doc "Remove the bot's own reaction from a message. Fire-and-forget."
+  @spec remove_reaction(String.t(), String.t(), String.t()) :: :ok
+  def remove_reaction(channel_id, message_id, emoji) do
+    if Process.whereis(__MODULE__) do
+      GenServer.cast(__MODULE__, {:remove_reaction, channel_id, message_id, emoji})
+    end
+
+    :ok
+  end
+
+  @doc "Trigger the typing indicator in a channel. Fire-and-forget."
+  @spec trigger_typing(String.t()) :: :ok
+  def trigger_typing(channel_id) do
+    if Process.whereis(__MODULE__) do
+      GenServer.cast(__MODULE__, {:trigger_typing, channel_id})
+    end
+
+    :ok
+  end
+
   # Server
 
   @impl true
@@ -127,6 +161,8 @@ defmodule Nex.Agent.Channel.Discord do
     }
 
     Bus.subscribe(:discord_outbound)
+    Bus.subscribe(:inbound_ack)
+    Bus.subscribe(:task_complete)
     {:ok, state, {:continue, :connect}}
   end
 
@@ -144,6 +180,24 @@ defmodule Nex.Agent.Channel.Discord do
       :ok -> {:reply, :ok, state}
       {:error, reason} -> {:reply, {:error, reason}, state}
     end
+  end
+
+  @impl true
+  def handle_cast({:add_reaction, channel_id, message_id, emoji}, state) do
+    do_add_reaction(channel_id, message_id, emoji, state)
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_cast({:remove_reaction, channel_id, message_id, emoji}, state) do
+    do_remove_reaction(channel_id, message_id, emoji, state)
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_cast({:trigger_typing, channel_id}, state) do
+    do_trigger_typing(channel_id, state)
+    {:noreply, state}
   end
 
   @impl true
@@ -214,6 +268,35 @@ defmodule Nex.Agent.Channel.Discord do
   end
 
   @impl true
+  def handle_info({:bus_message, :inbound_ack, %{channel: "discord"} = payload}, state) do
+    message_id = payload.message_id
+    reaction_channel = payload[:origin_channel_id] || payload.chat_id
+
+    if is_binary(message_id) and message_id != "" do
+      do_add_reaction(reaction_channel, message_id, @eyes_emoji, state)
+    end
+
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info({:bus_message, :task_complete, %{channel: "discord"} = payload}, state) do
+    message_id = payload.message_id
+    reaction_channel = payload[:origin_channel_id] || payload.chat_id
+
+    if is_binary(message_id) and message_id != "" do
+      do_remove_reaction(reaction_channel, message_id, @eyes_emoji, state)
+      final_emoji = if payload.status == :ok, do: @done_emoji, else: @error_emoji
+      do_add_reaction(reaction_channel, message_id, final_emoji, state)
+    end
+
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info({:bus_message, _topic, _payload}, state), do: {:noreply, state}
+
+  @impl true
   def handle_info({:DOWN, ref, :process, _pid, reason}, %{ws_ref: ref} = state) do
     Logger.warning("[Discord] WS process down: #{inspect(reason)}")
     state = cancel_heartbeat(state)
@@ -281,7 +364,48 @@ defmodule Nex.Agent.Channel.Discord do
   defp handle_gateway_event(%{"op" => 0, "t" => "MESSAGE_CREATE", "d" => data, "s" => seq}, state) do
     state = %{state | sequence: seq}
     handle_message(data, state)
-    state
+  end
+
+  defp handle_gateway_event(%{"op" => 0, "t" => "GUILD_CREATE", "d" => data, "s" => seq}, state) do
+    state = %{state | sequence: seq}
+    # Cache active thread IDs from guild payload (same as discord.py's Guild.__init__)
+    threads = Map.get(data, "threads", [])
+
+    thread_ids =
+      threads
+      |> Enum.map(fn t -> Map.get(t, "id") end)
+      |> Enum.reject(&is_nil/1)
+      |> MapSet.new()
+
+    guild_id = Map.get(data, "id", "?")
+    if MapSet.size(thread_ids) > 0 do
+      Logger.info("[Discord] GUILD_CREATE guild=#{guild_id} cached #{MapSet.size(thread_ids)} thread(s)")
+    end
+
+    %{state | known_threads: MapSet.union(state.known_threads, thread_ids)}
+  end
+
+  defp handle_gateway_event(%{"op" => 0, "t" => "THREAD_CREATE", "d" => data, "s" => seq}, state) do
+    state = %{state | sequence: seq}
+    thread_id = Map.get(data, "id")
+
+    if thread_id do
+      Logger.debug("[Discord] THREAD_CREATE thread=#{thread_id}")
+      %{state | known_threads: MapSet.put(state.known_threads, thread_id)}
+    else
+      state
+    end
+  end
+
+  defp handle_gateway_event(%{"op" => 0, "t" => "THREAD_DELETE", "d" => data, "s" => seq}, state) do
+    state = %{state | sequence: seq}
+    thread_id = Map.get(data, "id")
+
+    if thread_id do
+      %{state | known_threads: MapSet.delete(state.known_threads, thread_id)}
+    else
+      state
+    end
   end
 
   defp handle_gateway_event(%{"op" => 11}, state) do
@@ -313,47 +437,106 @@ defmodule Nex.Agent.Channel.Discord do
   defp handle_message(data, state) do
     author_id = get_in(data, ["author", "id"])
     channel_id = Map.get(data, "channel_id")
+    message_id = Map.get(data, "id")
     content = Map.get(data, "content", "")
     guild_id = Map.get(data, "guild_id")
 
-    # Ignore bot's own messages
     if author_id == state.bot_user_id do
-      :ignore
+      state
     else
-      # Check bot mention or DM
       is_dm = is_nil(guild_id)
+      is_thread = MapSet.member?(state.known_threads, channel_id)
 
       mentions_bot =
         data
         |> Map.get("mentions", [])
         |> Enum.any?(fn m -> Map.get(m, "id") == state.bot_user_id end)
 
-      if is_dm or mentions_bot do
-        # Strip bot mention from content
-        clean_content =
-          Regex.replace(~r/<@!?#{state.bot_user_id}>/, content, "")
-          |> String.trim()
+      clean_content =
+        Regex.replace(~r/<@!?#{state.bot_user_id}>/, content, "")
+        |> String.trim()
 
-        if clean_content != "" and allowed?(channel_id, state.allow_from) do
-          Logger.info("[Discord] Inbound from #{author_id} in #{channel_id}")
+      cond do
+        clean_content == "" ->
+          state
 
-          Bus.publish(:inbound, %Envelope{
-            channel: "discord",
-            chat_id: to_string(channel_id),
-            sender_id: to_string(author_id),
-            text: clean_content,
-            message_type: :text,
-            raw: data,
-            metadata: %{
-              "guild_id" => guild_id,
-              "message_id" => Map.get(data, "id"),
-              "username" => get_in(data, ["author", "username"])
-            },
-            media_refs: [],
-            attachments: []
-          })
-        end
+        not allowed?(channel_id, state.allow_from) ->
+          state
+
+        is_dm ->
+          publish_inbound(channel_id, author_id, clean_content, data, state)
+          state
+
+        is_thread ->
+          publish_inbound(channel_id, author_id, clean_content, data, state)
+          state
+
+        mentions_bot ->
+          case create_thread_from_message(channel_id, message_id, clean_content, state) do
+            {:ok, thread_id} ->
+              Logger.info("[Discord] Auto-created thread #{thread_id} for message #{message_id}")
+              publish_inbound(thread_id, author_id, clean_content, data, state)
+              # THREAD_CREATE event will also add it, but add here for immediate availability
+              %{state | known_threads: MapSet.put(state.known_threads, thread_id)}
+
+            {:error, reason} ->
+              Logger.warning("[Discord] Failed to create thread: #{inspect(reason)}, replying in channel")
+              publish_inbound(channel_id, author_id, clean_content, data, state)
+              state
+          end
+
+        true ->
+          state
       end
+    end
+  end
+
+  defp publish_inbound(chat_id, author_id, content, data, _state) do
+    origin_channel_id = Map.get(data, "channel_id")
+
+    Bus.publish(:inbound, %Envelope{
+      channel: "discord",
+      chat_id: to_string(chat_id),
+      sender_id: to_string(author_id),
+      text: content,
+      message_type: :text,
+      raw: data,
+      metadata: %{
+        "guild_id" => Map.get(data, "guild_id"),
+        "message_id" => Map.get(data, "id"),
+        "origin_channel_id" => origin_channel_id,
+        "username" => get_in(data, ["author", "username"])
+      },
+      media_refs: [],
+      attachments: []
+    })
+  end
+
+  defp create_thread_from_message(channel_id, message_id, content, state) do
+    thread_name =
+      content
+      |> String.slice(0, 80)
+      |> case do
+        "" -> "Nex"
+        name -> if String.length(content) > 80, do: String.slice(name, 0, 77) <> "...", else: name
+      end
+
+    case state.http_post_fun.(
+           "#{@discord_api}/channels/#{channel_id}/messages/#{message_id}/threads",
+           %{
+             "name" => thread_name,
+             "auto_archive_duration" => 1440
+           },
+           request_headers(%{}, state)
+         ) do
+      {:ok, response} ->
+        case Map.get(response, "id") do
+          id when is_binary(id) and id != "" -> {:ok, id}
+          _ -> {:error, {:missing_thread_id, response}}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -447,6 +630,87 @@ defmodule Nex.Agent.Channel.Discord do
     else
       {chunk, rest} = String.split_at(text, max_len)
       [chunk | chunk_message(rest, max_len)]
+    end
+  end
+
+  # Reaction & typing helpers
+
+  defp do_add_reaction(channel_id, message_id, emoji, state) do
+    Task.start(fn ->
+      encoded_emoji = URI.encode(emoji)
+      url = "#{@discord_api}/channels/#{channel_id}/messages/#{message_id}/reactions/#{encoded_emoji}/@me"
+
+      case default_http_put(url, [{"authorization", "Bot #{state.token}"}]) do
+        :ok ->
+          Logger.debug("[Discord] Added #{emoji} reaction to #{message_id}")
+
+        {:error, reason} ->
+          Logger.warning("[Discord] Failed to add reaction: #{inspect(reason)}")
+      end
+    end)
+  end
+
+  defp do_remove_reaction(channel_id, message_id, emoji, state) do
+    Task.start(fn ->
+      encoded_emoji = URI.encode(emoji)
+      url = "#{@discord_api}/channels/#{channel_id}/messages/#{message_id}/reactions/#{encoded_emoji}/@me"
+
+      case default_http_delete(url, [{"authorization", "Bot #{state.token}"}]) do
+        :ok ->
+          Logger.debug("[Discord] Removed #{emoji} reaction from #{message_id}")
+
+        {:error, reason} ->
+          Logger.warning("[Discord] Failed to remove reaction: #{inspect(reason)}")
+      end
+    end)
+  end
+
+  defp do_trigger_typing(channel_id, state) do
+    Task.start(fn ->
+      url = "#{@discord_api}/channels/#{channel_id}/typing"
+
+      case state.http_post_fun.(url, %{}, [{"authorization", "Bot #{state.token}"}]) do
+        {:ok, _} -> :ok
+        {:error, reason} -> Logger.warning("[Discord] Typing trigger failed: #{inspect(reason)}")
+      end
+    end)
+  end
+
+  defp default_http_put(url, headers) do
+    case Req.put(url, headers: headers, retry: false) do
+      {:ok, %{status: status}} when status in 200..299 ->
+        :ok
+
+      {:ok, %{status: 429, body: body}} ->
+        retry_after = get_in(body, ["retry_after"]) || get_in(body, [:retry_after]) || 1
+        Logger.warning("[Discord] Rate limited, retry after #{retry_after}s")
+        Process.sleep(trunc(retry_after * 1000))
+        default_http_put(url, headers)
+
+      {:ok, %{status: status, body: response}} ->
+        {:error, {:http_error, status, response}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp default_http_delete(url, headers) do
+    case Req.delete(url, headers: headers, retry: false) do
+      {:ok, %{status: status}} when status in 200..299 ->
+        :ok
+
+      {:ok, %{status: 429, body: body}} ->
+        retry_after = get_in(body, ["retry_after"]) || get_in(body, [:retry_after]) || 1
+        Logger.warning("[Discord] Rate limited, retry after #{retry_after}s")
+        Process.sleep(trunc(retry_after * 1000))
+        default_http_delete(url, headers)
+
+      {:ok, %{status: status, body: response}} ->
+        {:error, {:http_error, status, response}}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
