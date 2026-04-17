@@ -621,15 +621,25 @@ defmodule Nex.Agent.Runner do
       |> then(&summarize_args(tool_name, &1))
 
     case render_tool_call_notice_args(tool_name, args) do
-      "" -> "[tool] #{tool_name}"
-      rendered_args -> "[tool] #{tool_name} - #{rendered_args}"
+      "" -> "#{tool_notice_emoji(tool_name)} #{tool_notice_label(tool_name)}"
+      rendered_args -> "#{tool_notice_emoji(tool_name)} #{tool_notice_label(tool_name)} - #{rendered_args}"
     end
   end
 
   defp render_tool_call_notice_line(_tool_call), do: ""
 
   defp render_tool_call_notice_args("bash", %{"command" => cmd}) when is_binary(cmd) do
-    cmd
+    command =
+      cmd
+      |> String.replace("\n", " ")
+      |> String.trim()
+      |> String.slice(0, 120)
+
+    if command == "", do: "", else: "`#{command}`"
+  end
+
+  defp render_tool_call_notice_args("get_memory", %{"query" => query}) when is_binary(query) do
+    query
     |> String.replace("\n", " ")
     |> String.trim()
     |> String.slice(0, 120)
@@ -653,6 +663,29 @@ defmodule Nex.Agent.Runner do
   end
 
   defp render_tool_call_notice_value(value), do: inspect(value, printable_limit: 80, limit: 5)
+
+  defp tool_notice_label(tool_name) do
+    tool_name
+    |> to_string()
+    |> String.split("_")
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.map_join("", &String.capitalize/1)
+  end
+
+  defp tool_notice_emoji("bash"), do: "⚙️"
+  defp tool_notice_emoji("get_memory"), do: "🧠"
+  defp tool_notice_emoji("memory_status"), do: "🧠"
+  defp tool_notice_emoji("memory_write"), do: "🧠"
+  defp tool_notice_emoji("memory_rebuild"), do: "🧠"
+  defp tool_notice_emoji("memory_consolidate"), do: "🧠"
+  defp tool_notice_emoji("read"), do: "📖"
+  defp tool_notice_emoji("write"), do: "✍️"
+  defp tool_notice_emoji("edit"), do: "✍️"
+  defp tool_notice_emoji("list_dir"), do: "📂"
+  defp tool_notice_emoji("web_search"), do: "🔎"
+  defp tool_notice_emoji("web_fetch"), do: "🌐"
+  defp tool_notice_emoji("message"), do: "💬"
+  defp tool_notice_emoji(_tool_name), do: "🛠️"
 
   defp maybe_stream_text(opts, text) when is_binary(text) and text != "" do
     case Keyword.get(opts, :stream_sink) do
