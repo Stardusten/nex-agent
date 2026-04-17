@@ -48,7 +48,7 @@ defmodule Nex.Agent.Session do
   end
 
   @doc """
-  Create a new session with key (e.g. "telegram:123456").
+  Create a new session with key (e.g. "feishu:123456").
   """
   @spec new(String.t()) :: t()
   def new(key) do

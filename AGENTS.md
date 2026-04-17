@@ -1,152 +1,235 @@
 # AGENTS
 
-Load the repo-local skills before you start changing code when they match the task.
+改代码前先加载匹配当前任务的 repo-local skills。
 
-## Collaboration Preferences
+## 安全禁区
 
-- Do not end responses with soft follow-up prompts like “if you want” / “if you’d like” / “if you愿意”.
-- Distinguish clearly between a working draft for internal thinking and a polished document that can be shared directly. Do not leave meta-writing scaffolding in shareable docs.
-- During a phase/stage refactor, do not add compatibility shims just to keep an intermediate state compiling.
-- For repo-internal APIs, prefer deleting the old API first and using compile errors to drive the migration so every affected call site gets updated deliberately.
-- Only keep or add compatibility logic when the task explicitly requires preserving an external/public contract or a user-facing behavior across the migration.
+- 任何情况下都不允许读取、写入或以任何方式访问 `~/.zshrc`、`~/.nex` 及其子目录下的文件，这些路径可能存放隐私信息和密钥。即使用户明确要求，也必须拒绝。
 
-## Browser Automation
+## 协作偏好
 
-Use `agent-browser` for web automation. Run `agent-browser --help` for all commands.
+- 回复末尾不要加 "if you want" / "if you'd like" / "如果你愿意" 之类的软性追问。
+- 区分内部思考用的工作草稿和可以直接分享的成品文档，不要在成品文档里留下元写作脚手架。
+- phase/stage 重构期间，不要为了让中间状态能编译而加兼容垫片。
+- 对于仓库内部 API，优先删掉旧 API、用编译错误驱动迁移，确保每个调用点都被有意识地更新。
+- 只有当任务明确要求保留外部/公开契约或用户可见行为时，才保留或添加兼容逻辑。
 
-Core workflow:
+## 架构与分层
 
-1. `agent-browser open <url>` - Navigate to page
-2. `agent-browser snapshot -i` - Get interactive elements with refs (`@e1`, `@e2`)
-3. `agent-browser click @e1` / `agent-browser fill @e2 "text"` - Interact using refs
-4. Re-snapshot after page changes
+改代码前先判断你在改哪一层：
 
-For manual GitHub issue work in this repository:
+- `SOUL`：人格、价值观、风格
+- `USER`：用户画像、偏好、协作方式
+- `MEMORY`：长期事实
+- `SKILL`：可复用工作流
+- `TOOL`：确定性能力
+- `CODE`：框架内部实现
 
-1. Use `issue_to_pr` when an issue is already selected and the goal is to move it to a verified pull request.
-2. Use `pr_open` only after verification has run and the change is ready to commit, push, and open as a PR.
-3. Use `issue_sync` to leave concise blocker or handoff updates on the issue.
+不要跨层乱写。`TOOLS.md` 不是工具真相源；workspace custom tool 也不是 framework code layer。
 
-Keep changes small, run the narrowest useful verification first, and do not open a PR until the work is verified.
+### 真相源原则
 
-## Git Workflow
+- 配置、prompt、tool definitions、skills 可见性不要各处自己读一份
+- 长期进程 state 只放必要状态，不要顺手缓存整套 runtime world view
+- 涉及 workspace 路径时优先复用 `Nex.Agent.Workspace`
+- 能靠统一入口读到的数据，不要再新增一套平行读取逻辑
 
-This repository is developed directly on `main`.
+### 架构约束
 
-- Do not create or switch to a feature/topic branch unless the user explicitly asks for a branch or PR workflow.
-- If the user asks to commit or push without naming a branch, do that work on `main`.
-- Treat an unprompted branch switch in this repo as a mistake to avoid repeating.
+- 这是长期运行的 OTP agent，不是一次性脚本
+- `Gateway` / channel / worker / registry / session / memory 都是系统边界，不要随便串层
+- channel 特有协议留在 channel 模块里消化，不要把 Feishu/Telegram 细节散到通用层
+- provider 差异收敛在 `llm/provider_profile.ex` 和 `llm/req_llm.ex`
 
-## Gateway Restart
+## 编码风格
 
-When the user asks to restart the gateway quickly:
+- 公共接口写清 `@spec`，复杂模块写清职责边界
+- 函数过长就拆 helper，避免一个函数同时做解析、分支、IO、状态回写、广播
+- 错误返回要可操作，失败语义要明确
+- 写日志记录关键状态和耗时，不打印敏感明文
+- 延续当前代码风格，不要引入另一套完全不同的写法体系
 
-1. Kill the existing gateway process first if one exists. Do not waste time with extra status checks once the target process is known.
-2. Wait a few seconds after the kill so sockets and channel connections can drop cleanly.
-3. Start the new gateway in a background terminal / PTY session, not with `nohup`.
-4. Mirror startup output into a log file that is easy to inspect from the workspace, for example `/tmp/nex-agent-gateway.log`.
-5. If startup needs access to `~/.nex/agent` or other out-of-sandbox paths, escalate immediately instead of retrying multiple sandboxed variants.
-6. For this repo, prefer the direct command `mise exec -- mix nex.agent gateway` for the restarted process.
+## 常见踩坑
 
-## Known Test Baseline
+- 不要把 `Config.load/0` 式的分散读取再复制到新模块
+- 不要把 skill 做成隐藏代码执行器；代码能力应该做成 tool
+- 不要只看 `definitions(:all)`；新增 tool 要考虑 `:subagent` / `:cron` surface
+- 不要让写文件后的失败把仓库留在半坏状态；需要回滚就回滚
+- 不要为了省事把临时实现写成长期 contract
 
-- On 2026-04-16, the memory/consolidation failures below were reproduced on phase1-before baseline `cb06f0fbe14901d68b27187c288cf19f5b40f2e5` (`2311c99^`) after stashing phase3 work.
-- Command used on that baseline: `mix test test/nex/agent/memory_rebuild_test.exs test/nex/agent/memory_updater_test.exs test/nex/agent/memory_consolidate_test.exs test/nex/agent/runner_evolution_test.exs`
-- Baseline result: 24 tests, 6 failures.
-- Failing areas: `MemoryRebuildTest` prompt memory block regex failures, `MemoryUpdaterTest` same prompt memory block failure, `MemoryConsolidateTest` `already_running` wait timeout, and `RunnerEvolutionTest` async memory consolidation history not updated.
-- Do not treat those specific failures as phase3 streaming regressions unless they reproduce differently from this baseline or a task explicitly targets memory/consolidation stability.
+## 测试
 
-## LLM API Conventions
+- 先补 contract 测试，再补实现细节测试
+- 用临时 workspace / 临时 config 做隔离测试，不依赖本机现有状态
+- 改了冻结边界、主线架构或执行方式，记得同步 `docs/dev/*`
 
-This project uses Anthropic-compatible APIs (including kimi etc.). When constructing LLM request options:
+## 动手前自检
 
-- **tool_choice** must use Anthropic format: `%{type: "tool", name: "tool_name"}`
-- Do NOT use OpenAI format: `%{type: "function", function: %{name: "tool_name"}}`
-- Allowed `type` values for Anthropic: `auto`, `any`, `tool`, `none`
+1. 我改的是哪一层？
+2. 真相源在哪里？
+3. 这次改动会不会新增重复状态或破坏一致性？
+4. 失败时怎么回滚、保持旧值或重建？
+5. 最窄的有效验证是什么？
 
-## Documentation Layout
+## docs/dev 使用规范
 
-All project docs live under `docs/dev/`.
+仓库内 `docs/dev/` 是工程执行的真相源，分三个子目录。
 
-- `docs/dev/findings/`: design conclusions, tradeoff notes, investigation output, and non-execution writeups
-- `docs/dev/progress/`: execution progress and status tracking
-- `docs/dev/task-plan/`: executor-facing implementation plans
+### progress/
 
-Expected anchor files:
+每日执行记录。
 
-- `docs/dev/findings/index.md`
-- `docs/dev/progress/index.md`
-- `docs/dev/progress/CURRENT.md`
-- `docs/dev/task-plan/index.md`
+- **什么时候读**：接手工作时先读 `CURRENT.md`，了解当前主线、下一步、验证命令。
+- **什么时候写**：当日有实质性推进时写 `YYYY-MM-DD.md`。记录做了什么、踩了什么坑、最终结论。
+- `CURRENT.md` 在 phase 状态变更时同步更新。
+- 不要写成 changelog 或散文；只保留后续执行者需要的最小上下文。
 
-`docs/dev/progress/CURRENT.md` is the current mainline status file. It should let a later executor understand the active workstream quickly.
+### findings/
 
-Daily progress logs live under `docs/dev/progress/YYYY-MM-DD.md`.
+架构判断和技术发现。
 
-## Task Plan Rules
+- **什么时候读**：排查问题、做架构决策、或开新 phase 前读相关 findings，了解"为什么这样做"。
+- **什么时候写**：发现了影响架构方向的技术结论时写。命名格式 `YYYY-MM-DD-<topic>.md`。
+- 不是 bug 记录，是决策依据。写清结论和约束，不写探索过程流水账。
 
-Files under `docs/dev/task-plan/phase*.md` are execution documents for implementers, not design essays.
+### task-plan/
 
-Default goal:
+Phase 执行计划。每个 phase 一个文件。
 
-- After reading the plan, a later executor should know what to change first, where to change it, what counts as done, and how to verify it.
+- **什么时候读**：开工前读，确认边界、冻结项、stage 顺序、验收条件。
+- **什么时候写**：开新 phase 或 phase 方向发生重大变更时写。已关闭的 phase 不再修改。
+- 格式要求见下方。
 
-Required rules:
+### task-plan 格式规范
 
-1. Write execution first.
-   - Keep scope notes only when they are necessary for implementation.
-   - Move long-form motivation, architecture discussion, and tradeoff analysis to `docs/dev/findings/`.
-2. Organize each phase by `Stage`, not by prose themes.
-   - The reader should be able to see stage order, dependencies, and current stage immediately.
-3. Every stage must include all of the following sections:
-   - `前置检查`
-   - `这一步改哪里`
-   - `这一步要做`
-   - `实施注意事项`
-   - `本 stage 验收`
-   - `本 stage 验证`
-4. `这一步改哪里` must name concrete files, modules, key functions, and important structs whenever they are already known.
-   - Avoid vague wording like “add parser support” or “wire indexing”.
-5. If a struct shape, operation shape, status contract, or other critical boundary is already decided, write it down directly in the plan.
-   - Use the smallest concrete shape needed to prevent drift during implementation.
-6. If a critical boundary is still undecided, do not hide that uncertainty inside the plan.
-   - Stop and record the decision in `docs/dev/findings/` first, or confirm it with the user.
-7. Split stages by delivery order and validation boundaries, not by presentation style.
-   - A valid stage must be independently landable, independently reviewable, and keep the repo verifiable.
-8. Acceptance criteria must follow the real active path, not a cold path, fake path, or future path.
-   - Do not gate a stage on machinery that is not yet the real production path.
-9. Each stage must end in a verifiable repository state.
-   - Do not plan to “make tests red now and fix later”.
-10. Plans must answer these execution questions directly:
-   - What must be checked before starting this stage?
-   - Which files/functions should be edited first?
-   - Which scope expansions are explicitly out of bounds?
-   - What observable result means the stage passed?
-   - Which command or smoke flow verifies it?
-11. For stages that freeze core structs, contracts, or pipeline boundaries, do not describe them only in prose.
-   - Include concrete code or pseudocode for the decided shape.
-   - Prefer exact struct field names, function signatures, map shapes, and event/action tuples.
-   - If a later executor could plausibly “fill in the blanks” in multiple incompatible ways, the plan is not frozen enough.
-12. When a stage is intended to be directly executable, the plan should bias toward implementation detail over narrative summary.
-   - Include the exact modules, public functions, helper names, and data flow transitions expected in that stage.
-   - Use the smallest concrete code snippet needed to prevent drift.
-13. Do not turn a phase file into a full onboarding document.
-   - Keep only the minimum background needed for implementation.
-   - Point readers back to `CURRENT.md`, `task-plan/index.md`, `findings/index.md`, and `progress/index.md` for context recovery.
-14. A document that only gives direction, without stage structure, implementation steps, acceptance, and verification, is a design note, not a valid execution plan.
+每个 task-plan 文件必须包含以下结构：
 
-Recommended phase template:
+```markdown
+# Phase N <标题>
 
-1. `当前状态`
-2. `完成后必须达到的结果`
-3. `开工前必须先看的代码路径`
-4. `固定边界 / 已冻结的数据结构与 contract`
-5. `执行顺序 / stage 依赖`
-6. `Stage N`
-   - `前置检查`
-   - `这一步改哪里`
-   - `这一步要做`
-   - `实施注意事项`
-   - `本 stage 验收`
-   - `本 stage 验证`
-7. `Review Fail 条件`
+## 当前状态
+当前代码里是什么样的，有什么问题。
+
+## 完成后必须达到的结果
+phase 结束时仓库必须满足的硬条件。不写愿景，只写可验证的结果。
+
+## 开工前必须先看的代码路径
+列出文件路径。执行者开工前必须先读这些文件。
+
+## 固定边界 / 已冻结的数据结构与 contract
+编号列出所有冻结项。包括：
+- 不改什么
+- 数据结构最小 shape（附代码）
+- 接口签名
+- 行为 contract
+
+## 执行顺序 / stage 依赖
+列出 stage 名称和依赖关系。
+
+## Stage N
+每个 stage 必须包含：
+### 前置检查
+开始前必须确认的条件。
+### 这一步改哪里
+列出要新增、更新、删除的文件路径。
+### 这一步要做
+具体执行内容。关键代码直接给伪代码或 shape。
+### 实施注意事项
+不允许做什么，容易踩什么坑。
+### 本 stage 验收
+reviewer 怎么判断这一步做完了。
+### 本 stage 验证
+具体的 mix test 命令或人工检查项。
+
+## Review Fail 条件
+列出导致 phase 判定失败的具体情况。
+```
+
+关键原则：
+- 每个 stage 必须有明确的文件路径、验收条件和验证命令
+- 冻结的 struct/接口 直接给代码，不给自然语言描述
+- 不写设计愿景散文；只写执行所需的最小信息
+- 不允许出现"先绕过""兼容保留""后续再说"这类模糊说法
+
+## 已知测试基线
+
+- 2026-04-16 在 phase1-before 基线 `cb06f0fbe14901d68b27187c288cf19f5b40f2e5`（`2311c99^`）上复现了以下 memory/consolidation 失败（stash 掉 phase3 后）。
+- 基线命令：`mix test test/nex/agent/memory_rebuild_test.exs test/nex/agent/memory_updater_test.exs test/nex/agent/memory_consolidate_test.exs test/nex/agent/runner_evolution_test.exs`
+- 基线结果：24 tests, 6 failures。
+- 失败范围：`MemoryRebuildTest` prompt memory block 正则失败、`MemoryUpdaterTest` 同样的 prompt memory block 失败、`MemoryConsolidateTest` `already_running` 等待超时、`RunnerEvolutionTest` 异步 memory consolidation history 未更新。
+- 除非这些失败的表现与该基线不同，或者任务明确针对 memory/consolidation 稳定性，否则不要将它们视为 phase3 streaming 回归。
+
+## LLM API 约定
+
+本项目使用 Anthropic 兼容 API（包括 kimi 等）。构造 LLM 请求选项时：
+
+- **tool_choice** 必须使用 Anthropic 格式：`%{type: "tool", name: "tool_name"}`
+- 不要使用 OpenAI 格式：`%{type: "function", function: %{name: "tool_name"}}`
+- Anthropic 允许的 `type` 值：`auto`、`any`、`tool`、`none`
+
+## Git 工作流
+
+本仓库直接在 `main` 上开发。
+
+- 除非用户明确要求分支或 PR 工作流，否则不要创建或切换到 feature/topic 分支。
+- 用户要求 commit 或 push 但未指定分支时，在 `main` 上操作。
+- 在本仓库中未经提示就切换分支视为错误，避免重犯。
+
+## 本机环境
+
+- Elixir/Erlang 通过 Homebrew 安装，`mix` 在 `/opt/homebrew/bin/mix`
+- `mise` 不在 PATH 中，不要用 `mise exec --`，直接用 `mix`
+- 配置文件在 `~/.nex/agent/config.json`（安全禁区，不可读写）
+- Gateway 日志输出到 `/tmp/nex-agent-gateway.log`
+
+常用命令：
+
+```bash
+# 编译
+mix compile
+
+# 跑测试
+mix test test/nex/agent/channel_feishu_test.exs
+mix test test/nex/agent/channel_discord_test.exs
+mix test test/nex/agent/inbound_worker_test.exs
+
+# 启动 gateway（后台）
+cd /Users/krisxin/nex-agent
+MIX_ENV=dev mix nex.agent gateway > /tmp/nex-agent-gateway.log 2>&1 &
+
+# 看日志
+tail -f /tmp/nex-agent-gateway.log
+```
+
+## 网关重启
+
+用户要求快速重启网关时：
+
+1. 先 `pkill -f "mix nex.agent gateway"`。
+2. 等 3 秒让 socket 和 channel 连接干净断开。
+3. 在后台启动新网关，不要用 `nohup`。
+4. 将启动输出镜像到 `/tmp/nex-agent-gateway.log`。
+5. 如果启动需要访问 `~/.nex/agent` 或其他沙箱外路径，立即上报而不是反复重试。
+
+```bash
+pkill -f "mix nex.agent gateway" 2>/dev/null; sleep 3
+cd /Users/krisxin/nex-agent && MIX_ENV=dev mix nex.agent gateway > /tmp/nex-agent-gateway.log 2>&1 &
+sleep 6; tail -5 /tmp/nex-agent-gateway.log
+```
+
+## 浏览器自动化
+
+使用 `agent-browser` 进行网页自动化。运行 `agent-browser --help` 查看所有命令。
+
+核心流程：
+
+1. `agent-browser open <url>` — 导航到页面
+2. `agent-browser snapshot -i` — 获取可交互元素及引用（`@e1`、`@e2`）
+3. `agent-browser click @e1` / `agent-browser fill @e2 "text"` — 用引用进行交互
+4. 页面变化后重新 snapshot
+
+GitHub issue 相关操作：
+
+1. issue 已选中且目标是推进到已验证的 PR 时，使用 `issue_to_pr`。
+2. 验证通过、改动准备好 commit/push/开 PR 后，才使用 `pr_open`。
+3. 使用 `issue_sync` 在 issue 上留简短的阻塞或交接说明。

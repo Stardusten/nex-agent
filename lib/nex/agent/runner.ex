@@ -91,7 +91,7 @@ defmodule Nex.Agent.Runner do
     history_limit = Keyword.get(opts, :history_limit, @memory_window)
     history = Session.get_history(session, history_limit)
 
-    channel = Keyword.get(opts, :channel, "telegram")
+    channel = Keyword.get(opts, :channel, "feishu")
     chat_id = Keyword.get(opts, :chat_id, "default")
     media = Keyword.get(opts, :media)
 

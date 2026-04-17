@@ -85,24 +85,18 @@ Phase 7 is now the active workstream:
 
 ## Immediate Next Steps
 
-1. Execute [Phase 7 Feishu Streaming Converter Simplification](../task-plan/phase7-feishu-streaming-converter-simplification.md).
-2. Delete the current Feishu streaming middle-layer abstractions instead of patching them further.
-3. Rebuild Feishu streaming as:
-   - LLM text stream
-   - stateful converter
-   - Feishu API calls
-4. Use real Feishu credentials to verify that `<newmsg/>` becomes a true streaming boundary.
-5. Return to [Phase 6 Feishu Outbound Official Format And Media Send](../task-plan/phase6-feishu-outbound-official-format-and-media-send.md) only after phase7 lands.
+1. **修 Finch 连接池泄漏**（P0）：并发为 1 时 `excess queuing for connections`。排查 `ReqLLM` streaming 连接释放——可能是 streaming response body 没消费完导致 Finch 持有连接不归还。
+2. **修飞书 `close_streaming_mode` 404**：对照飞书 CardKit 文档确认 `PATCH /cardkit/v1/cards/:card_id/settings` 的正确路径和请求格式。
+3. **LLM 空返回兜底**：当 `final_content` 为空时发 fallback 消息，避免 bot 沉默。
+4. 后续可返回 [Phase 6 Feishu Outbound Official Format And Media Send](../task-plan/phase6-feishu-outbound-official-format-and-media-send.md)。
 
 ## Reviewer Verification
 
-- `mix test test/nex/agent/stream/streaming_config_test.exs`
-- `mix test test/nex/agent/im_ir/parser_test.exs test/nex/agent/im_ir/render_result_test.exs test/nex/agent/im_ir/feishu_renderer_test.exs`
-- `mix test test/nex/agent/stream/new_message_boundary_test.exs`
-- `mise exec -- mix test test/nex/agent/channel_feishu_test.exs`
-- `mise exec -- mix test test/nex/agent/message_tool_test.exs`
-- `mise exec -- mix test test/nex/agent/inbound_worker_test.exs`
-- `mise exec -- mix test test/nex/agent/runner_evolution_test.exs`
+- `mix test test/nex/agent/channel_feishu_test.exs`
+- `mix test test/nex/agent/channel/feishu_stream_converter_test.exs`
+- `mix test test/nex/agent/channel_discord_test.exs`
+- `mix test test/nex/agent/inbound_worker_test.exs`
+- `mix test test/nex/agent/message_tool_test.exs`
 
 ## Explicit Non-Goals For The Current Mainline
 

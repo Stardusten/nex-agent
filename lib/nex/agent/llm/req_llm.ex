@@ -654,6 +654,7 @@ defmodule Nex.Agent.LLM.ReqLLM do
   defp default_model(:anthropic), do: "claude-sonnet-4-20250514"
   defp default_model(:openai), do: "gpt-4o"
   defp default_model(:openai_codex), do: "gpt-5.3-codex"
+  defp default_model(:openai_codex_custom), do: "gpt-5.4"
   defp default_model(:openrouter), do: "anthropic/claude-3.5-sonnet"
   defp default_model(:ollama), do: "llama3.1"
   defp default_model(_), do: "gpt-4o"

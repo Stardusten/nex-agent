@@ -65,7 +65,7 @@ defmodule Nex.Agent.Tool.Message do
           channel: %{
             type: "string",
             description:
-              "Target channel (telegram, feishu, discord, http). Defaults to current channel."
+              "Target channel (feishu, discord). Defaults to current channel."
           },
           chat_id: %{
             type: "string",
@@ -119,7 +119,7 @@ defmodule Nex.Agent.Tool.Message do
   def from_tool_args(args, ctx) do
     args = normalize_legacy_attachment_args(args)
 
-    channel = Map.get(args, "channel") || Map.get(ctx, :channel, "telegram")
+    channel = Map.get(args, "channel") || Map.get(ctx, :channel, "feishu")
     chat_id = Map.get(args, "chat_id") || Map.get(ctx, :chat_id, "")
     content = normalize_optional_text(Map.get(args, "content"))
     msg_type = Map.get(args, "msg_type")

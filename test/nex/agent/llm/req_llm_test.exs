@@ -147,6 +147,54 @@ defmodule Nex.Agent.LLM.ReqLLMTest do
     assert metadata[:finish_reason] == "stop"
   end
 
+  test "openai-codex-custom requests use api key auth and custom base url" do
+    parent = self()
+
+    stream_text_fun = fn model_spec, messages, opts ->
+      send(parent, {:req_llm_call, model_spec, messages, opts})
+      {:ok, %{stream: [%{type: :content, text: "ok"}], finish_reason: :stop}}
+    end
+
+    callback = fn event -> send(parent, {:stream_event, event}) end
+
+    custom_base_url = "https://proxy.example.com/codex"
+
+    assert :ok =
+             AgentReqLLM.stream(
+               [
+                 %{"role" => "system", "content" => "You are the project copilot."},
+                 %{"role" => "user", "content" => "hello from custom codex"}
+               ],
+               [
+                 provider: :openai_codex_custom,
+                 model: "gpt-5.4",
+                 api_key: "custom-api-key",
+                 base_url: custom_base_url,
+                 req_llm_stream_text_fun: stream_text_fun
+               ],
+               callback
+             )
+
+    assert_receive {:req_llm_call, model_spec, messages, opts}
+
+    assert model_spec == %{
+             id: "gpt-5.4",
+             provider: :openai,
+             base_url: custom_base_url
+           }
+
+    assert [%Message{role: :user}] = messages
+    assert opts[:api_key] == "custom-api-key"
+    assert opts[:base_url] == custom_base_url
+    assert opts[:provider_options][:auth_mode] == :api_key
+    refute Keyword.has_key?(opts[:provider_options], :instructions)
+    refute Keyword.has_key?(opts[:provider_options], :access_token)
+
+    assert_receive {:stream_event, {:delta, "ok"}}
+    assert_receive {:stream_event, {:done, metadata}}
+    assert metadata[:finish_reason] == "stop"
+  end
+
   test "file-backed image content is converted to data url before req_llm call" do
     parent = self()
     image_path = Path.join(System.tmp_dir!(), "req-llm-image-#{System.unique_integer([:positive])}.png")

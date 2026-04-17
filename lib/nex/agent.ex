@@ -79,7 +79,7 @@ defmodule Nex.Agent do
         if(runtime_config, do: Nex.Agent.Config.get_max_iterations(runtime_config), else: 10)
 
     cwd = Keyword.get(opts, :cwd, File.cwd!())
-    channel = Keyword.get(opts, :channel, "telegram")
+    channel = Keyword.get(opts, :channel, "feishu")
     chat_id = Keyword.get(opts, :chat_id, "default")
     tools = Keyword.get(opts, :tools, if(runtime_config, do: runtime_config.tools, else: %{}))
 
@@ -232,29 +232,33 @@ defmodule Nex.Agent do
   defp default_model(:anthropic), do: "claude-sonnet-4-20250514"
   defp default_model(:openai), do: "gpt-4o"
   defp default_model(:openai_codex), do: "gpt-5.3-codex"
+  defp default_model(:openai_codex_custom), do: "gpt-5.4"
   defp default_model(:ollama), do: "llama3.1"
   defp default_model(_), do: "claude-sonnet-4-20250514"
 
   defp default_api_key(:anthropic), do: System.get_env("ANTHROPIC_API_KEY")
   defp default_api_key(:openai), do: System.get_env("OPENAI_API_KEY")
   defp default_api_key(:openai_codex), do: ProviderProfile.default_api_key(:openai_codex)
+  defp default_api_key(:openai_codex_custom), do: ProviderProfile.default_api_key(:openai_codex_custom)
   defp default_api_key(:ollama), do: nil
   defp default_api_key(_), do: nil
 
   defp env_var_name(:anthropic), do: "ANTHROPIC_API_KEY"
   defp env_var_name(:openai), do: "OPENAI_API_KEY"
   defp env_var_name(:openai_codex), do: "OPENAI_CODEX_ACCESS_TOKEN or ~/.codex/auth.json"
+  defp env_var_name(:openai_codex_custom), do: "~/.codex/auth.json + ~/.codex/config.toml"
   defp env_var_name(_), do: "API_KEY"
 
   defp default_base_url(:openai_codex), do: ProviderProfile.default_base_url(:openai_codex)
+  defp default_base_url(:openai_codex_custom), do: ProviderProfile.default_base_url(:openai_codex_custom)
   defp default_base_url(_), do: nil
 
-  defp parse_session_key(nil), do: {"telegram", "default"}
+  defp parse_session_key(nil), do: {"feishu", "default"}
 
   defp parse_session_key(session_key) do
     case String.split(to_string(session_key), ":", parts: 2) do
       [channel, chat_id] -> {channel, chat_id}
-      _ -> {"telegram", "default"}
+      _ -> {"feishu", "default"}
     end
   end
 

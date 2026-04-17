@@ -29,6 +29,79 @@ defmodule Nex.Agent.Auth.Codex do
     end
   end
 
+  @doc """
+  Resolve API key for custom (non-OAuth) codex usage.
+
+  Reads `~/.codex/auth.json` and returns:
+  - `OPENAI_API_KEY` field if present and non-empty
+  - Otherwise falls back to `tokens.access_token`
+  """
+  @spec resolve_custom_api_key() :: {:ok, String.t()} | {:error, term()}
+  def resolve_custom_api_key do
+    with {:ok, state} <- read_state() do
+      case Map.get(state, "OPENAI_API_KEY") do
+        key when is_binary(key) and key != "" ->
+          {:ok, key}
+
+        _ ->
+          case extract_tokens(state) do
+            %{access_token: token} when is_binary(token) and token != "" -> {:ok, token}
+            _ -> {:error, :no_api_key_in_codex_auth}
+          end
+      end
+    end
+  end
+
+  @doc """
+  Read `~/.codex/config.toml` and return the parsed map.
+  """
+  @spec read_config() :: {:ok, map()} | {:error, term()}
+  def read_config do
+    path = config_path()
+
+    cond do
+      not File.exists?(path) ->
+        {:error, {:missing_config_file, path}}
+
+      true ->
+        case File.read(path) do
+          {:ok, contents} ->
+            case Toml.decode(contents) do
+              {:ok, data} when is_map(data) -> {:ok, data}
+              {:ok, _} -> {:error, {:invalid_config_file, path}}
+              {:error, reason} -> {:error, {:invalid_config_toml, path, reason}}
+            end
+
+          {:error, reason} ->
+            {:error, {:read_config_file_failed, path, reason}}
+        end
+    end
+  end
+
+  @doc """
+  Resolve base_url from `~/.codex/config.toml` for the active model provider.
+
+  Reads `model_provider` to find the provider name, then looks up
+  `model_providers.<name>.base_url`.
+  """
+  @spec resolve_custom_base_url() :: {:ok, String.t()} | {:error, term()}
+  def resolve_custom_base_url do
+    with {:ok, config} <- read_config() do
+      provider_name = Map.get(config, "model_provider")
+
+      base_url =
+        config
+        |> Map.get("model_providers", %{})
+        |> Map.get(provider_name, %{})
+        |> Map.get("base_url")
+
+      case base_url do
+        url when is_binary(url) and url != "" -> {:ok, url}
+        _ -> {:error, :no_base_url_in_codex_config}
+      end
+    end
+  end
+
   @spec access_token_is_expiring?(String.t(), non_neg_integer()) :: boolean()
   def access_token_is_expiring?(token, skew_seconds \\ @refresh_skew_seconds)
 
@@ -215,5 +288,9 @@ defmodule Nex.Agent.Auth.Codex do
       home when is_binary(home) and home != "" -> home
       _ -> Path.join(System.get_env("HOME", "~"), ".codex")
     end
+  end
+
+  defp config_path do
+    Path.join(codex_home(), "config.toml")
   end
 end

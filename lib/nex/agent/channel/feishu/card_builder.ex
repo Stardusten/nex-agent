@@ -28,12 +28,25 @@ defmodule Nex.Agent.Channel.Feishu.CardBuilder do
         FeishuRenderer.render_elements(text)
       end
 
+    streaming_mode = Keyword.get(opts, :streaming_mode)
+
     config =
       %{
         "width_mode" => "fill",
         "summary" => %{"content" => summary}
       }
-      |> maybe_put("streaming_mode", Keyword.get(opts, :streaming_mode))
+      |> maybe_put("streaming_mode", streaming_mode)
+      |> maybe_put(
+        "streaming_config",
+        if(streaming_mode,
+          do: %{
+            "print_frequency_ms" => %{"default" => 50},
+            "print_step" => %{"default" => 2},
+            "print_strategy" => "fast"
+          },
+          else: nil
+        )
+      )
 
     %{
       "schema" => "2.0",

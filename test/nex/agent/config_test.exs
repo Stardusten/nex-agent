@@ -95,6 +95,62 @@ defmodule Nex.Agent.ConfigTest do
     assert Config.valid?(config)
   end
 
+  test "openai-codex-custom provider resolves api key and base url from codex files" do
+    tmp_dir = Path.join(System.tmp_dir!(), "nex-agent-codex-custom-#{System.unique_integer([:positive])}")
+    auth_path = Path.join([tmp_dir, "auth.json"])
+    config_toml_path = Path.join([tmp_dir, "config.toml"])
+    previous_home = System.get_env("CODEX_HOME")
+    previous_key = System.get_env("OPENAI_CODEX_API_KEY")
+
+    on_exit(fn ->
+      File.rm_rf!(tmp_dir)
+
+      if previous_home do
+        System.put_env("CODEX_HOME", previous_home)
+      else
+        System.delete_env("CODEX_HOME")
+      end
+
+      if previous_key do
+        System.put_env("OPENAI_CODEX_API_KEY", previous_key)
+      else
+        System.delete_env("OPENAI_CODEX_API_KEY")
+      end
+    end)
+
+    System.put_env("CODEX_HOME", tmp_dir)
+    System.delete_env("OPENAI_CODEX_API_KEY")
+    File.mkdir_p!(tmp_dir)
+
+    File.write!(
+      auth_path,
+      Jason.encode!(%{
+        "OPENAI_API_KEY" => "sk-custom-test-key",
+        "tokens" => %{
+          "access_token" => signed_token(System.system_time(:second) + 3600),
+          "refresh_token" => "refresh-token"
+        }
+      })
+    )
+
+    File.write!(
+      config_toml_path,
+      """
+      model_provider = "myproxy"
+
+      [model_providers.myproxy]
+      name = "myproxy"
+      base_url = "https://proxy.example.com/codex"
+      """
+    )
+
+    config = %Config{Config.default() | provider: "openai-codex-custom"}
+
+    assert Config.get_current_api_key(config) == "sk-custom-test-key"
+    assert Config.get_current_base_url(config) == "https://proxy.example.com/codex"
+    assert Config.valid?(config)
+  end
+
   defp signed_token(exp) do
     encode_segment(%{"alg" => "none", "typ" => "JWT"}) <>
       "." <> encode_segment(%{"exp" => exp}) <> ".sig"

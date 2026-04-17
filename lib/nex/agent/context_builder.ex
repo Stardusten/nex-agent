@@ -323,12 +323,25 @@ defmodule Nex.Agent.ContextBuilder do
 
     base = ["Channel Streaming: #{if streaming?, do: "streaming", else: "single"}"]
 
+    newmsg_guidance =
+      "`<newmsg/>` splits your reply into separate messages. Place it on its own line between paragraphs."
+
     case channel do
       "feishu" ->
         base ++
           [
             "Channel IR: feishu markdown-like text IR",
-            "Feishu IR supports headings, lists, quotes, fenced code blocks, tables, and `<newmsg/>`."
+            "Feishu IR supports headings, lists, quotes, fenced code blocks, tables, and `<newmsg/>`.",
+            newmsg_guidance
+          ]
+
+      "discord" ->
+        base ++
+          [
+            "Channel IR: Discord markdown",
+            "Discord supports: bold, italic, underline (__text__), strikethrough, headings (#/##/###), lists, quotes (> and >>>), inline code, fenced code blocks with syntax highlighting, links, spoiler tags (||text||), and `<newmsg/>`.",
+            "Discord does NOT support: tables, image embeds (![]()), horizontal rules (---), or HTML. Use fenced code blocks to present tabular data.",
+            newmsg_guidance
           ]
 
       _ ->

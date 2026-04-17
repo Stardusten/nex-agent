@@ -110,7 +110,7 @@ defmodule Nex.Agent.IMIR.Parser do
         {flush_pending(blocks, state),
          %{blank_state() | in_code?: true, code_lang: parse_code_lang(line), code_lines: [line]}}
 
-      table_row?(line) ->
+      tables_enabled?(profile) and table_row?(line) ->
         blocks = flush_pending_if_not(blocks, state, :table)
         state = append_table_line(reset_pending_if_needed(state, :table), line)
         {blocks, state}
@@ -261,7 +261,20 @@ defmodule Nex.Agent.IMIR.Parser do
   defp heading?(line), do: Regex.match?(~r/^\#{1,3}\s+/, line)
   defp list_item?(line), do: Regex.match?(~r/^([-*]|\d+\.)\s+/, line)
   defp quote_line?(line), do: Regex.match?(~r/^>\s?/, line)
-  defp table_row?(line), do: String.contains?(line, "|") and String.trim(line) != ""
+
+  defp table_row?(line) do
+    trimmed = String.trim(line)
+    # A table row must start and/or end with | as a cell delimiter.
+    # Reject lines where | only appears as Discord spoiler tags (||text||).
+    trimmed != "" and
+      String.contains?(trimmed, "|") and
+      not Regex.match?(~r/\A[^|]*\|\|[^|]*\|\|[^|]*\z/, trimmed) and
+      (String.starts_with?(trimmed, "|") or String.ends_with?(trimmed, "|"))
+  end
+
+  defp tables_enabled?(profile) do
+    get_in(profile, [:markdown, :tables]) != false
+  end
 
   defp blank_paragraph?(%Block{type: :paragraph, text: text}), do: String.trim(text) == ""
   defp blank_paragraph?(_block), do: false

@@ -48,10 +48,31 @@ defmodule Nex.Agent.LLM.ProviderProfile do
     end
   end
 
+  def default_api_key(:openai_codex_custom) do
+    case System.get_env("OPENAI_CODEX_API_KEY") do
+      key when is_binary(key) and key != "" ->
+        key
+
+      _ ->
+        case Codex.resolve_custom_api_key() do
+          {:ok, key} -> key
+          _ -> nil
+        end
+    end
+  end
+
   def default_api_key(_), do: nil
 
   @spec default_base_url(atom()) :: String.t() | nil
   def default_base_url(:openai_codex), do: Codex.default_base_url()
+
+  def default_base_url(:openai_codex_custom) do
+    case Codex.resolve_custom_base_url() do
+      {:ok, url} -> url
+      _ -> nil
+    end
+  end
+
   def default_base_url(_), do: nil
 
   @spec prepare_messages_and_options([map()], t(), keyword()) :: {[map()], keyword()}
@@ -76,6 +97,17 @@ defmodule Nex.Agent.LLM.ProviderProfile do
         _ ->
           options
       end
+
+    {filtered_messages, prepared_options}
+  end
+
+  def prepare_messages_and_options(messages, %__MODULE__{provider: :openai_codex_custom}, options) do
+    {instructions, filtered_messages} = extract_system_instructions(messages)
+
+    prepared_options =
+      options
+      |> Keyword.put(:system_prompt, instructions)
+      |> Keyword.put(:provider_options, Keyword.delete(Keyword.get(options, :provider_options, []), :instructions))
 
     {filtered_messages, prepared_options}
   end
@@ -113,6 +145,14 @@ defmodule Nex.Agent.LLM.ProviderProfile do
     |> Keyword.delete(:access_token)
   end
 
+  def provider_options(%__MODULE__{provider: :openai_codex_custom}, options) do
+    options
+    |> Keyword.get(:provider_options, [])
+    |> Keyword.delete(:instructions)
+    |> Keyword.put(:auth_mode, :api_key)
+    |> Keyword.delete(:access_token)
+  end
+
   def provider_options(%__MODULE__{resolved_provider: :openrouter}, _options),
     do: [app_referer: @openrouter_referer, app_title: @openrouter_title]
 
@@ -120,7 +160,7 @@ defmodule Nex.Agent.LLM.ProviderProfile do
 
   @spec model_spec(t(), String.t()) :: String.t() | map()
   def model_spec(%__MODULE__{} = profile, model) when is_binary(model) do
-    if present?(profile.base_url) or profile.provider in [:openrouter, :ollama, :openai_codex] do
+    if present?(profile.base_url) or profile.provider in [:openrouter, :ollama, :openai_codex, :openai_codex_custom] do
       %{id: model, provider: profile.resolved_provider, base_url: profile.base_url}
     else
       "#{profile.resolved_provider}:#{model}"
@@ -170,11 +210,14 @@ defmodule Nex.Agent.LLM.ProviderProfile do
   defp normalize_provider(_), do: :anthropic
 
   defp resolved_provider(:openai_codex), do: :openai
+  defp resolved_provider(:openai_codex_custom), do: :openai
   defp resolved_provider(:ollama), do: :openai
   defp resolved_provider(provider), do: provider
 
   defp effective_base_url(:openai_codex, nil), do: @codex_base_url
   defp effective_base_url(:openai_codex, base_url), do: String.trim_trailing(base_url, "/")
+  defp effective_base_url(:openai_codex_custom, nil), do: codex_custom_base_url()
+  defp effective_base_url(:openai_codex_custom, base_url), do: String.trim_trailing(base_url, "/")
   defp effective_base_url(:openrouter, nil), do: "https://openrouter.ai/api/v1"
   defp effective_base_url(:ollama, nil), do: "http://localhost:11434/v1"
   defp effective_base_url(:ollama, base_url), do: normalize_ollama_base_url(base_url)
@@ -182,6 +225,7 @@ defmodule Nex.Agent.LLM.ProviderProfile do
 
   defp auth_mode(:openai_codex, @codex_base_url), do: :oauth
   defp auth_mode(:openai_codex, base_url) when is_binary(base_url), do: :api_key
+  defp auth_mode(:openai_codex_custom, _base_url), do: :api_key
   defp auth_mode(_provider, _base_url), do: nil
 
   defp maybe_put_keyword(opts, _key, false, _value), do: opts
@@ -196,5 +240,12 @@ defmodule Nex.Agent.LLM.ProviderProfile do
   defp normalize_ollama_base_url(base_url) do
     base_url = String.trim_trailing(base_url, "/")
     if String.ends_with?(base_url, "/v1"), do: base_url, else: base_url <> "/v1"
+  end
+
+  defp codex_custom_base_url do
+    case Codex.resolve_custom_base_url() do
+      {:ok, url} -> url
+      _ -> nil
+    end
   end
 end

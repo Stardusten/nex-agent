@@ -55,113 +55,123 @@ defmodule Nex.Agent.Channel.FeishuStreamConverterTest do
     :ok
   end
 
-  test "newmsg defers opening the next active card until a later push or finish" do
-    assert {:ok, converter} = StreamConverter.start("ou_123", %{})
-    assert {:ok, converter} = StreamConverter.push_text(converter, "one\n<newmsg/>\ntwo")
+  test "single newmsg splits into two cards" do
+    {:ok, c} = StreamConverter.start("ou_123", %{})
+    {:ok, c} = StreamConverter.push_text(c, "one\n\n<newmsg/>\n\ntwo")
+    {:ok, c} = StreamConverter.finish(c)
 
-    assert converter.active_card_id == nil
-    assert converter.active_text == ""
-    assert converter.pending_buffer == "two"
-
-    posts_before_finish = collect_http_posts([])
-    card_creates_before_finish = Enum.filter(posts_before_finish, fn {url, _body} -> url =~ "/cardkit/v1/cards" end)
-    assert length(card_creates_before_finish) == 1
-
-    assert {:ok, converter} = StreamConverter.finish(converter)
-
-    assert converter.active_text == "two"
-    assert converter.completed
-
-    posts = posts_before_finish ++ collect_http_posts([])
-    puts = collect_http_puts([])
-
-    assert Enum.any?(posts, fn {url, body} ->
-             url =~ "/cardkit/v1/cards" and
-               (body["data"] |> Jason.decode!() |> get_in(["body", "elements", Access.at(0), "content"])) ==
-                 "Thinking..."
-           end)
-
-    assert Enum.any?(posts, fn {url, body} ->
-             url =~ "/cardkit/v1/cards" and
-               (body["data"] |> Jason.decode!() |> get_in(["body", "elements", Access.at(0), "content"])) ==
-                 "two"
-           end)
-    refute Enum.any?(puts, fn {_url, body} ->
-             is_binary(body["content"]) and body["content"] =~ "<newmsg/>"
-           end)
-  end
-
-  test "newmsg split across flushes still rotates to the next card" do
-    assert {:ok, converter} = StreamConverter.start("ou_123", %{})
-    assert {:ok, converter} = StreamConverter.push_text(converter, "one\n\n<new")
-
-    assert converter.pending_buffer == "<new"
-    assert converter.active_text == "one\n\n"
-
-    assert {:ok, converter} = StreamConverter.push_text(converter, "msg/>\n\ntwo")
-
-    assert converter.active_card_id == nil
-    assert converter.pending_buffer == "two"
-
-    assert {:ok, converter} = StreamConverter.finish(converter)
-
-    assert converter.active_text == "two"
-    refute converter.active_text =~ "<newmsg/>"
-
-    posts = collect_http_posts([])
-
-    assert Enum.any?(posts, fn {url, body} ->
-             url =~ "/cardkit/v1/cards" and
-               (body["data"] |> Jason.decode!() |> get_in(["body", "elements", Access.at(0), "content"])) ==
-                 "two"
-           end)
-  end
-
-  test "newmsg inside fenced code block does not rotate card" do
-    assert {:ok, converter} = StreamConverter.start("ou_123", %{})
-
-    text = "```txt\n<newmsg/>\n```\nafter"
-    assert {:ok, converter} = StreamConverter.push_text(converter, text)
-    assert {:ok, converter} = StreamConverter.finish(converter)
-
-    assert converter.active_text == text
-
-    posts = collect_http_posts([])
-    card_creates = Enum.filter(posts, fn {url, _body} -> url =~ "/cardkit/v1/cards" end)
-    assert length(card_creates) == 1
-  end
-
-  test "newmsg split across chunks does not rotate when current line is not blank" do
-    assert {:ok, converter} = StreamConverter.start("ou_123", %{})
-    assert {:ok, converter} = StreamConverter.push_text(converter, "第三段。\n\n> 说明 `")
-    assert {:ok, converter} = StreamConverter.push_text(converter, "<newmsg/>")
-    assert {:ok, converter} = StreamConverter.finish(converter)
-
-    assert converter.active_text =~ "`<newmsg/>"
-
-    posts = collect_http_posts([])
-    card_creates = Enum.filter(posts, fn {url, _body} -> url =~ "/cardkit/v1/cards" end)
-    assert length(card_creates) == 1
-  end
-
-  test "newmsg after fenced code block rotates to a new card" do
-    assert {:ok, converter} = StreamConverter.start("ou_123", %{})
-
-    assert {:ok, converter} =
-             StreamConverter.push_text(
-               converter,
-               "第三段。\n\n## 引用和代码块\n\n> 如果这段能单独显示，\n> 说明 `<newmsg/>` 已经正常工作了。\n\n```bash\necho \"feishu markdown-like ir test\"\npwd\ndate\n```"
-             )
-
-    assert {:ok, converter} = StreamConverter.push_text(converter, "\n\n<newmsg/>\n\n第四段。\n\n## 表格测试\n")
-    assert {:ok, converter} = StreamConverter.finish(converter)
-
-    assert converter.active_text =~ "第四段。"
-    refute converter.active_text =~ "<newmsg/>"
+    assert c.active_text == "two"
+    assert c.completed
+    refute c.active_text =~ "<newmsg/>"
 
     posts = collect_http_posts([])
     card_creates = Enum.filter(posts, fn {url, _body} -> url =~ "/cardkit/v1/cards" end)
     assert length(card_creates) == 2
+  end
+
+  test "newmsg split across flush boundary still rotates card" do
+    {:ok, c} = StreamConverter.start("ou_123", %{})
+    # First chunk ends with partial "<newmsg/>" → held back
+    {:ok, c} = StreamConverter.push_text(c, "one\n\n<new")
+    assert c.pending_buffer == "\n<new"
+    assert c.active_text =~ "one"
+
+    # Second chunk completes the boundary → card rotated, "two" goes to new card
+    {:ok, c} = StreamConverter.push_text(c, "msg/>\n\ntwo")
+
+    {:ok, c} = StreamConverter.finish(c)
+    assert c.active_text == "two"
+    refute c.active_text =~ "<newmsg/>"
+
+    posts = collect_http_posts([])
+    card_creates = Enum.filter(posts, fn {url, _body} -> url =~ "/cardkit/v1/cards" end)
+    assert length(card_creates) == 2
+  end
+
+  test "newmsg after code block rotates card (no in_code_block tracking needed)" do
+    {:ok, c} = StreamConverter.start("ou_123", %{})
+    {:ok, c} = StreamConverter.push_text(c, "```json\n{\"key\": true}\n```\n\n<newmsg/>\n\nsecond")
+    {:ok, c} = StreamConverter.finish(c)
+
+    assert c.active_text == "second"
+
+    posts = collect_http_posts([])
+    card_creates = Enum.filter(posts, fn {url, _body} -> url =~ "/cardkit/v1/cards" end)
+    assert length(card_creates) == 2
+  end
+
+  test "multiple newmsgs with code blocks across flushes" do
+    {:ok, c} = StreamConverter.start("ou_123", %{})
+
+    {:ok, c} = StreamConverter.push_text(c, "# Card 1\n\n```bash\necho hi\n```")
+    {:ok, c} = StreamConverter.push_text(c, "\n\n<newmsg/>\n\n# Card 2\n\n```json\n{\"a\":1}")
+    {:ok, c} = StreamConverter.push_text(c, "\n```\n\n<newmsg/>\n\n# Card 3\nFinal.")
+    {:ok, c} = StreamConverter.finish(c)
+
+    assert c.active_text =~ "Card 3"
+    refute c.active_text =~ "<newmsg/>"
+
+    posts = collect_http_posts([])
+    card_creates = Enum.filter(posts, fn {url, _body} -> url =~ "/cardkit/v1/cards" end)
+    # Thinking... card reused for Card 1, then Card 2, then Card 3
+    assert length(card_creates) == 3
+  end
+
+  test "inline newmsg mention does not rotate" do
+    {:ok, c} = StreamConverter.start("ou_123", %{})
+    {:ok, c} = StreamConverter.push_text(c, "Use `<newmsg/>` to split messages.")
+    {:ok, c} = StreamConverter.finish(c)
+
+    assert c.active_text =~ "`<newmsg/>`"
+
+    posts = collect_http_posts([])
+    card_creates = Enum.filter(posts, fn {url, _body} -> url =~ "/cardkit/v1/cards" end)
+    assert length(card_creates) == 1
+  end
+
+  test "newmsg not on its own line does not rotate" do
+    {:ok, c} = StreamConverter.start("ou_123", %{})
+    {:ok, c} = StreamConverter.push_text(c, "some text <newmsg/> more text")
+    {:ok, c} = StreamConverter.finish(c)
+
+    assert c.active_text =~ "<newmsg/>"
+
+    posts = collect_http_posts([])
+    card_creates = Enum.filter(posts, fn {url, _body} -> url =~ "/cardkit/v1/cards" end)
+    assert length(card_creates) == 1
+  end
+
+  test "close_streaming_mode called on rotate and finish" do
+    {:ok, c} = StreamConverter.start("ou_123", %{})
+    {:ok, c} = StreamConverter.push_text(c, "one\n\n<newmsg/>\n\ntwo")
+    {:ok, c} = StreamConverter.finish(c)
+
+    assert c.completed
+
+    puts = collect_http_puts([])
+    settings_calls = Enum.filter(puts, fn {url, _body} -> url =~ "/settings" end)
+    # One for rotate (card 1), one for finish (card 2)
+    assert length(settings_calls) == 2
+  end
+
+  test "fail with active card appends error" do
+    {:ok, c} = StreamConverter.start("ou_123", %{})
+    {:ok, c} = StreamConverter.push_text(c, "partial content")
+    {:ok, c} = StreamConverter.fail(c, "something went wrong")
+
+    assert c.completed
+    assert c.active_text =~ "partial content"
+    assert c.active_text =~ "Error: something went wrong"
+  end
+
+  test "fail without active card creates error card" do
+    {:ok, c} = StreamConverter.start("ou_123", %{})
+    # Simulate: card rotated away, no active card
+    c = %{c | active_card_id: nil, active_text: ""}
+    {:ok, c} = StreamConverter.fail(c, "total failure")
+
+    assert c.completed
+    assert c.active_text == "Error: total failure"
   end
 
   defp collect_http_posts(acc) do
