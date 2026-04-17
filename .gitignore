@@ -78,6 +78,7 @@ yarn-error.log
 .dev/
 .chat/
 lib/dev/
-docs/
+docs/**/.DS_Store
+docs/.DS_Store
 vendors/
 .sysphus/
