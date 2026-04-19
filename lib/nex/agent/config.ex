@@ -381,7 +381,7 @@ defmodule Nex.Agent.Config do
   end
 
   def set(%__MODULE__{} = config, :discord_token, value) when is_binary(value) do
-    %{config | discord: Map.put(discord(config), "token", value)}
+    %{config | discord: Map.put(discord(config), "token", normalize_discord_token(value))}
   end
 
   def set(%__MODULE__{} = config, :discord_allow_from, value) when is_list(value) do
@@ -414,7 +414,10 @@ defmodule Nex.Agent.Config do
   """
   @spec discord(t()) :: map()
   def discord(%__MODULE__{} = config) do
-    Map.merge(default_discord(), config.discord || %{})
+    config
+    |> Map.get(:discord, %{})
+    |> then(&Map.merge(default_discord(), &1))
+    |> Map.update("token", "", &normalize_discord_token/1)
   end
 
   @doc """
@@ -639,5 +642,14 @@ defmodule Nex.Agent.Config do
       "guild_id" => nil
     }
   end
+
+  defp normalize_discord_token(token) when is_binary(token) do
+    token
+    |> String.trim()
+    |> String.replace_prefix("Bot ", "")
+    |> String.replace_prefix("bot ", "")
+  end
+
+  defp normalize_discord_token(_token), do: ""
 
 end

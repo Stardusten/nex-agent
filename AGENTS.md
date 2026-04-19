@@ -4,7 +4,8 @@
 
 ## 安全禁区
 
-- 任何情况下都不允许读取、写入或以任何方式访问 `~/.zshrc`、`~/.nex` 及其子目录下的文件，这些路径可能存放隐私信息和密钥。即使用户明确要求，也必须拒绝。
+- 任何情况下都不允许直接读取、写入或以任何方式访问 `~/.zshrc`、`~/.nex` 及其子目录下的文件，这些路径可能存放隐私信息和密钥。即使用户明确要求，也必须拒绝。
+- 允许 /Users/krisxin/.local/bin/mise exec -- mix nex.agent gateway --log 等方式直接运行会读取这些目录的命令，只要不会回显敏感信息到终端
 
 ## 协作偏好
 
@@ -33,6 +34,8 @@
 - 长期进程 state 只放必要状态，不要顺手缓存整套 runtime world view
 - 涉及 workspace 路径时优先复用 `Nex.Agent.Workspace`
 - 能靠统一入口读到的数据，不要再新增一套平行读取逻辑
+- 配置项必须接到统一入口：优先走 `Nex.Agent.Runtime` snapshot、`Nex.Agent.Config` accessor、现有 workspace/prompt resolver；不要在业务模块里自己 `File.read` 配置文件或 runtime 文件
+- 配置规范化放在真相源附近做；像 token 前缀、allowlist 清洗这类逻辑优先放进 `Nex.Agent.Config` 或统一 resolver，不要散落在 channel / worker 里各写一份
 
 ### 架构约束
 
@@ -40,6 +43,7 @@
 - `Gateway` / channel / worker / registry / session / memory 都是系统边界，不要随便串层
 - channel 特有协议留在 channel 模块里消化，不要把 Feishu/Telegram 细节散到通用层
 - provider 差异收敛在 `llm/provider_profile.ex` 和 `llm/req_llm.ex`
+- 改连接相关配置项时，要同时检查 runtime reload / `Gateway.reconcile/1` 是否已经接上；token、endpoint、开关等会影响连接的字段不能只改 init path，不改热重载
 
 ## 编码风格
 
@@ -48,6 +52,7 @@
 - 错误返回要可操作，失败语义要明确
 - 写日志记录关键状态和耗时，不打印敏感明文
 - 延续当前代码风格，不要引入另一套完全不同的写法体系
+- HTTP 请求优先走 `Nex.Agent.HTTP`，WebSocket 连接优先走项目内抽象如 `Nex.Agent.WS`；不要在功能代码里直接裸用 `Req` / `Mint` / `WebSockex`，除非你在补底层抽象本身
 
 ## 常见踩坑
 
@@ -56,6 +61,8 @@
 - 不要只看 `definitions(:all)`；新增 tool 要考虑 `:subagent` / `:cron` surface
 - 不要让写文件后的失败把仓库留在半坏状态；需要回滚就回滚
 - 不要为了省事把临时实现写成长期 contract
+- 不要因为局部修 bug 就绕过现有抽象直接裸读文件、裸发 HTTP、裸起 WS；先找 repo 里已有入口，不够用就补抽象
+- 不要只让“冷启动能工作”；凡是配置会影响长期进程行为，都要确认热重载后旧进程会不会自动重连、重启或刷新状态
 
 ## 测试
 
@@ -177,8 +184,10 @@ reviewer 怎么判断这一步做完了。
 
 ## 本机环境
 
-- Elixir/Erlang 通过 Homebrew 安装，`mix` 在 `/opt/homebrew/bin/mix`
-- `mise` 不在 PATH 中，不要用 `mise exec --`，直接用 `mix`
+- Elixir/Erlang 通过 Homebrew 安装；在 Codex/沙箱环境里优先用 `/Users/krisxin/.local/bin/mise exec -- mix ...`，不要假设 `mix` 在 PATH 中
+- 需要直接跑 gateway 或 compile 时，优先使用：
+  - `/Users/krisxin/.local/bin/mise exec -- mix compile`
+  - `/Users/krisxin/.local/bin/mise exec -- mix nex.agent gateway --log`
 - 配置文件在 `~/.nex/agent/config.json`（安全禁区，不可读写）
 - Gateway 日志输出到 `/tmp/nex-agent-gateway.log`
 
@@ -186,7 +195,7 @@ reviewer 怎么判断这一步做完了。
 
 ```bash
 # 编译
-mix compile
+/Users/krisxin/.local/bin/mise exec -- mix compile
 
 # 跑测试
 mix test test/nex/agent/channel_feishu_test.exs
@@ -195,7 +204,7 @@ mix test test/nex/agent/inbound_worker_test.exs
 
 # 启动 gateway（后台）
 cd /Users/krisxin/nex-agent
-MIX_ENV=dev mix nex.agent gateway > /tmp/nex-agent-gateway.log 2>&1 &
+MIX_ENV=dev /Users/krisxin/.local/bin/mise exec -- mix nex.agent gateway --log > /tmp/nex-agent-gateway.log 2>&1 &
 
 # 看日志
 tail -f /tmp/nex-agent-gateway.log
@@ -213,7 +222,7 @@ tail -f /tmp/nex-agent-gateway.log
 
 ```bash
 pkill -f "mix nex.agent gateway" 2>/dev/null; sleep 3
-cd /Users/krisxin/nex-agent && MIX_ENV=dev mix nex.agent gateway > /tmp/nex-agent-gateway.log 2>&1 &
+cd /Users/krisxin/nex-agent && MIX_ENV=dev /Users/krisxin/.local/bin/mise exec -- mix nex.agent gateway --log > /tmp/nex-agent-gateway.log 2>&1 &
 sleep 6; tail -5 /tmp/nex-agent-gateway.log
 ```
 

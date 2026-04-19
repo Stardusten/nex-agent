@@ -6,7 +6,7 @@ defmodule Nex.Agent.Channel.Feishu.WSClient do
   method=0 → control (ping/pong), method=1 → data (events).
   """
 
-  use WebSockex
+  use Nex.Agent.WS
 
   require Logger
 
@@ -16,7 +16,7 @@ defmodule Nex.Agent.Channel.Feishu.WSClient do
   def start_link(url, headers, parent_pid) do
     service_id = parse_service_id(url)
     state = %{parent: parent_pid, service_id: service_id}
-    WebSockex.start_link(url, __MODULE__, state, extra_headers: headers)
+    Nex.Agent.WS.start_link(url, __MODULE__, state, extra_headers: headers)
   end
 
   defp parse_service_id(url) do
@@ -32,14 +32,14 @@ defmodule Nex.Agent.Channel.Feishu.WSClient do
   @doc "Send a protobuf-encoded frame to the WS server."
   @spec send_frame(pid(), Frame.t()) :: :ok
   def send_frame(pid, %Frame{} = frame) when is_pid(pid) do
-    WebSockex.cast(pid, {:send_frame, frame})
+    Nex.Agent.WS.cast(pid, {:send_frame, frame})
   end
 
   @impl true
   def handle_connect(_conn, state) do
     Logger.info("[Feishu] WebSocket connected, service_id=#{state.service_id}")
     send(state.parent, {:feishu_ws_connected, self()})
-    WebSockex.cast(self(), :send_initial_ping)
+    Nex.Agent.WS.cast(self(), :send_initial_ping)
     {:ok, state}
   end
 
@@ -79,11 +79,6 @@ defmodule Nex.Agent.Channel.Feishu.WSClient do
   def handle_frame({:text, data}, state) when is_binary(data) do
     Logger.debug("[Feishu] Text frame (unexpected): #{data}")
     {:ok, state}
-  end
-
-  @impl true
-  def handle_frame({:ping, payload}, state) do
-    {:reply, {:pong, payload}, state}
   end
 
   @impl true
@@ -138,7 +133,7 @@ defmodule Nex.Agent.Channel.Feishu.WSClient do
           payload: <<>>
         }
 
-        send(self(), {:send_ws_frame, pong})
+        Nex.Agent.WS.cast(self(), {:send_frame, pong})
         state
 
       "pong" ->

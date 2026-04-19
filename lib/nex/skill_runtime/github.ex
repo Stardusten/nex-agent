@@ -1,7 +1,7 @@
 defmodule Nex.SkillRuntime.GitHub do
   @moduledoc false
 
-  alias Nex.Agent.Workspace
+  alias Nex.Agent.{HTTP, Workspace}
   alias Nex.SkillRuntime.{CatalogEntry, GitHubAuth, Package, Registry, Store, Validator}
 
   @spec sync_catalog(keyword()) :: {:ok, [CatalogEntry.t()]} | {:error, String.t()}
@@ -299,10 +299,7 @@ defmodule Nex.SkillRuntime.GitHub do
     if is_function(request_fun, 2) do
       request_fun.(url, req_opts)
     else
-      Req.get(
-        url,
-        Keyword.merge([retry: false, receive_timeout: 30_000, finch: Req.Finch], req_opts)
-      )
+      HTTP.get(url, Keyword.merge([receive_timeout: 30_000], req_opts))
     end
   end
 

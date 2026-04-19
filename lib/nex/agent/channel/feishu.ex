@@ -11,7 +11,7 @@ defmodule Nex.Agent.Channel.Feishu do
   use GenServer
   require Logger
 
-  alias Nex.Agent.{Bus, Config}
+  alias Nex.Agent.{Bus, Config, HTTP}
   alias Nex.Agent.Channel.Feishu.CardBuilder
   alias Nex.Agent.Channel.Feishu.{Frame, WSClient}
   alias Nex.Agent.Channel.Feishu.OutboundMedia
@@ -1731,12 +1731,10 @@ defmodule Nex.Agent.Channel.Feishu do
   end
 
   defp default_http_put(url, body, headers) do
-    Req.put(url,
+    HTTP.put(url,
       json: body,
       headers: headers,
-      receive_timeout: @default_send_timeout_ms,
-      retry: false,
-      finch: Req.Finch
+      receive_timeout: @default_send_timeout_ms
     )
   end
 
@@ -1772,31 +1770,25 @@ defmodule Nex.Agent.Channel.Feishu do
   defp normalize_feishu_response({:error, reason}), do: {:error, reason}
 
   defp default_http_post(url, body, headers) do
-    Req.post(url,
+    HTTP.post(url,
       json: body,
       headers: headers,
-      receive_timeout: @default_send_timeout_ms,
-      retry: false,
-      finch: Req.Finch
+      receive_timeout: @default_send_timeout_ms
     )
   end
 
   defp default_http_post_multipart(url, body, headers) do
-    Req.post(url,
+    HTTP.post(url,
       form_multipart: body,
       headers: headers,
-      receive_timeout: @default_send_timeout_ms,
-      retry: false,
-      finch: Req.Finch
+      receive_timeout: @default_send_timeout_ms
     )
   end
 
   defp default_http_get(url, headers) do
-    Req.get(url,
+    HTTP.get(url,
       headers: headers,
-      receive_timeout: @default_send_timeout_ms,
-      retry: false,
-      finch: Req.Finch
+      receive_timeout: @default_send_timeout_ms
     )
   end
 

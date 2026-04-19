@@ -199,7 +199,13 @@ defmodule Nex.Agent.Gateway do
 
   defp start_channels(config) do
     if Process.whereis(Nex.Agent.ChannelSupervisor) do
-      channel_specs(config)
+      specs = channel_specs(config)
+
+      Logger.info(
+        "[Gateway] Starting channels: #{inspect(Enum.map(specs, fn {module, _opts} -> module end))}"
+      )
+
+      specs
       |> Enum.each(fn spec ->
         case DynamicSupervisor.start_child(Nex.Agent.ChannelSupervisor, spec) do
           {:ok, _pid} ->
