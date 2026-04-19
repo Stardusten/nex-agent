@@ -136,6 +136,9 @@ defmodule Nex.Agent.InboundWorkerTest do
     assert payload.content =~ "/new - reset the current chat session"
     assert payload.content =~ "/stop - stop the current task and clear queued messages"
     assert payload.content =~ "/commands - list supported slash commands for this chat"
+    assert payload.content =~ "/status - show current owner run status immediately"
+    assert payload.content =~ "/queue <message> - queue a message for the next owner turn"
+    assert payload.content =~ "/btw <message> - ask a side question without interrupting the owner run"
     refute_received :llm_finished
   end
 
@@ -346,6 +349,213 @@ defmodule Nex.Agent.InboundWorkerTest do
 
     assert_receive {:prompt_agent, %Nex.Agent{} = agent, "hello"}, 1_000
     assert agent.session_key == "feishu:chat-start"
+  end
+
+  test "stale owner late result is dropped after stop and does not emit outbound", %{
+    workspace: workspace
+  } do
+    parent = self()
+    worker_name = String.to_atom("inbound_worker_stale_run_#{System.unique_integer([:positive])}")
+    blocker = make_ref()
+
+    prompt_fun = fn agent, prompt, opts ->
+      send(parent, {:prompt_started, prompt, Keyword.get(opts, :owner_run_id)})
+
+      receive do
+        ^blocker ->
+          {:ok, "#{prompt} done", %{agent | workspace: workspace}}
+      after
+        5_000 ->
+          {:error, :timeout, %{agent | workspace: workspace}}
+      end
+    end
+
+    start_supervised!({InboundWorker, name: worker_name, agent_prompt_fun: prompt_fun})
+
+    worker = Process.whereis(worker_name)
+
+    send(worker, {
+      :bus_message,
+      :inbound,
+      %Envelope{
+        channel: "feishu",
+        chat_id: "chat-stale",
+        sender_id: "tester",
+        text: "long",
+        message_type: :text,
+        raw: %{},
+        metadata: %{"workspace" => workspace},
+        media_refs: [],
+        attachments: []
+      }
+    })
+
+    assert_receive {:prompt_started, "long", owner_run_id}, 1_000
+    assert is_binary(owner_run_id)
+
+    send(worker, {
+      :bus_message,
+      :inbound,
+      %Envelope{
+        channel: "feishu",
+        chat_id: "chat-stale",
+        sender_id: "tester",
+        text: "/stop",
+        message_type: :text,
+        raw: %{},
+        metadata: %{"workspace" => workspace},
+        media_refs: [],
+        attachments: []
+      }
+    })
+
+    assert_receive {:bus_message, :feishu_outbound, stop_payload}, 1_000
+    assert stop_payload.content =~ "Stopped 1 task(s)"
+
+    send(worker, {:async_result, {Path.expand(workspace), "feishu:chat-stale"}, owner_run_id, {:ok, "late final", %Nex.Agent{workspace: workspace}}, %Envelope{
+      channel: "feishu",
+      chat_id: "chat-stale",
+      sender_id: "tester",
+      text: "long",
+      message_type: :text,
+      raw: %{},
+      metadata: %{"workspace" => workspace},
+      media_refs: [],
+      attachments: []
+    }})
+
+    refute_receive {:bus_message, :feishu_outbound, _payload}, 300
+  end
+
+  test "busy ordinary message becomes a follow-up reply and does not queue into owner run", %{
+    workspace: workspace
+  } do
+    parent = self()
+    worker_name = String.to_atom("inbound_worker_follow_up_busy_#{System.unique_integer([:positive])}")
+
+    prompt_fun = fn agent, prompt, opts ->
+      send(parent, {:prompt_started, prompt, Keyword.get(opts, :owner_run_id)})
+      Process.sleep(500)
+      {:ok, "owner done", %{agent | workspace: workspace}}
+    end
+
+    start_supervised!({InboundWorker, name: worker_name, agent_prompt_fun: prompt_fun})
+    worker = Process.whereis(worker_name)
+
+    send(worker, {
+      :bus_message,
+      :inbound,
+      %Envelope{
+        channel: "feishu",
+        chat_id: "chat-follow-up",
+        sender_id: "tester",
+        text: "start long run",
+        message_type: :text,
+        raw: %{},
+        metadata: %{"workspace" => workspace},
+        media_refs: [],
+        attachments: []
+      }
+    })
+
+    assert_receive {:prompt_started, "start long run", _owner_run_id}, 1_000
+
+    send(worker, {
+      :bus_message,
+      :inbound,
+      %Envelope{
+        channel: "feishu",
+        chat_id: "chat-follow-up",
+        sender_id: "tester",
+        text: "下载多少了？",
+        message_type: :text,
+        raw: %{},
+        metadata: %{"workspace" => workspace},
+        media_refs: [],
+        attachments: []
+      }
+    })
+
+    assert_receive {:bus_message, :feishu_outbound, payload}, 1_000
+    assert payload.metadata["_from_follow_up"] == true
+    assert payload.content =~ "Owner run is still"
+
+    assert_receive {:bus_message, :feishu_outbound, final_payload}, 1_000
+    assert final_payload.content == "owner done"
+  end
+
+  test "/status and /btw are handled without calling llm and /queue on idle starts next owner turn", %{
+    workspace: workspace
+  } do
+    parent = self()
+    worker_name = String.to_atom("inbound_worker_status_queue_btw_#{System.unique_integer([:positive])}")
+
+    prompt_fun = fn agent, prompt, _opts ->
+      send(parent, {:owner_prompt, prompt})
+      {:ok, "#{prompt} done", %{agent | workspace: workspace}}
+    end
+
+    start_supervised!({InboundWorker, name: worker_name, agent_prompt_fun: prompt_fun})
+    worker = Process.whereis(worker_name)
+
+    send(worker, {
+      :bus_message,
+      :inbound,
+      %Envelope{
+        channel: "feishu",
+        chat_id: "chat-status",
+        sender_id: "tester",
+        text: "/status",
+        message_type: :text,
+        raw: %{},
+        metadata: %{"workspace" => workspace},
+        media_refs: [],
+        attachments: []
+      }
+    })
+
+    assert_receive {:bus_message, :feishu_outbound, idle_payload}, 1_000
+    assert idle_payload.content == "Status: idle"
+
+    send(worker, {
+      :bus_message,
+      :inbound,
+      %Envelope{
+        channel: "feishu",
+        chat_id: "chat-status",
+        sender_id: "tester",
+        text: "/btw side question",
+        message_type: :text,
+        raw: %{},
+        metadata: %{"workspace" => workspace},
+        media_refs: [],
+        attachments: []
+      }
+    })
+
+    assert_receive {:bus_message, :feishu_outbound, btw_payload}, 1_000
+    assert btw_payload.content =~ "No owner run is active"
+    assert btw_payload.metadata["_from_follow_up"] == true
+
+    send(worker, {
+      :bus_message,
+      :inbound,
+      %Envelope{
+        channel: "feishu",
+        chat_id: "chat-status",
+        sender_id: "tester",
+        text: "/queue next task",
+        message_type: :text,
+        raw: %{},
+        metadata: %{"workspace" => workspace},
+        media_refs: [],
+        attachments: []
+      }
+    })
+
+    assert_receive {:bus_message, :feishu_outbound, queue_payload}, 1_000
+    assert queue_payload.content =~ "Queued for next owner turn"
+    assert_receive {:owner_prompt, "next task"}, 1_000
   end
 
   test "inbound workspace mismatch does not rewrite global runtime snapshot", %{

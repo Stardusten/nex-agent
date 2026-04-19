@@ -46,6 +46,33 @@ defmodule Nex.Agent.Command.Catalog do
       native_enabled?: true,
       handler: :commands,
       channels: ["feishu", "discord"]
+    },
+    %{
+      name: "status",
+      description: "show current owner run status immediately",
+      usage: "/status",
+      bypass_busy?: true,
+      native_enabled?: true,
+      handler: :status,
+      channels: ["feishu", "discord"]
+    },
+    %{
+      name: "queue",
+      description: "queue a message for the next owner turn",
+      usage: "/queue <message>",
+      bypass_busy?: true,
+      native_enabled?: true,
+      handler: :queue,
+      channels: ["feishu", "discord"]
+    },
+    %{
+      name: "btw",
+      description: "ask a side question without interrupting the owner run",
+      usage: "/btw <message>",
+      bypass_busy?: true,
+      native_enabled?: true,
+      handler: :btw,
+      channels: ["feishu", "discord"]
     }
   ]
 

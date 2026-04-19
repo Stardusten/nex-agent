@@ -56,14 +56,14 @@ defmodule Nex.Agent.Tool.WebSearch do
   end
 
   def execute(%{"query" => query, "count" => count}, opts) when is_integer(count) do
-    do_search(query, count, request_fun(opts))
+    do_search(query, count, request_fun(opts), cancel_ref(opts))
   end
 
   def execute(%{"query" => query}, opts) do
-    do_search(query, 5, request_fun(opts))
+    do_search(query, 5, request_fun(opts), cancel_ref(opts))
   end
 
-  defp do_search(query, count, http_get) do
+  defp do_search(query, count, http_get, cancel_ref) do
     params = %{
       "q" => query,
       "format" => "json",
@@ -74,6 +74,7 @@ defmodule Nex.Agent.Tool.WebSearch do
 
     req_opts =
       [params: params, redirect: true]
+      |> maybe_put_cancel_ref(cancel_ref)
       |> HTTP.maybe_add_proxy(@ddg_url)
 
     case http_get.(@ddg_url, req_opts) do
@@ -110,7 +111,13 @@ defmodule Nex.Agent.Tool.WebSearch do
   defp request_fun(%{http_get: http_get}) when is_function(http_get, 2), do: http_get
 
   defp request_fun(opts) when is_list(opts),
-    do: Keyword.get_lazy(opts, :http_get, fn -> &Req.get/2 end)
+    do: Keyword.get_lazy(opts, :http_get, fn -> &HTTP.get/2 end)
 
-  defp request_fun(_opts), do: &Req.get/2
+  defp request_fun(_opts), do: &HTTP.get/2
+
+  defp cancel_ref(opts) when is_map(opts), do: Map.get(opts, :cancel_ref)
+  defp cancel_ref(opts) when is_list(opts), do: Keyword.get(opts, :cancel_ref)
+  defp cancel_ref(_opts), do: nil
+  defp maybe_put_cancel_ref(opts, nil), do: opts
+  defp maybe_put_cancel_ref(opts, cancel_ref), do: Keyword.put(opts, :cancel_ref, cancel_ref)
 end

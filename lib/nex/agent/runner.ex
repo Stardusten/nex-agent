@@ -6,6 +6,7 @@ defmodule Nex.Agent.Runner do
   alias Nex.Agent.{
     Bus,
     ContextBuilder,
+    RunControl,
     MemoryUpdater,
     RequestTrace,
     Session,
@@ -58,7 +59,8 @@ defmodule Nex.Agent.Runner do
       Keyword.get(opts, :model) ||
         if(runtime_config, do: runtime_config.model, else: "claude-sonnet-4-20250514")
 
-    run_id = generate_run_id()
+    run_id = Keyword.get(opts, :run_id, generate_run_id())
+    cancel_ref = Keyword.get(opts, :cancel_ref, make_ref())
     request_trace_config = RequestTrace.config(opts)
 
     Logger.info("[Runner] Starting provider=#{provider} model=#{model}")
@@ -76,6 +78,7 @@ defmodule Nex.Agent.Runner do
       |> Keyword.put(:provider, provider)
       |> Keyword.put(:model, model)
       |> Keyword.put(:run_id, run_id)
+      |> Keyword.put(:cancel_ref, cancel_ref)
       |> maybe_put_opt(:runtime_snapshot, runtime_snapshot)
       |> maybe_put_opt(:runtime_version, runtime_snapshot && runtime_snapshot.version)
       |> Keyword.put(:request_trace, request_trace_config)
@@ -281,10 +284,13 @@ defmodule Nex.Agent.Runner do
     iter_start = System.monotonic_time(:millisecond)
     Logger.info("[Runner] === Iteration #{iteration + 1}/#{max_iterations} started ===")
 
-    if iteration >= max_iterations do
+    if cancelled?(opts) do
+      {:error, stream_result(:error, opts, nil, %{error: :cancelled}), session}
+    else
+      if iteration >= max_iterations do
       Logger.warning("[Runner] Max iterations reached (#{max_iterations})")
       {:error, :max_iterations_exceeded, session}
-    else
+      else
       # Time the LLM call
       llm_start = System.monotonic_time(:millisecond)
 
@@ -367,6 +373,7 @@ defmodule Nex.Agent.Runner do
           )
 
           {:error, stream_result(:error, opts, nil, %{error: reason}), session}
+      end
       end
     end
   end
@@ -824,30 +831,34 @@ defmodule Nex.Agent.Runner do
   defp normalize_chat_id(chat_id), do: to_string(chat_id)
 
   defp call_llm_with_retry(messages, opts, retries_left) do
-    case call_llm(messages, opts) do
-      {:ok, _} = success ->
-        success
+    if cancelled?(opts) do
+      {:error, :cancelled}
+    else
+      case call_llm(messages, opts) do
+        {:ok, _} = success ->
+          success
 
-      {:error, reason} = error ->
-        cond do
-          retries_left > 0 and transient_error?(reason) ->
-            Logger.warning("[Runner] LLM transient error, retrying in 2s: #{inspect(reason)}")
-            Process.sleep(2_000)
-            call_llm_with_retry(messages, opts, retries_left - 1)
+        {:error, reason} = error ->
+          cond do
+            retries_left > 0 and transient_error?(reason) ->
+              Logger.warning("[Runner] LLM transient error, retrying in 2s: #{inspect(reason)}")
+              sleep_with_cancel(2_000, opts)
+              call_llm_with_retry(messages, opts, retries_left - 1)
 
-          not Keyword.get(opts, :__recovered, false) ->
-            case attempt_recovery(reason, messages, opts) do
-              {:retry, new_messages, new_opts} ->
-                new_opts = Keyword.put(new_opts, :__recovered, true)
-                call_llm_with_retry(new_messages, new_opts, 0)
+            not Keyword.get(opts, :__recovered, false) ->
+              case attempt_recovery(reason, messages, opts) do
+                {:retry, new_messages, new_opts} ->
+                  new_opts = Keyword.put(new_opts, :__recovered, true)
+                  call_llm_with_retry(new_messages, new_opts, 0)
 
-              :give_up ->
-                error
-            end
+                :give_up ->
+                  error
+              end
 
-          true ->
-            error
-        end
+            true ->
+              error
+          end
+      end
     end
   end
 
@@ -977,6 +988,7 @@ defmodule Nex.Agent.Runner do
   defp call_llm(messages, opts) do
     tools =
       case Keyword.get(opts, :tools_filter) do
+        :follow_up -> registry_definitions(:follow_up, opts)
         :subagent -> registry_definitions(:subagent, opts)
         :cron -> registry_definitions(:cron, opts)
         _ -> registry_definitions(:all, opts)
@@ -1052,6 +1064,9 @@ defmodule Nex.Agent.Runner do
 
   defp snapshot_tool_definitions(%Snapshot{} = snapshot, :subagent),
     do: snapshot.tools.definitions_subagent
+
+  defp snapshot_tool_definitions(%Snapshot{} = snapshot, :follow_up),
+    do: snapshot.tools.definitions_follow_up
 
   defp snapshot_tool_definitions(%Snapshot{} = snapshot, :cron),
     do: snapshot.tools.definitions_cron
@@ -1131,20 +1146,24 @@ defmodule Nex.Agent.Runner do
       indexed_calls
       |> Task.async_stream(
         fn {tool_call_id, tool_name, args} ->
-          parsed_args = parse_args(args)
-          Logger.info("[Runner] Executing tool: #{tool_name}(#{inspect(parsed_args)})")
-          tool_started_at = System.monotonic_time(:millisecond)
+          if cancelled?(opts) do
+            {tool_call_id, tool_name, "Error: cancelled", parse_args(args)}
+          else
+            parsed_args = parse_args(args)
+            Logger.info("[Runner] Executing tool: #{tool_name}(#{inspect(parsed_args)})")
+            tool_started_at = System.monotonic_time(:millisecond)
 
-          result = execute_tool(tool_name, parsed_args, ctx)
-          truncated = truncate_result(result)
-          tool_duration_ms = System.monotonic_time(:millisecond) - tool_started_at
+            result = execute_tool(tool_name, parsed_args, ctx)
+            truncated = truncate_result(result)
+            tool_duration_ms = System.monotonic_time(:millisecond) - tool_started_at
 
-          Logger.info(
-            "[Runner] Tool completed: #{tool_name} duration_ms=#{tool_duration_ms} " <>
-              "result_preview=#{inspect(String.slice(render_text(truncated), 0, 160))}"
-          )
+            Logger.info(
+              "[Runner] Tool completed: #{tool_name} duration_ms=#{tool_duration_ms} " <>
+                "result_preview=#{inspect(String.slice(render_text(truncated), 0, 160))}"
+            )
 
-          {tool_call_id, tool_name, truncated, parsed_args}
+            {tool_call_id, tool_name, truncated, parsed_args}
+          end
         end,
         ordered: true,
         timeout: 120_000,
@@ -1206,7 +1225,10 @@ defmodule Nex.Agent.Runner do
   def parse_tool_arguments(args), do: parse_args(args)
 
   defp execute_tool(tool_name, args, ctx) do
-    if String.starts_with?(tool_name, "skill_run__") do
+    if cancelled_ctx?(ctx) do
+      "Error: cancelled"
+    else
+      if String.starts_with?(tool_name, "skill_run__") do
       case SkillRuntime.execute_ephemeral_tool(tool_name, args, ctx) do
         {:ok, result} when is_binary(result) -> result
         {:ok, result} when is_map(result) -> Jason.encode!(result, pretty: true)
@@ -1266,6 +1288,7 @@ defmodule Nex.Agent.Runner do
         "Error: tool registry unavailable"
       end
     end
+    end
   end
 
   defp build_tool_ctx(opts) do
@@ -1273,6 +1296,8 @@ defmodule Nex.Agent.Runner do
       channel: Keyword.get(opts, :channel),
       chat_id: Keyword.get(opts, :chat_id),
       session_key: Keyword.get(opts, :session_key),
+      run_id: Keyword.get(opts, :run_id),
+      cancel_ref: Keyword.get(opts, :cancel_ref),
       provider: Keyword.get(opts, :provider),
       model: Keyword.get(opts, :model),
       api_key: Keyword.get(opts, :api_key),
@@ -1825,6 +1850,40 @@ defmodule Nex.Agent.Runner do
     end
   end
 
+  defp cancelled?(opts) do
+    case Keyword.get(opts, :cancel_ref) do
+      ref when is_reference(ref) -> RunControl.cancelled?(ref)
+      _ -> false
+    end
+  end
+
+  defp cancelled_ctx?(ctx) do
+    case Map.get(ctx, :cancel_ref) do
+      ref when is_reference(ref) -> RunControl.cancelled?(ref)
+      _ -> false
+    end
+  end
+
+  defp sleep_with_cancel(timeout_ms, opts) do
+    started_at = System.monotonic_time(:millisecond)
+    do_sleep_with_cancel(timeout_ms, started_at, opts)
+  end
+
+  defp do_sleep_with_cancel(timeout_ms, started_at, opts) do
+    cond do
+      cancelled?(opts) ->
+        :ok
+
+      System.monotonic_time(:millisecond) - started_at >= timeout_ms ->
+        :ok
+
+      true ->
+        Process.sleep(50)
+        do_sleep_with_cancel(timeout_ms, started_at, opts)
+    end
+  end
+
+  defp format_stream_error(:cancelled), do: "cancelled"
   defp format_stream_error(reason) when is_binary(reason), do: reason
   defp format_stream_error(reason), do: inspect(reason)
 end

@@ -10,3 +10,4 @@
 - [Phase 5 IM Inbound Architecture And Media Projection](./phase5-im-inbound-architecture-and-media-projection.md)
 - [Phase 6 Feishu Outbound Official Format And Media Send](./phase6-feishu-outbound-official-format-and-media-send.md)
 - [Phase 7 Feishu Streaming Converter Simplification](./phase7-feishu-streaming-converter-simplification.md)
+- [Phase 8 Session Run Control And Busy Follow-up](./phase8-session-run-control-and-followup.md)

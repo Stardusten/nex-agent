@@ -7,6 +7,8 @@ defmodule Nex.Agent.Tool.Registry do
   use GenServer
   require Logger
 
+  alias Nex.Agent.FollowUp
+
   @default_tools [
     Nex.Agent.Tool.Read,
     Nex.Agent.Tool.Write,
@@ -80,6 +82,11 @@ defmodule Nex.Agent.Tool.Registry do
     GenServer.call(__MODULE__, {:execute, name, args, ctx}, 120_000)
   end
 
+  @doc "Cancel active tool tasks for a run."
+  def cancel_run(run_id) when is_binary(run_id) do
+    GenServer.call(__MODULE__, {:cancel_run, run_id})
+  end
+
   @doc "List all registered tool names."
   def list do
     GenServer.call(__MODULE__, :list)
@@ -114,7 +121,7 @@ defmodule Nex.Agent.Tool.Registry do
       "[Registry] Started with #{map_size(tools)} tools: #{inspect(Map.keys(tools) |> Enum.sort())}"
     )
 
-    {:ok, %{tools: tools}}
+    {:ok, %{tools: tools, active_runs: %{}}}
   end
 
   @impl true
@@ -195,29 +202,46 @@ defmodule Nex.Agent.Tool.Registry do
          state}
 
       module ->
-        Task.Supervisor.start_child(Nex.Agent.TaskSupervisor, fn ->
-          result =
-            try do
-              module.execute(args, ctx)
-            rescue
-              e ->
-                {:error,
-                 "Tool #{name} crashed: #{Exception.message(e)}. [Analyze the error and try a different approach.]"}
-            catch
-              :exit, {:timeout, _} ->
-                {:error,
-                 "Tool #{name} timed out. [Analyze the error and try a different approach.]"}
+        run_id = run_id_from_ctx(ctx)
+        server = self()
 
-              kind, reason ->
-                {:error,
-                 "Tool #{name} failed: #{kind} #{inspect(reason)}. [Analyze the error and try a different approach.]"}
-            end
+        {:ok, pid} =
+          Task.Supervisor.start_child(Nex.Agent.TaskSupervisor, fn ->
+            result =
+              try do
+                module.execute(args, ctx)
+              rescue
+                e ->
+                  {:error,
+                   "Tool #{name} crashed: #{Exception.message(e)}. [Analyze the error and try a different approach.]"}
+              catch
+                :exit, {:timeout, _} ->
+                  {:error,
+                   "Tool #{name} timed out. [Analyze the error and try a different approach.]"}
 
-          GenServer.reply(from, result)
-        end)
+                kind, reason ->
+                  {:error,
+                   "Tool #{name} failed: #{kind} #{inspect(reason)}. [Analyze the error and try a different approach.]"}
+              end
+
+            send(server, {:tool_finished, run_id, self(), from, result})
+          end)
+
+        state =
+          if is_binary(run_id) do
+            put_in(state.active_runs[run_id], track_tool_pid(Map.get(state.active_runs, run_id), pid))
+          else
+            state
+          end
 
         {:noreply, state}
     end
+  end
+
+  def handle_call({:cancel_run, run_id}, _from, state) do
+    pids = Map.get(state.active_runs, run_id, MapSet.new())
+    Enum.each(pids, &Process.exit(&1, :kill))
+    {:reply, :ok, %{state | active_runs: Map.delete(state.active_runs, run_id)}}
   end
 
   @impl true
@@ -234,6 +258,24 @@ defmodule Nex.Agent.Tool.Registry do
   @impl true
   def handle_call({:get, name}, _from, %{tools: tools} = state) do
     {:reply, Map.get(tools, name), state}
+  end
+
+  @impl true
+  def handle_info({:tool_finished, run_id, pid, from, result}, state) do
+    GenServer.reply(from, result)
+
+    active_runs =
+      case run_id do
+        run_id when is_binary(run_id) ->
+          state.active_runs
+          |> Map.update(run_id, MapSet.new(), &MapSet.delete(&1, pid))
+          |> drop_empty_run(run_id)
+
+        _ ->
+          state.active_runs
+      end
+
+    {:noreply, %{state | active_runs: active_runs}}
   end
 
   # Helpers
@@ -455,6 +497,15 @@ defmodule Nex.Agent.Tool.Registry do
 
   defp filter_tools(tools, :all), do: tools
 
+  defp filter_tools(tools, :follow_up) do
+    Enum.filter(tools, fn {_name, module} ->
+      module
+      |> then(& &1.definition())
+      |> normalize_definition()
+      |> FollowUp.allowed_tool_definition?()
+    end)
+  end
+
   defp filter_tools(tools, :cron) do
     Enum.filter(tools, fn {name, _module} -> name in @cron_tools end)
   end
@@ -471,5 +522,21 @@ defmodule Nex.Agent.Tool.Registry do
 
   defp filter_tools(tools, :subagent) do
     Enum.filter(tools, fn {name, _module} -> name in @subagent_tools end)
+  end
+
+  defp run_id_from_ctx(ctx) when is_map(ctx) do
+    Map.get(ctx, :run_id) || Map.get(ctx, "run_id")
+  end
+
+  defp track_tool_pid(nil, pid), do: MapSet.new([pid])
+  defp track_tool_pid(%MapSet{} = pids, pid), do: MapSet.put(pids, pid)
+
+  defp drop_empty_run(active_runs, run_id) do
+    case Map.get(active_runs, run_id) do
+      %MapSet{} = pids ->
+        if MapSet.size(pids) == 0, do: Map.delete(active_runs, run_id), else: active_runs
+
+      _ -> active_runs
+    end
   end
 end

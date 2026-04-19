@@ -24,6 +24,7 @@ defmodule Nex.Agent.Subagent do
           description: String.t(),
           status: :running | :completed | :failed | :cancelled,
           pid: pid() | nil,
+          owner_run_id: String.t() | nil,
           session_key: String.t() | nil,
           workspace: String.t() | nil,
           started_at: integer(),
@@ -98,6 +99,11 @@ defmodule Nex.Agent.Subagent do
     GenServer.call(__MODULE__, {:cancel_by_session, session_key, opts})
   end
 
+  @spec cancel_by_owner_run(String.t()) :: {:ok, non_neg_integer()}
+  def cancel_by_owner_run(owner_run_id) when is_binary(owner_run_id) do
+    GenServer.call(__MODULE__, {:cancel_by_owner_run, owner_run_id})
+  end
+
   # GenServer callbacks
 
   @impl true
@@ -110,6 +116,7 @@ defmodule Nex.Agent.Subagent do
     task_id = generate_id()
     label = opts[:label] || String.slice(task_description, 0, 30)
     session_key = opts[:session_key]
+    owner_run_id = opts[:owner_run_id]
     server = self()
 
     {:ok, pid} =
@@ -125,6 +132,7 @@ defmodule Nex.Agent.Subagent do
       description: task_description,
       status: :running,
       pid: pid,
+      owner_run_id: owner_run_id,
       session_key: session_key,
       workspace: opts[:workspace],
       started_at: System.system_time(:second),
@@ -171,6 +179,22 @@ defmodule Nex.Agent.Subagent do
       Enum.reduce(state.tasks, {0, state.tasks}, fn {id, task}, {count, tasks} ->
         if task.session_key == session_key and workspace_match?(task.workspace, workspace) and
              task.status == :running do
+          if task.pid, do: Process.exit(task.pid, :kill)
+          updated = %{task | status: :cancelled, completed_at: System.system_time(:second)}
+          {count + 1, Map.put(tasks, id, updated)}
+        else
+          {count, tasks}
+        end
+      end)
+
+    {:reply, {:ok, cancelled}, %{state | tasks: new_tasks}}
+  end
+
+  @impl true
+  def handle_call({:cancel_by_owner_run, owner_run_id}, _from, state) do
+    {cancelled, new_tasks} =
+      Enum.reduce(state.tasks, {0, state.tasks}, fn {id, task}, {count, tasks} ->
+        if task.owner_run_id == owner_run_id and task.status == :running do
           if task.pid, do: Process.exit(task.pid, :kill)
           updated = %{task | status: :cancelled, completed_at: System.system_time(:second)}
           {count + 1, Map.put(tasks, id, updated)}

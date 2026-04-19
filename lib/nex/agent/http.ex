@@ -1,6 +1,93 @@
 defmodule Nex.Agent.HTTP do
   @moduledoc false
 
+  alias Nex.Agent.RunControl
+
+  @type proxy_tuple :: {:http | :https, String.t(), :inet.port_number(), keyword()}
+  @type req_method :: :get | :post | :put | :patch | :delete
+
+  @default_req_opts [retry: false, receive_timeout: 30_000, finch: Req.Finch]
+  @cancel_poll_ms 50
+
+  @spec request(req_method(), String.t(), keyword()) :: {:ok, term()} | {:error, term()}
+  def request(method, url, opts \\ []) when method in [:get, :post, :put, :patch, :delete] do
+    opts =
+      @default_req_opts
+      |> Keyword.merge(opts)
+      |> maybe_add_proxy(url)
+      |> normalize_req_transport_opts()
+
+    run_request(request_fun(method), url, opts)
+  end
+
+  @spec get(String.t(), keyword()) :: {:ok, term()} | {:error, term()}
+  def get(url, opts \\ []), do: request(:get, url, opts)
+
+  @spec post(String.t(), keyword()) :: {:ok, term()} | {:error, term()}
+  def post(url, opts \\ []), do: request(:post, url, opts)
+
+  @spec put(String.t(), keyword()) :: {:ok, term()} | {:error, term()}
+  def put(url, opts \\ []), do: request(:put, url, opts)
+
+  @spec patch(String.t(), keyword()) :: {:ok, term()} | {:error, term()}
+  def patch(url, opts \\ []), do: request(:patch, url, opts)
+
+  @spec delete(String.t(), keyword()) :: {:ok, term()} | {:error, term()}
+  def delete(url, opts \\ []), do: request(:delete, url, opts)
+
+  defp normalize_req_transport_opts(opts) do
+    if Keyword.has_key?(opts, :connect_options) do
+      Keyword.delete(opts, :finch)
+    else
+      opts
+    end
+  end
+
+  defp request_fun(method) do
+    Application.get_env(:nex_agent, :"http_test_req_#{method}") ||
+      case method do
+        :get -> &Req.get/2
+        :post -> &Req.post/2
+        :put -> &Req.put/2
+        :patch -> &Req.patch/2
+        :delete -> &Req.delete/2
+      end
+  end
+
+  defp run_request(request_fun, url, opts) do
+    timeout = Keyword.get(opts, :receive_timeout, 30_000)
+    cancel_ref = Keyword.get(opts, :cancel_ref)
+    task = Task.async(fn -> request_fun.(url, opts) end)
+
+    wait_request(task, timeout, cancel_ref, System.monotonic_time(:millisecond))
+  end
+
+  defp wait_request(task, timeout_ms, cancel_ref, started_at_ms) do
+    cond do
+      cancelled?(cancel_ref) ->
+        Task.shutdown(task, :brutal_kill)
+        {:error, :cancelled}
+
+      System.monotonic_time(:millisecond) - started_at_ms >= timeout_ms ->
+        case Task.shutdown(task, :brutal_kill) do
+          {:ok, result} -> result
+          _ -> {:error, :timeout}
+        end
+
+      true ->
+        case Task.yield(task, @cancel_poll_ms) do
+          {:ok, result} ->
+            result
+
+          nil ->
+            wait_request(task, timeout_ms, cancel_ref, started_at_ms)
+        end
+    end
+  end
+
+  defp cancelled?(ref) when is_reference(ref), do: RunControl.cancelled?(ref)
+  defp cancelled?(_ref), do: false
+
   @spec maybe_add_proxy(Keyword.t(), String.t() | URI.t()) :: Keyword.t()
   def maybe_add_proxy(opts, url_or_uri) do
     case proxy_tuple_for(url_or_uri) do
@@ -12,20 +99,26 @@ defmodule Nex.Agent.HTTP do
     end
   end
 
-  defp proxy_tuple_for(url) when is_binary(url), do: url |> URI.parse() |> proxy_tuple_for()
+  @spec proxy_tuple_for(String.t() | URI.t()) :: proxy_tuple() | nil
+  def proxy_tuple_for(url) when is_binary(url), do: url |> URI.parse() |> proxy_tuple_for()
 
-  defp proxy_tuple_for(%URI{scheme: scheme, host: host} = uri)
-       when scheme in ["http", "https"] and is_binary(host) and host != "" do
+  def proxy_tuple_for(%URI{scheme: scheme, host: host} = uri)
+      when scheme in ["http", "https", "ws", "wss"] and is_binary(host) and host != "" do
     if no_proxy_uri?(uri) do
       nil
     else
       scheme
+      |> proxy_scheme()
       |> proxy_url_for_scheme()
       |> parse_proxy_tuple()
     end
   end
 
-  defp proxy_tuple_for(_), do: nil
+  def proxy_tuple_for(_), do: nil
+
+  defp proxy_scheme("wss"), do: "https"
+  defp proxy_scheme("ws"), do: "http"
+  defp proxy_scheme(scheme), do: scheme
 
   defp proxy_url_for_scheme("https") do
     first_present_env([

@@ -9,7 +9,7 @@ defmodule Nex.Agent.Channel.Discord do
 
       %{
         "enabled" => true,
-        "token" => "Bot MTIz...",       # Bot token (with "Bot " prefix)
+        "token" => "MTIz...",           # Raw bot token (without "Bot " prefix)
         "allow_from" => ["channel_id"], # Allowed channel IDs (empty = all)
         "guild_id" => nil               # Optional: restrict to a guild
       }
@@ -18,7 +18,8 @@ defmodule Nex.Agent.Channel.Discord do
   use GenServer
   require Logger
 
-  alias Nex.Agent.{Bus, Config}
+  alias Nex.Agent.{Bus, Config, HTTP}
+  alias Nex.Agent.Command.Invocation
   alias Nex.Agent.Channel.Discord.WSClient
   alias Nex.Agent.Inbound.Envelope
   alias Nex.Agent.IMIR.Renderers.Discord, as: DiscordRenderer
@@ -31,6 +32,11 @@ defmodule Nex.Agent.Channel.Discord do
   @eyes_emoji "👀"
   @done_emoji "✅"
   @error_emoji "❌"
+
+  @type thread_meta :: %{
+          parent_id: String.t(),
+          guild_id: String.t() | nil
+        }
 
   defstruct [
     :token,
@@ -47,7 +53,7 @@ defmodule Nex.Agent.Channel.Discord do
     :session_id,
     :resume_gateway_url,
     :bot_user_id,
-    known_threads: MapSet.new()
+    known_threads: %{}
   ]
 
   @type t :: %__MODULE__{
@@ -64,7 +70,8 @@ defmodule Nex.Agent.Channel.Discord do
           sequence: integer() | nil,
           session_id: String.t() | nil,
           resume_gateway_url: String.t() | nil,
-          bot_user_id: String.t() | nil
+          bot_user_id: String.t() | nil,
+          known_threads: %{optional(String.t()) => thread_meta()}
         }
 
   # Client API
@@ -238,6 +245,7 @@ defmodule Nex.Agent.Channel.Discord do
   @impl true
   def handle_info({:discord_ws_connected, pid}, state) do
     ref = Process.monitor(pid)
+    Logger.info("[Discord] WS connected pid=#{inspect(pid)}")
     {:noreply, %{state | ws_pid: pid, ws_ref: ref}}
   end
 
@@ -245,6 +253,10 @@ defmodule Nex.Agent.Channel.Discord do
   def handle_info({:discord_ws_message, pid, frame}, %{ws_pid: pid} = state) do
     case Jason.decode(frame) do
       {:ok, payload} ->
+        Logger.debug(
+          "[Discord] Gateway frame op=#{inspect(payload["op"])} t=#{inspect(payload["t"])} s=#{inspect(payload["s"])}"
+        )
+
         state = handle_gateway_event(payload, state)
         {:noreply, state}
 
@@ -255,10 +267,24 @@ defmodule Nex.Agent.Channel.Discord do
 
   @impl true
   def handle_info({:discord_ws_disconnected, pid, reason}, %{ws_pid: pid} = state) do
-    Logger.warning("[Discord] WebSocket closed: #{inspect(reason)}, reconnecting...")
     state = cancel_heartbeat(state)
-    Process.send_after(self(), :reconnect, @reconnect_delay_ms)
-    {:noreply, %{state | ws_pid: nil, ws_ref: nil}}
+    state = %{state | ws_pid: nil, ws_ref: nil}
+
+    case reason do
+      {:remote, 4004, _message} ->
+        Logger.error("[Discord] Gateway authentication failed (close code 4004), disabling channel")
+        {:noreply, %{state | enabled: false}}
+
+      {:remote, 1000, _message} ->
+        Logger.info("[Discord] WebSocket closed normally reason=#{inspect(reason)}, reconnecting...")
+        Process.send_after(self(), :reconnect, @reconnect_delay_ms)
+        {:noreply, state}
+
+      _ ->
+        Logger.warning("[Discord] WebSocket closed reason=#{inspect(reason)}, reconnecting...")
+        Process.send_after(self(), :reconnect, @reconnect_delay_ms)
+        {:noreply, state}
+    end
   end
 
   @impl true
@@ -314,10 +340,16 @@ defmodule Nex.Agent.Channel.Discord do
     jittered = trunc(interval * @heartbeat_jitter)
     timer = Process.send_after(self(), :heartbeat, jittered)
 
+    Logger.info(
+      "[Discord] HELLO heartbeat_interval=#{interval}ms session_present=#{not is_nil(state.session_id)} seq_present=#{not is_nil(state.sequence)}"
+    )
+
     state = %{state | heartbeat_interval: interval, heartbeat_timer: timer}
 
     if state.session_id && state.sequence do
       # Resume
+      Logger.info("[Discord] Sending RESUME seq=#{state.sequence}")
+
       send_ws(state.ws_pid, %{
         op: 6,
         d: %{
@@ -328,6 +360,8 @@ defmodule Nex.Agent.Channel.Discord do
       })
     else
       # Identify
+      Logger.info("[Discord] Sending IDENTIFY")
+
       send_ws(state.ws_pid, %{
         op: 2,
         d: %{
@@ -366,32 +400,46 @@ defmodule Nex.Agent.Channel.Discord do
     handle_message(data, state)
   end
 
+  defp handle_gateway_event(%{"op" => 0, "t" => "INTERACTION_CREATE", "d" => data, "s" => seq}, state) do
+    state = %{state | sequence: seq}
+    handle_interaction(data, state)
+  end
+
   defp handle_gateway_event(%{"op" => 0, "t" => "GUILD_CREATE", "d" => data, "s" => seq}, state) do
     state = %{state | sequence: seq}
     # Cache active thread IDs from guild payload (same as discord.py's Guild.__init__)
     threads = Map.get(data, "threads", [])
 
-    thread_ids =
-      threads
-      |> Enum.map(fn t -> Map.get(t, "id") end)
-      |> Enum.reject(&is_nil/1)
-      |> MapSet.new()
+    thread_parents =
+      Enum.reduce(threads, %{}, fn thread, acc ->
+        case Map.get(thread, "id") do
+          thread_id when is_binary(thread_id) and thread_id != "" ->
+            Map.put(acc, thread_id, thread_meta(thread))
+
+          _ ->
+            acc
+        end
+      end)
 
     guild_id = Map.get(data, "id", "?")
-    if MapSet.size(thread_ids) > 0 do
-      Logger.info("[Discord] GUILD_CREATE guild=#{guild_id} cached #{MapSet.size(thread_ids)} thread(s)")
+    if map_size(thread_parents) > 0 do
+      Logger.info("[Discord] GUILD_CREATE guild=#{guild_id} cached #{map_size(thread_parents)} thread(s)")
     end
 
-    %{state | known_threads: MapSet.union(state.known_threads, thread_ids)}
+    %{state | known_threads: Map.merge(state.known_threads, thread_parents)}
   end
 
   defp handle_gateway_event(%{"op" => 0, "t" => "THREAD_CREATE", "d" => data, "s" => seq}, state) do
     state = %{state | sequence: seq}
     thread_id = Map.get(data, "id")
+    meta = thread_meta(data)
 
     if thread_id do
-      Logger.debug("[Discord] THREAD_CREATE thread=#{thread_id}")
-      %{state | known_threads: MapSet.put(state.known_threads, thread_id)}
+      Logger.debug(
+        "[Discord] THREAD_CREATE thread=#{thread_id} parent=#{meta.parent_id} guild=#{inspect(meta.guild_id)}"
+      )
+
+      %{state | known_threads: Map.put(state.known_threads, thread_id, meta)}
     else
       state
     end
@@ -402,7 +450,7 @@ defmodule Nex.Agent.Channel.Discord do
     thread_id = Map.get(data, "id")
 
     if thread_id do
-      %{state | known_threads: MapSet.delete(state.known_threads, thread_id)}
+      %{state | known_threads: Map.delete(state.known_threads, thread_id)}
     else
       state
     end
@@ -410,6 +458,7 @@ defmodule Nex.Agent.Channel.Discord do
 
   defp handle_gateway_event(%{"op" => 11}, state) do
     # Heartbeat ACK
+    Logger.debug("[Discord] HEARTBEAT_ACK")
     state
   end
 
@@ -445,7 +494,8 @@ defmodule Nex.Agent.Channel.Discord do
       state
     else
       is_dm = is_nil(guild_id)
-      is_thread = MapSet.member?(state.known_threads, channel_id)
+      thread_meta = Map.get(state.known_threads, channel_id)
+      is_thread = is_map(thread_meta)
 
       mentions_bot =
         data
@@ -456,11 +506,14 @@ defmodule Nex.Agent.Channel.Discord do
         Regex.replace(~r/<@!?#{state.bot_user_id}>/, content, "")
         |> String.trim()
 
+      allowed_channel_id =
+        thread_parent_id(thread_meta) || Map.get(data, "parent_id") || channel_id
+
       cond do
         clean_content == "" ->
           state
 
-        not allowed?(channel_id, state.allow_from) ->
+        not allowed?(allowed_channel_id, state.allow_from) ->
           state
 
         is_dm ->
@@ -476,8 +529,15 @@ defmodule Nex.Agent.Channel.Discord do
             {:ok, thread_id} ->
               Logger.info("[Discord] Auto-created thread #{thread_id} for message #{message_id}")
               publish_inbound(thread_id, author_id, clean_content, data, state)
-              # THREAD_CREATE event will also add it, but add here for immediate availability
-              %{state | known_threads: MapSet.put(state.known_threads, thread_id)}
+              # THREAD_CREATE event will also add it, but cache parent immediately for allow_from.
+              %{
+                state
+                | known_threads:
+                    Map.put(state.known_threads, thread_id, %{
+                      parent_id: to_string(channel_id),
+                      guild_id: normalize_optional_string(guild_id)
+                    })
+              }
 
             {:error, reason} ->
               Logger.warning("[Discord] Failed to create thread: #{inspect(reason)}, replying in channel")
@@ -488,6 +548,76 @@ defmodule Nex.Agent.Channel.Discord do
         true ->
           state
       end
+    end
+  end
+
+  defp handle_interaction(data, state) do
+    type = Map.get(data, "type")
+
+    cond do
+      type == 2 ->
+        _ = acknowledge_interaction(data, state)
+        publish_interaction_command(data, state)
+        state
+
+      true ->
+        state
+    end
+  end
+
+  defp publish_interaction_command(data, state) do
+    channel_id = Map.get(data, "channel_id")
+    author_id = get_in(data, ["member", "user", "id"]) || get_in(data, ["user", "id"])
+    guild_id = Map.get(data, "guild_id")
+    name = get_in(data, ["data", "name"]) |> to_string()
+    options = get_in(data, ["data", "options"]) || []
+    args = Enum.flat_map(options, &interaction_option_values/1)
+    raw = "/" <> Enum.join([name | args], " ")
+    thread_meta = Map.get(state.known_threads, channel_id)
+    allowed_channel_id = thread_parent_id(thread_meta) || channel_id
+
+    if allowed?(allowed_channel_id, state.allow_from) do
+      Bus.publish(:inbound, %Envelope{
+        channel: "discord",
+        chat_id: to_string(channel_id),
+        sender_id: to_string(author_id),
+        text: raw,
+        command: %Invocation{name: name, args: args, raw: raw, source: :native},
+        message_type: :text,
+        raw: data,
+        metadata: %{
+          "guild_id" => guild_id,
+          "application_id" => Map.get(data, "application_id"),
+          "interaction_id" => Map.get(data, "id"),
+          "interaction_token" => Map.get(data, "token"),
+          "origin_channel_id" => channel_id,
+          "username" =>
+            get_in(data, ["member", "user", "username"]) || get_in(data, ["user", "username"])
+        },
+        media_refs: [],
+        attachments: []
+      })
+    end
+  end
+
+  defp interaction_option_values(%{"value" => value}) when is_binary(value), do: [value]
+  defp interaction_option_values(%{"value" => value}) when is_integer(value), do: [Integer.to_string(value)]
+  defp interaction_option_values(%{"value" => value}) when is_float(value), do: [to_string(value)]
+  defp interaction_option_values(%{"value" => value}) when is_boolean(value), do: [to_string(value)]
+  defp interaction_option_values(_option), do: []
+
+  defp acknowledge_interaction(data, state) do
+    interaction_id = Map.get(data, "id")
+    token = Map.get(data, "token")
+
+    if is_binary(interaction_id) and interaction_id != "" and is_binary(token) and token != "" do
+      state.http_post_fun.(
+        "#{@discord_api}/interactions/#{interaction_id}/#{token}/callback",
+        %{"type" => 5},
+        request_headers(%{}, state)
+      )
+    else
+      {:error, :invalid_interaction}
     end
   end
 
@@ -542,9 +672,38 @@ defmodule Nex.Agent.Channel.Discord do
 
   # REST API
 
-  defp do_send(%{chat_id: channel_id, content: content}, state) do
+  defp do_send(%{chat_id: channel_id, content: content, metadata: metadata}, state)
+       when is_map(metadata) do
     channel_id = to_string(channel_id || "")
 
+    case interaction_response_token(metadata) do
+      token when is_binary(token) ->
+        application_id = interaction_application_id(metadata) || state.bot_user_id
+
+        content
+        |> normalize_outbound_text()
+        |> Enum.join("\n\n")
+        |> render_discord_content()
+        |> edit_interaction_response(application_id, token, state)
+        |> case do
+          :ok -> :ok
+          {:error, reason} -> Logger.error("[Discord] Interaction response failed: #{inspect(reason)}")
+        end
+
+      _ ->
+        send_channel_message(channel_id, content, state)
+    end
+  end
+
+  defp do_send(%{chat_id: channel_id, content: content}, state) do
+    send_channel_message(to_string(channel_id || ""), content, state)
+  end
+
+  defp do_send(payload, _state) do
+    Logger.error("[Discord] Invalid outbound payload: #{inspect(payload)}")
+  end
+
+  defp send_channel_message(channel_id, content, state) do
     content
     |> normalize_outbound_text()
     |> Enum.each(fn segment ->
@@ -555,10 +714,6 @@ defmodule Nex.Agent.Channel.Discord do
         end
       end
     end)
-  end
-
-  defp do_send(payload, _state) do
-    Logger.error("[Discord] Invalid outbound payload: #{inspect(payload)}")
   end
 
   defp create_message(channel_id, content, metadata, state) do
@@ -621,8 +776,32 @@ defmodule Nex.Agent.Channel.Discord do
   defp normalize_outbound_text(_content), do: []
 
   defp request_headers(_metadata, state) do
-    [{"authorization", "Bot #{state.token}"}]
+    [{"authorization", discord_authorization(state.token)}]
   end
+
+  defp interaction_response_token(metadata) when is_map(metadata) do
+    Map.get(metadata, "interaction_token") || Map.get(metadata, :interaction_token)
+  end
+
+  defp interaction_application_id(metadata) when is_map(metadata) do
+    Map.get(metadata, "application_id") || Map.get(metadata, :application_id)
+  end
+
+  defp edit_interaction_response(content, application_id, token, state)
+       when is_binary(application_id) and application_id != "" do
+    state.http_patch_fun.(
+      "#{@discord_api}/webhooks/#{application_id}/#{token}/messages/@original",
+      %{"content" => content},
+      request_headers(%{}, state)
+    )
+    |> case do
+      {:ok, _response} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp edit_interaction_response(_content, _application_id, _token, _state),
+    do: {:error, :missing_application_id}
 
   defp chunk_message(text, max_len) do
     if String.length(text) <= max_len do
@@ -640,7 +819,7 @@ defmodule Nex.Agent.Channel.Discord do
       encoded_emoji = URI.encode(emoji)
       url = "#{@discord_api}/channels/#{channel_id}/messages/#{message_id}/reactions/#{encoded_emoji}/@me"
 
-      case default_http_put(url, [{"authorization", "Bot #{state.token}"}]) do
+      case default_http_put(url, [{"authorization", discord_authorization(state.token)}]) do
         :ok ->
           Logger.debug("[Discord] Added #{emoji} reaction to #{message_id}")
 
@@ -655,7 +834,7 @@ defmodule Nex.Agent.Channel.Discord do
       encoded_emoji = URI.encode(emoji)
       url = "#{@discord_api}/channels/#{channel_id}/messages/#{message_id}/reactions/#{encoded_emoji}/@me"
 
-      case default_http_delete(url, [{"authorization", "Bot #{state.token}"}]) do
+      case default_http_delete(url, [{"authorization", discord_authorization(state.token)}]) do
         :ok ->
           Logger.debug("[Discord] Removed #{emoji} reaction from #{message_id}")
 
@@ -669,7 +848,7 @@ defmodule Nex.Agent.Channel.Discord do
     Task.start(fn ->
       url = "#{@discord_api}/channels/#{channel_id}/typing"
 
-      case state.http_post_fun.(url, %{}, [{"authorization", "Bot #{state.token}"}]) do
+      case state.http_post_fun.(url, %{}, [{"authorization", discord_authorization(state.token)}]) do
         {:ok, _} -> :ok
         {:error, reason} -> Logger.warning("[Discord] Typing trigger failed: #{inspect(reason)}")
       end
@@ -677,7 +856,11 @@ defmodule Nex.Agent.Channel.Discord do
   end
 
   defp default_http_put(url, headers) do
-    case Req.put(url, headers: headers, retry: false) do
+    req_opts =
+      [headers: headers, retry: false, receive_timeout: 15_000]
+      |> HTTP.maybe_add_proxy(url)
+
+    case HTTP.put(url, req_opts) do
       {:ok, %{status: status}} when status in 200..299 ->
         :ok
 
@@ -696,7 +879,11 @@ defmodule Nex.Agent.Channel.Discord do
   end
 
   defp default_http_delete(url, headers) do
-    case Req.delete(url, headers: headers, retry: false) do
+    req_opts =
+      [headers: headers, retry: false, receive_timeout: 15_000]
+      |> HTTP.maybe_add_proxy(url)
+
+    case HTTP.delete(url, req_opts) do
       {:ok, %{status: status}} when status in 200..299 ->
         :ok
 
@@ -723,12 +910,18 @@ defmodule Nex.Agent.Channel.Discord do
         _ -> @gateway_url
       end
 
+    Logger.info(
+      "[Discord] Connecting gateway url=#{url} session_present=#{not is_nil(state.session_id)} seq_present=#{not is_nil(state.sequence)}"
+    )
+
     case WSClient.start_link(url, [], self()) do
       {:ok, pid} ->
         ref = Process.monitor(pid)
+        Logger.info("[Discord] Gateway transport started pid=#{inspect(pid)}")
         {:ok, %{state | ws_pid: pid, ws_ref: ref}}
 
       {:error, reason} ->
+        Logger.warning("[Discord] Gateway transport start failed: #{inspect(reason)}")
         {:error, reason}
     end
   end
@@ -763,8 +956,27 @@ defmodule Nex.Agent.Channel.Discord do
     to_string(channel_id) in allow_from
   end
 
+  defp thread_meta(data) when is_map(data) do
+    %{
+      parent_id: to_string(Map.get(data, "parent_id") || Map.get(data, "id") || ""),
+      guild_id: normalize_optional_string(Map.get(data, "guild_id"))
+    }
+  end
+
+  defp thread_parent_id(%{parent_id: parent_id}) when is_binary(parent_id) and parent_id != "",
+    do: parent_id
+
+  defp thread_parent_id(_meta), do: nil
+
+  defp normalize_optional_string(nil), do: nil
+  defp normalize_optional_string(value), do: to_string(value)
+
   defp default_http_post(url, body, headers) do
-    case Req.post(url, json: body, headers: headers, retry: false) do
+    req_opts =
+      [json: body, headers: headers, retry: false, receive_timeout: 15_000]
+      |> HTTP.maybe_add_proxy(url)
+
+    case HTTP.post(url, req_opts) do
       {:ok, %{status: status, body: response}} when status in 200..299 and is_map(response) ->
         {:ok, response}
 
@@ -783,7 +995,11 @@ defmodule Nex.Agent.Channel.Discord do
   end
 
   defp default_http_patch(url, body, headers) do
-    case Req.patch(url, json: body, headers: headers, retry: false) do
+    req_opts =
+      [json: body, headers: headers, retry: false, receive_timeout: 15_000]
+      |> HTTP.maybe_add_proxy(url)
+
+    case HTTP.patch(url, req_opts) do
       {:ok, %{status: status, body: response}} when status in 200..299 and is_map(response) ->
         {:ok, response}
 
@@ -800,4 +1016,7 @@ defmodule Nex.Agent.Channel.Discord do
         {:error, reason}
     end
   end
+
+  defp discord_authorization("Bot " <> token), do: "Bot #{token}"
+  defp discord_authorization(token), do: "Bot #{token}"
 end

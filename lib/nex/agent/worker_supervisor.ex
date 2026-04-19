@@ -16,6 +16,7 @@ defmodule Nex.Agent.WorkerSupervisor do
   def init(_opts) do
     children = [
       Nex.Agent.UpgradeManager,
+      Nex.Agent.RunControl,
       Nex.Agent.InboundWorker,
       Nex.Agent.Subagent
     ]

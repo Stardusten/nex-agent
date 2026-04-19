@@ -173,7 +173,7 @@ defmodule Nex.Agent.Channel.DiscordTest do
          "s" => 2,
          "d" => %{
            "id" => "guild-1",
-           "threads" => [%{"id" => "thread-1", "type" => 11, "guild_id" => "guild-1"}]
+           "threads" => [%{"id" => "thread-1", "type" => 11, "guild_id" => "guild-1", "parent_id" => "123"}]
          }
        })}
     )
@@ -202,4 +202,163 @@ defmodule Nex.Agent.Channel.DiscordTest do
     assert inbound.chat_id == "thread-1"
     assert inbound.text == "follow up question"
   end
+
+  test "message inside allowed thread uses parent channel for allow_from check", %{pid: pid} do
+    ws_pid = self()
+
+    :sys.replace_state(pid, fn state ->
+      %{
+        state
+        | ws_pid: ws_pid,
+          allow_from: ["123"],
+          known_threads: %{"thread-allowed" => %{parent_id: "123", guild_id: "guild-1"}}
+      }
+    end)
+
+    send(
+      pid,
+      {:discord_ws_message, ws_pid,
+       Jason.encode!(%{
+         "op" => 0,
+         "t" => "READY",
+         "s" => 1,
+         "d" => %{
+           "user" => %{"id" => "bot-1", "username" => "nex-bot"},
+           "session_id" => "session-1",
+           "resume_gateway_url" => "wss://gateway.discord.gg"
+         }
+       })}
+    )
+
+    send(
+      pid,
+      {:discord_ws_message, ws_pid,
+       Jason.encode!(%{
+         "op" => 0,
+         "t" => "MESSAGE_CREATE",
+         "s" => 2,
+         "d" => %{
+           "id" => "msg-thread-1",
+           "channel_id" => "thread-allowed",
+           "guild_id" => "guild-1",
+           "content" => "allowed follow up",
+           "author" => %{"id" => "user-1", "username" => "alice"},
+           "mentions" => []
+         }
+       })}
+    )
+
+    assert_receive {:bus_message, :inbound, inbound}
+    assert inbound.chat_id == "thread-allowed"
+    assert inbound.text == "allowed follow up"
+  end
+
+  test "native slash interaction is acknowledged and published as inbound command", %{pid: pid} do
+    ws_pid = self()
+
+    :sys.replace_state(pid, fn state ->
+      %{state | ws_pid: ws_pid, allow_from: ["123"], bot_user_id: "bot-1"}
+    end)
+
+    send(
+      pid,
+      {:discord_ws_message, ws_pid,
+       Jason.encode!(%{
+         "op" => 0,
+         "t" => "INTERACTION_CREATE",
+         "s" => 3,
+         "d" => %{
+           "id" => "interaction-1",
+           "token" => "interaction-token",
+           "type" => 2,
+           "channel_id" => "123",
+           "guild_id" => "guild-1",
+           "member" => %{"user" => %{"id" => "user-1", "username" => "alice"}},
+           "data" => %{
+             "name" => "status",
+             "options" => []
+           }
+         }
+       })}
+    )
+
+    assert_receive {:http_post, callback_url, %{"type" => 5}, _headers}
+    assert callback_url =~ "/interactions/interaction-1/interaction-token/callback"
+
+    assert_receive {:bus_message, :inbound, inbound}
+    assert inbound.channel == "discord"
+    assert inbound.chat_id == "123"
+    assert inbound.text == "/status"
+    assert %Nex.Agent.Command.Invocation{name: "status", source: :native} = inbound.command
+  end
+
+  test "discord outbound with interaction token edits original interaction response", %{pid: pid} do
+    send(
+      pid,
+      {:bus_message, :discord_outbound,
+       %{
+         chat_id: "123",
+         content: "Status: idle",
+         metadata: %{
+           "application_id" => "app-1",
+           "interaction_token" => "interaction-token"
+         }
+       }}
+    )
+
+    assert_receive {:http_patch, url, %{"content" => "Status: idle"}, headers}
+    assert url =~ "/webhooks/app-1/interaction-token/messages/@original"
+    assert {"authorization", "Bot discord-token"} in headers
+  end
+
+  test "normal websocket close keeps discord enabled and schedules reconnect", %{pid: pid} do
+    ws_pid = spawn(fn -> Process.sleep(:infinity) end)
+
+    :sys.replace_state(pid, fn state ->
+      %{state | ws_pid: ws_pid, ws_ref: Process.monitor(ws_pid), enabled: true}
+    end)
+
+    send(pid, {:discord_ws_disconnected, ws_pid, {:remote, 1000, ""}})
+    Process.sleep(10)
+
+    state = :sys.get_state(pid)
+    assert state.enabled == true
+    assert state.ws_pid == nil
+  end
+
+  test "authentication failure disables discord instead of reconnecting forever", %{pid: pid} do
+    ws_pid = spawn(fn -> Process.sleep(:infinity) end)
+
+    :sys.replace_state(pid, fn state ->
+      %{state | ws_pid: ws_pid, ws_ref: Process.monitor(ws_pid), enabled: true}
+    end)
+
+    send(pid, {:discord_ws_disconnected, ws_pid, {:remote, 4004, "Authentication failed."}})
+    Process.sleep(10)
+
+    state = :sys.get_state(pid)
+    assert state.enabled == false
+    assert state.ws_pid == nil
+  end
+
+  test "discord init strips Bot prefix from configured token" do
+    config = %Config{Config.default() | discord: %{"enabled" => false, "token" => "Bot discord-token"}}
+    {:ok, state, {:continue, :connect}} =
+      Discord.init(
+        config: config,
+        http_post_fun: fn _url, _body, _headers -> {:ok, %{"id" => "msg_1"}} end,
+        http_patch_fun: fn _url, _body, _headers -> {:ok, %{"id" => "patched"}} end
+      )
+
+    assert state.token == "discord-token"
+  end
+
+  test "deliver_message adds Bot prefix once when config token already contains Bot prefix", %{pid: pid} do
+    :sys.replace_state(pid, fn state -> %{state | token: "Bot discord-token", enabled: true} end)
+
+    assert {:ok, "msg_" <> _} = Discord.deliver_message("123", "hello", %{})
+    assert_receive {:http_post, _url, %{"content" => "hello"}, headers}
+    assert {"authorization", "Bot discord-token"} in headers
+  end
+
 end

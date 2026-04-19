@@ -27,6 +27,7 @@ defmodule Nex.Agent.Tool.SpawnTask do
 
     spawn_opts = [
       label: label,
+      owner_run_id: Map.get(ctx, :run_id),
       session_key: Map.get(ctx, :session_key),
       provider: Map.get(ctx, :provider),
       model: Map.get(ctx, :model),

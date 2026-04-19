@@ -21,6 +21,7 @@ defmodule Nex.Agent.Runtime.Snapshot do
           },
           tools: %{
             definitions_all: [map()],
+            definitions_follow_up: [map()],
             definitions_subagent: [map()],
             definitions_cron: [map()],
             hash: String.t()
@@ -47,6 +48,7 @@ defmodule Nex.Agent.Runtime.Snapshot do
             },
             tools: %{
               definitions_all: [],
+              definitions_follow_up: [],
               definitions_subagent: [],
               definitions_cron: [],
               hash: ""

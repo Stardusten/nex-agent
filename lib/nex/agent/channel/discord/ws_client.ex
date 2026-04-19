@@ -1,28 +1,30 @@
 defmodule Nex.Agent.Channel.Discord.WSClient do
   @moduledoc false
 
-  use WebSockex
+  use Nex.Agent.WS
 
   require Logger
 
   @spec start_link(String.t(), list(), pid()) :: {:ok, pid()} | {:error, term()}
   def start_link(url, headers, parent_pid) do
-    WebSockex.start_link(url, __MODULE__, %{parent: parent_pid}, extra_headers: headers)
+    Nex.Agent.WS.start_link(url, __MODULE__, %{parent: parent_pid}, extra_headers: headers)
   end
 
   @spec send_json(pid(), map()) :: :ok
   def send_json(pid, payload) when is_pid(pid) and is_map(payload) do
-    WebSockex.cast(pid, {:send_json, payload})
+    Nex.Agent.WS.cast(pid, {:send_json, payload})
   end
 
   @impl true
   def handle_connect(_conn, state) do
+    Logger.info("[DiscordWS] Transport connected parent=#{inspect(state.parent)}")
     send(state.parent, {:discord_ws_connected, self()})
     {:ok, state}
   end
 
   @impl true
   def handle_disconnect(%{reason: reason}, state) do
+    Logger.info("[DiscordWS] Transport disconnected reason=#{inspect(reason)}")
     send(state.parent, {:discord_ws_disconnected, self(), reason})
     {:ok, state}
   end
@@ -31,11 +33,6 @@ defmodule Nex.Agent.Channel.Discord.WSClient do
   def handle_frame({:text, data}, state) when is_binary(data) do
     send(state.parent, {:discord_ws_message, self(), data})
     {:ok, state}
-  end
-
-  @impl true
-  def handle_frame({:ping, payload}, state) do
-    {:reply, {:pong, payload}, state}
   end
 
   @impl true

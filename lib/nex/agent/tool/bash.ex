@@ -36,6 +36,7 @@ defmodule Nex.Agent.Tool.Bash do
 
   defp do_execute(command, args, ctx) do
     cwd = Map.get(ctx, :cwd, File.cwd!())
+    cancel_ref = Map.get(ctx, :cancel_ref)
 
     timeout =
       args
@@ -44,27 +45,53 @@ defmodule Nex.Agent.Tool.Bash do
 
     case Security.validate_command(command) do
       :ok ->
-        task =
-          Task.async(fn ->
-            System.cmd("sh", ["-c", command], stderr_to_stdout: true, cd: cwd)
-          end)
-
-        case Task.yield(task, timeout) do
-          {:ok, {output, exit_code}} ->
-            handle_command_result(output, exit_code)
-
-          {:exit, reason} ->
-            {:error, "Command execution failed: #{inspect(reason)}"}
-
-          nil ->
-            Task.shutdown(task, :brutal_kill)
-            {:error, "Command timed out after #{div(timeout, 1000)} seconds"}
-        end
+        run_cancellable_command(command, cwd, timeout, cancel_ref)
 
       {:error, reason} ->
         {:error, "Security: #{reason}"}
     end
   end
+
+  defp run_cancellable_command(command, cwd, timeout, cancel_ref) do
+    port =
+      Port.open({:spawn_executable, System.find_executable("sh") || "/bin/sh"}, [
+        :binary,
+        :exit_status,
+        :stderr_to_stdout,
+        args: ["-c", command],
+        cd: cwd
+      ])
+
+    started_at = System.monotonic_time(:millisecond)
+    collect_port_output(port, "", timeout, started_at, cancel_ref)
+  end
+
+  defp collect_port_output(port, output, timeout, started_at, cancel_ref) do
+    cond do
+      cancelled?(cancel_ref) ->
+        Port.close(port)
+        {:error, "Command cancelled"}
+
+      System.monotonic_time(:millisecond) - started_at >= timeout ->
+        Port.close(port)
+        {:error, "Command timed out after #{div(timeout, 1000)} seconds"}
+
+      true ->
+        receive do
+          {^port, {:data, chunk}} ->
+            collect_port_output(port, output <> chunk, timeout, started_at, cancel_ref)
+
+          {^port, {:exit_status, exit_code}} ->
+            handle_command_result(output, exit_code)
+        after
+          50 ->
+            collect_port_output(port, output, timeout, started_at, cancel_ref)
+        end
+    end
+  end
+
+  defp cancelled?(ref) when is_reference(ref), do: Nex.Agent.RunControl.cancelled?(ref)
+  defp cancelled?(_ref), do: false
 
   defp handle_command_result(output, exit_code) do
     safe_output = sanitize_shell_output(output)

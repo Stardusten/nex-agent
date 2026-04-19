@@ -142,6 +142,8 @@ defmodule Nex.Agent.Runtime do
              Keyword.put(opts, :workspace, workspace)
            ]),
          {:ok, definitions_all} <- call_builder(tool_definitions_builder(opts, state), [:all]),
+         {:ok, definitions_follow_up} <-
+           call_builder(tool_definitions_builder(opts, state), [:follow_up]),
          {:ok, definitions_subagent} <-
            call_builder(tool_definitions_builder(opts, state), [:subagent]),
          {:ok, definitions_cron} <- call_builder(tool_definitions_builder(opts, state), [:cron]),
@@ -160,9 +162,10 @@ defmodule Nex.Agent.Runtime do
 
       tools_data = %{
         definitions_all: definitions_all,
+        definitions_follow_up: definitions_follow_up,
         definitions_subagent: definitions_subagent,
         definitions_cron: definitions_cron,
-        hash: hash({definitions_all, definitions_subagent, definitions_cron})
+        hash: hash({definitions_all, definitions_follow_up, definitions_subagent, definitions_cron})
       }
 
       skills_data = %{

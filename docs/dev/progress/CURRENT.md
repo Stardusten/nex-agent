@@ -2,7 +2,7 @@
 
 ## Active Workstream
 
-Phase 1 runtime reload foundation is implemented. Phase 3 streaming delivery and Phase 3A architecture convergence are in place. Phase 4 is now closed as the text-IR foundation, Phase 4A is superseded, Phase 5 IM inbound architecture and media projection is implemented, and Phase 7 Feishu streaming converter simplification is now the active mainline. Phase 6 Feishu outbound official format/media send remains landed, but the active architecture correction is now phase7.
+Phase 1 runtime reload foundation is implemented. Phase 3 streaming delivery and Phase 3A architecture convergence are in place. Phase 4 is now closed as the text-IR foundation, Phase 4A is superseded, Phase 5 IM inbound architecture and media projection is implemented, and Phase 7 Feishu streaming converter simplification is in place. Phase 8 session run control and busy follow-up is now the active mainline. Phase 6 Feishu outbound official format/media send remains landed.
 
 ## Why This Is Active
 
@@ -53,7 +53,7 @@ Phase 6 established the current Feishu outbound baseline:
   - `<newmsg/>` still fails as a true streaming boundary
   - the current mainline needs a direct converter-based streaming rewrite, not more local patching
 
-Phase 7 is now the active workstream:
+Phase 7 established the current Feishu streaming correction:
 
 - delete the current over-generalized streaming middle layer for Feishu
 - restore the correct main model:
@@ -66,6 +66,16 @@ Phase 7 is now the active workstream:
 - the hard acceptance bar is now:
   - Feishu streaming multi-message works correctly under real credentials
 
+Phase 8 is now the active workstream:
+
+- add explicit session busy / idle state
+- ensure each session has at most one owner run
+- make busy ordinary messages default to follow-up turns, not owner run interruption
+- keep `/stop` as deterministic hard control that does not depend on LLM/tool choice
+- add `/queue`, `/btw`, and `/status` as user control commands
+- make cancellation run-id based so stale owner run results cannot write back after stop
+- push cancellation down into Runner / Tool.Registry / long tools so heavy logic can be stopped promptly
+
 ## Current Plan Pointer
 
 - [Phase 1 Runtime Reload Foundation](../task-plan/phase1-runtime-reload-foundation.md)
@@ -76,6 +86,7 @@ Phase 7 is now the active workstream:
 - [Phase 5 IM Inbound Architecture And Media Projection](../task-plan/phase5-im-inbound-architecture-and-media-projection.md)
 - [Phase 6 Feishu Outbound Official Format And Media Send](../task-plan/phase6-feishu-outbound-official-format-and-media-send.md)
 - [Phase 7 Feishu Streaming Converter Simplification](../task-plan/phase7-feishu-streaming-converter-simplification.md)
+- [Phase 8 Session Run Control And Busy Follow-up](../task-plan/phase8-session-run-control-and-followup.md)
 - [2026-04-16 IM Inbound Media Architecture](../findings/2026-04-16-im-inbound-media-architecture.md)
 - [2026-04-16 IM Streaming Capabilities And Delivery Contract](../findings/2026-04-16-im-streaming-capabilities.md)
 - [2026-04-16 Streaming Architecture Convergence](../findings/2026-04-16-streaming-architecture-convergence.md)
@@ -85,10 +96,10 @@ Phase 7 is now the active workstream:
 
 ## Immediate Next Steps
 
-1. **修 Finch 连接池泄漏**（P0）：并发为 1 时 `excess queuing for connections`。排查 `ReqLLM` streaming 连接释放——可能是 streaming response body 没消费完导致 Finch 持有连接不归还。
-2. **修飞书 `close_streaming_mode` 404**：对照飞书 CardKit 文档确认 `PATCH /cardkit/v1/cards/:card_id/settings` 的正确路径和请求格式。
-3. **LLM 空返回兜底**：当 `final_content` 为空时发 fallback 消息，避免 bot 沉默。
-4. 后续可返回 [Phase 6 Feishu Outbound Official Format And Media Send](../task-plan/phase6-feishu-outbound-official-format-and-media-send.md)。
+1. 跑更完整的 phase8 回归：`test/nex/agent/message_tool_test.exs`、`test/nex/agent/channel_discord_test.exs`、`test/nex/agent/channel_feishu_test.exs`。
+2. 用真实 gateway/manual 场景检查 `/status`、`/queue`、`/btw`、`/stop` 交互和 stop 后新 owner run 重启。
+3. 如需继续收紧 phase8，下一步是把 HTTP 级取消从 tool 层早退推进到底层 `Nex.Agent.HTTP` / provider path。
+4. Phase 7 留存问题仍需后续处理：Finch 连接池泄漏、飞书 `close_streaming_mode` 404、LLM 空返回兜底。
 
 ## Reviewer Verification
 
@@ -97,6 +108,9 @@ Phase 7 is now the active workstream:
 - `mix test test/nex/agent/channel_discord_test.exs`
 - `mix test test/nex/agent/inbound_worker_test.exs`
 - `mix test test/nex/agent/message_tool_test.exs`
+- `mix test test/nex/agent/run_control_test.exs`
+- `mix test test/nex/agent/bash_tool_test.exs`
+- `mix test test/nex/agent/runner_stream_test.exs`
 
 ## Explicit Non-Goals For The Current Mainline
 

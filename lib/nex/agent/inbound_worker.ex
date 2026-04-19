@@ -8,7 +8,7 @@ defmodule Nex.Agent.InboundWorker do
   use GenServer
   require Logger
 
-  alias Nex.Agent.{Bus, Command, Config, MemoryUpdater, Outbound, Runtime, Workspace}
+  alias Nex.Agent.{Bus, Command, Config, FollowUp, MemoryUpdater, Outbound, RunControl, Runtime, Workspace}
   alias Nex.Agent.Command.Invocation
   alias Nex.Agent.Channel.Discord
   alias Nex.Agent.Channel.Discord.StreamConverter, as: DiscordStreamConverter
@@ -39,6 +39,12 @@ defmodule Nex.Agent.InboundWorker do
   @type agent_prompt_fun :: (term(), String.t(), keyword() ->
                                {:ok, term(), term()} | {:error, term(), term()})
   @type agent_abort_fun :: (term() -> :ok | {:error, term()})
+  @type active_run_entry :: %{
+          pid: pid(),
+          run_id: String.t(),
+          workspace: String.t(),
+          session_key: String.t()
+        }
 
   @type t :: %__MODULE__{
           config: Config.t(),
@@ -46,7 +52,7 @@ defmodule Nex.Agent.InboundWorker do
           agent_prompt_fun: agent_prompt_fun(),
           agent_abort_fun: agent_abort_fun(),
           agents: %{String.t() => term()},
-          active_tasks: %{String.t() => pid()},
+          active_tasks: %{String.t() => active_run_entry()},
           agent_last_active: %{String.t() => integer()},
           pending_queue: %{term() => :queue.queue()},
           stream_states: %{term() => term()}
@@ -87,6 +93,7 @@ defmodule Nex.Agent.InboundWorker do
     session_key = session_key(channel, chat_id)
     workspace = Keyword.get(opts, :workspace, Workspace.root())
     key = runtime_key(workspace, session_key)
+    state = cancel_active_task(state, key, session_key, workspace, :reset_session)
     Nex.Agent.reset_session(channel, chat_id, workspace: workspace)
     {:reply, :ok, %{state | agents: Map.delete(state.agents, key)}}
   end
@@ -103,97 +110,109 @@ defmodule Nex.Agent.InboundWorker do
   end
 
   @impl true
-  def handle_info({:async_result, key, {:ok, result, updated_agent}, payload}, state) do
+  def handle_info({:async_result, key, run_id, {:ok, result, updated_agent}, payload}, state) do
     from_cron = Map.get(payload.metadata, "_from_cron") == true
     from_subagent = Map.get(payload.metadata, "_from_subagent") == true
 
-    # Don't overwrite user agent with cron's ephemeral agent
-    state =
-      if from_cron, do: state, else: put_in(state.agents[key], updated_agent)
+    if current_owner_run?(state, key, run_id) and RunControl.finish_owner(run_id, result) == :ok do
+      state =
+        if from_cron, do: state, else: put_in(state.agents[key], updated_agent)
 
-    state = %{state | active_tasks: Map.delete(state.active_tasks, key)}
-    {state, handled_by_stream?} = finalize_stream_session(state, key, {:ok, result})
+      state = clear_active_task(state, key, run_id)
+      {state, handled_by_stream?} =
+        finalize_stream_session(state, stream_key(key, run_id), {:ok, result})
 
-    unless from_cron or handled_by_stream? do
-      cond do
-        suppress_outbound?(result) and empty_content?(result) ->
-          publish_outbound(payload, @empty_message_text)
+      unless from_cron or handled_by_stream? do
+        cond do
+          suppress_outbound?(result) and empty_content?(result) ->
+            publish_outbound(payload, @empty_message_text)
 
-        suppress_outbound?(result) ->
-          :ok
+          suppress_outbound?(result) ->
+            :ok
 
-        true ->
-          publish_outbound(payload, result)
+          true ->
+            publish_outbound(payload, result)
+        end
       end
+
+      publish_task_complete(payload, :ok)
+
+      maybe_enqueue_memory_refresh(
+        updated_agent,
+        payload,
+        from_cron,
+        from_subagent,
+        state.agent_prompt_fun
+      )
+
+      {:noreply, maybe_drain_pending(state, key)}
+    else
+      Logger.info("[InboundWorker] Dropping stale async success for #{inspect(key)} run_id=#{run_id}")
+      {:noreply, drop_stream_state(state, stream_key(key, run_id))}
     end
-
-    # Notify channels that processing completed
-    publish_task_complete(payload, :ok)
-
-    maybe_enqueue_memory_refresh(
-      updated_agent,
-      payload,
-      from_cron,
-      from_subagent,
-      state.agent_prompt_fun
-    )
-
-    {:noreply, maybe_drain_pending(state, key)}
   end
 
   @impl true
-  def handle_info({:async_result, key, {:error, reason, updated_agent}, payload}, state) do
+  def handle_info({:async_result, key, run_id, {:error, reason, updated_agent}, payload}, state) do
     from_cron = Map.get(payload.metadata, "_from_cron") == true
     from_subagent = Map.get(payload.metadata, "_from_subagent") == true
 
-    state =
-      if from_cron, do: state, else: put_in(state.agents[key], updated_agent)
+    if current_owner_run?(state, key, run_id) and RunControl.fail_owner(run_id, reason) == :ok do
+      state =
+        if from_cron, do: state, else: put_in(state.agents[key], updated_agent)
 
-    state = %{state | active_tasks: Map.delete(state.active_tasks, key)}
-    formatted_reason = streaming_error_message(reason)
+      state = clear_active_task(state, key, run_id)
+      formatted_reason = streaming_error_message(reason)
 
-    {state, handled_by_stream?} =
-      finalize_stream_session(state, key, {:error, formatted_reason, reason})
+      {state, handled_by_stream?} =
+        finalize_stream_session(state, stream_key(key, run_id), {:error, formatted_reason, reason})
 
-    unless from_cron or handled_by_stream? or suppress_outbound?(reason) do
-      publish_outbound(payload, "Error: #{formatted_reason}")
+      unless from_cron or handled_by_stream? or suppress_outbound?(reason) do
+        publish_outbound(payload, "Error: #{formatted_reason}")
+      end
+
+      publish_task_complete(payload, :error)
+
+      maybe_enqueue_memory_refresh(
+        updated_agent,
+        payload,
+        from_cron,
+        from_subagent,
+        state.agent_prompt_fun
+      )
+
+      {:noreply, maybe_drain_pending(state, key)}
+    else
+      Logger.info("[InboundWorker] Dropping stale async error for #{inspect(key)} run_id=#{run_id}")
+      {:noreply, drop_stream_state(state, stream_key(key, run_id))}
     end
-
-    # Notify channels that processing failed
-    publish_task_complete(payload, :error)
-
-    maybe_enqueue_memory_refresh(
-      updated_agent,
-      payload,
-      from_cron,
-      from_subagent,
-      state.agent_prompt_fun
-    )
-
-    {:noreply, maybe_drain_pending(state, key)}
   end
 
   @impl true
-  def handle_info({:async_result, key, {:error, reason}, payload}, state) do
-    state = %{state | active_tasks: Map.delete(state.active_tasks, key)}
-    formatted_reason = streaming_error_message(reason)
+  def handle_info({:async_result, key, run_id, {:error, reason}, payload}, state) do
+    if current_owner_run?(state, key, run_id) and RunControl.fail_owner(run_id, reason) == :ok do
+      state = clear_active_task(state, key, run_id)
+      formatted_reason = streaming_error_message(reason)
 
-    {state, handled_by_stream?} =
-      finalize_stream_session(state, key, {:error, formatted_reason, reason})
+      {state, handled_by_stream?} =
+        finalize_stream_session(state, stream_key(key, run_id), {:error, formatted_reason, reason})
 
-    unless handled_by_stream? or suppress_outbound?(reason) do
-      publish_outbound(payload, "Error: #{formatted_reason}")
+      unless handled_by_stream? or suppress_outbound?(reason) do
+        publish_outbound(payload, "Error: #{formatted_reason}")
+      end
+
+      publish_task_complete(payload, :error)
+
+      {:noreply, maybe_drain_pending(state, key)}
+    else
+      Logger.info("[InboundWorker] Dropping stale async failure for #{inspect(key)} run_id=#{run_id}")
+      {:noreply, drop_stream_state(state, stream_key(key, run_id))}
     end
-
-    # Notify channels that processing failed
-    publish_task_complete(payload, :error)
-
-    {:noreply, maybe_drain_pending(state, key)}
   end
 
   @impl true
   def handle_info({:check_timeout, key, pid}, state) do
-    if Map.get(state.active_tasks, key) == pid and Process.alive?(pid) do
+    if active_task_pid(state, key) == pid and Process.alive?(pid) do
       Logger.warning("[InboundWorker] Task #{key} timed out after 10 minutes, killing")
       Process.exit(pid, :kill)
     end
@@ -207,12 +226,20 @@ defmodule Nex.Agent.InboundWorker do
       Logger.warning("[InboundWorker] Task process #{inspect(pid)} crashed: #{inspect(reason)}")
     end
 
-    active_tasks =
-      state.active_tasks
-      |> Enum.reject(fn {_key, task_pid} -> task_pid == pid end)
-      |> Map.new()
+    case find_active_task_by_pid(state, pid) do
+      nil ->
+        {:noreply, state}
 
-    {:noreply, %{state | active_tasks: active_tasks}}
+      {key, %{run_id: run_id, workspace: workspace, session_key: session_key}} ->
+        _ =
+          case reason do
+            :normal -> RunControl.fail_owner(run_id, :task_exited)
+            :killed -> RunControl.cancel_owner(workspace, session_key, :killed)
+            _ -> RunControl.fail_owner(run_id, reason)
+          end
+
+        {:noreply, %{state | active_tasks: Map.delete(state.active_tasks, key)}}
+    end
   end
 
   @impl true
@@ -241,11 +268,24 @@ defmodule Nex.Agent.InboundWorker do
 
   @impl true
   def handle_info({:stream_state_started, key, stream_state}, state) do
-    {:noreply, put_in(state.stream_states[key], stream_state)}
+    if current_owner_run?(state, stream_runtime_key(key), stream_run_id(key)) do
+      _ = RunControl.set_phase(stream_run_id(key), :streaming)
+      {:noreply, put_in(state.stream_states[key], stream_state)}
+    else
+      {:noreply, state}
+    end
   end
 
   @impl true
   def handle_info({:stream_state_event, key, event}, state) do
+    case event do
+      {:text, chunk} when is_binary(chunk) ->
+        _ = RunControl.append_assistant_partial(stream_run_id(key), chunk)
+
+      _ ->
+        :ok
+    end
+
     case Map.fetch(state.stream_states, key) do
       {:ok, {:feishu, %FeishuStreamState{} = stream_state}} ->
         case apply_feishu_stream_event(stream_state, key, event) do
@@ -318,6 +358,15 @@ defmodule Nex.Agent.InboundWorker do
   end
 
   @impl true
+  def handle_info({:drain_queued_owner_run, key}, state) do
+    if task_running?(state, key) do
+      {:noreply, state}
+    else
+      {:noreply, maybe_drain_pending(state, key)}
+    end
+  end
+
+  @impl true
   def handle_info({:discord_thinking_tick, key}, state) do
     case Map.fetch(state.stream_states, key) do
       {:ok, {:discord, %DiscordStreamState{converter: %{placeholder: true} = converter} = discord_state}} ->
@@ -380,20 +429,23 @@ defmodule Nex.Agent.InboundWorker do
        ) do
     bypass_busy? = Map.get(definition, "bypass_busy?", false) == true
 
-    if Map.has_key?(state.active_tasks, key) and not bypass_busy? do
+    if task_running?(state, key) and not bypass_busy? do
       maybe_dispatch_prompt(state, key, session_key, workspace, invocation.raw, envelope)
     else
       case Map.get(definition, "handler") do
-        "new" -> handle_new_command(state, key, envelope)
+        "new" -> handle_new_command(state, key, session_key, workspace, envelope)
         "stop" -> handle_stop_command(state, key, session_key, workspace, envelope)
         "commands" -> handle_commands_command(state, envelope)
+        "status" -> handle_status_command(state, session_key, workspace, envelope)
+        "queue" -> handle_queue_command(state, key, session_key, workspace, invocation, envelope)
+        "btw" -> handle_btw_command(state, session_key, workspace, invocation, envelope)
         _ -> maybe_dispatch_prompt(state, key, session_key, workspace, invocation.raw, envelope)
       end
     end
   end
 
-  defp handle_new_command(state, key, %Envelope{} = envelope) do
-    state = cancel_active_task(state, key)
+  defp handle_new_command(state, key, session_key, workspace, %Envelope{} = envelope) do
+    state = cancel_active_task(state, key, session_key, workspace, :new_session)
     publish_outbound(envelope, "New session started.")
 
     %{
@@ -407,6 +459,7 @@ defmodule Nex.Agent.InboundWorker do
     {count, state} = stop_session(state, key, session_key, workspace)
     dropped = :queue.len(Map.get(state.pending_queue, key, :queue.new()))
     state = %{state | pending_queue: Map.delete(state.pending_queue, key)}
+    state = update_queue_count(state, key, 0)
 
     publish_outbound(
       envelope,
@@ -422,27 +475,69 @@ defmodule Nex.Agent.InboundWorker do
     state
   end
 
-  defp maybe_dispatch_prompt(state, key, session_key, workspace, content, envelope) do
-    if Map.has_key?(state.active_tasks, key) do
-      queue = Map.get(state.pending_queue, key, :queue.new())
-      queued = {session_key, workspace, content, envelope}
-      queue = :queue.in(queued, queue)
-      queue_len = :queue.len(queue)
+  defp handle_status_command(state, session_key, workspace, %Envelope{} = envelope) do
+    case RunControl.owner_snapshot(workspace, session_key) do
+      {:ok, run} -> publish_outbound(envelope, FollowUp.render_status(run))
+      {:error, :idle} -> publish_outbound(envelope, "Status: idle")
+    end
 
-      Logger.info(
-        "[InboundWorker] Queued message for busy session #{inspect(key)} (queue=#{queue_len})"
-      )
+    state
+  end
 
+  defp handle_queue_command(state, key, session_key, workspace, %Invocation{} = invocation, %Envelope{} = envelope) do
+    message = invocation.args |> Enum.join(" ") |> String.trim()
+
+    if message == "" do
+      publish_outbound(envelope, "Usage: /queue <message>")
+      state
+    else
+      queued_envelope = %{envelope | text: message}
       queue =
-        if queue_len > 5 do
-          {_, trimmed} = :queue.out(queue)
-          Logger.warning("[InboundWorker] Dropped oldest queued message for #{inspect(key)}")
-          trimmed
-        else
-          queue
+        state.pending_queue
+        |> Map.get(key, :queue.new())
+        |> then(&:queue.in({session_key, workspace, message, queued_envelope}, &1))
+      state = %{state | pending_queue: Map.put(state.pending_queue, key, queue)}
+      state = update_queue_count(state, key, :queue.len(queue))
+
+      unless task_running?(state, key) do
+        send(self(), {:drain_queued_owner_run, key})
+      end
+
+      publish_outbound(envelope, "Queued for next owner turn (#{:queue.len(queue)} queued).")
+      state
+    end
+  end
+
+  defp handle_btw_command(state, session_key, workspace, %Invocation{} = invocation, %Envelope{} = envelope) do
+    question = invocation.args |> Enum.join(" ") |> String.trim()
+
+    cond do
+      question == "" ->
+        publish_outbound(envelope, "Usage: /btw <message>")
+        state
+
+      true ->
+        reply =
+          case RunControl.owner_snapshot(workspace, session_key) do
+            {:ok, run} -> FollowUp.render_busy_follow_up(run, question)
+            {:error, :idle} -> "No owner run is active. Side question: #{question}"
+          end
+
+        publish_outbound(envelope, reply, _from_follow_up: true)
+        state
+    end
+  end
+
+  defp maybe_dispatch_prompt(state, key, session_key, workspace, content, envelope) do
+    if task_running?(state, key) do
+      reply =
+        case RunControl.owner_snapshot(workspace, session_key) do
+          {:ok, run} -> FollowUp.render_busy_follow_up(run, content)
+          {:error, :idle} -> "Owner run changed state. Retry your message."
         end
 
-      %{state | pending_queue: Map.put(state.pending_queue, key, queue)}
+      publish_outbound(envelope, reply, _from_follow_up: true)
+      state
     else
       dispatch_async(state, key, session_key, workspace, content, envelope)
     end
@@ -460,11 +555,15 @@ defmodule Nex.Agent.InboundWorker do
       envelope_message_id: envelope.message_id
     })
 
+    {:ok, run} = start_owner_run(workspace, session_key, channel, chat_id)
+    _ = RunControl.set_queued_count(run.id, queued_count(state, key))
+    _ = RunControl.set_phase(run.id, :llm)
     {:ok, agent, state} = ensure_agent(state, key, session_key, workspace)
     parent = self()
     from_cron = get_in(envelope.metadata, ["_from_cron"]) == true
     from_subagent = get_in(envelope.metadata, ["_from_subagent"]) == true
     attachments = envelope.attachments
+    stream_key = stream_key(key, run.id)
 
     cron_opts =
       if from_cron,
@@ -493,7 +592,7 @@ defmodule Nex.Agent.InboundWorker do
             if from_cron do
               nil
             else
-              build_stream_sink(parent, key, channel, chat_id, envelope, state.config)
+              build_stream_sink(parent, stream_key, channel, chat_id, envelope, state.config)
             end
 
           result =
@@ -504,6 +603,7 @@ defmodule Nex.Agent.InboundWorker do
                 channel: channel,
                 chat_id: chat_id,
                 stream_sink: stream_sink,
+                owner_run_id: run.id,
                 workspace: workspace,
                 schedule_memory_refresh: false
               ]
@@ -511,13 +611,16 @@ defmodule Nex.Agent.InboundWorker do
               |> Kernel.++(cron_opts)
             )
 
-          send(parent, {:async_result, key, result, envelope})
+          send(parent, {:async_result, key, run.id, result, envelope})
         rescue
           e ->
-            send(parent, {:async_result, key, {:error, Exception.message(e)}, envelope})
+            send(parent, {:async_result, key, run.id, {:error, Exception.message(e)}, envelope})
         catch
           kind, reason ->
-            send(parent, {:async_result, key, {:error, "#{kind}: #{inspect(reason)}"}, envelope})
+            send(
+              parent,
+              {:async_result, key, run.id, {:error, "#{kind}: #{inspect(reason)}"}, envelope}
+            )
         end
       end)
 
@@ -526,7 +629,13 @@ defmodule Nex.Agent.InboundWorker do
 
     %{
       state
-      | active_tasks: Map.put(state.active_tasks, key, pid),
+      | active_tasks:
+          Map.put(state.active_tasks, key, %{
+            pid: pid,
+            run_id: run.id,
+            workspace: workspace,
+            session_key: session_key
+          }),
         agent_last_active: Map.put(state.agent_last_active, key, System.system_time(:second))
     }
   end
@@ -662,9 +771,11 @@ defmodule Nex.Agent.InboundWorker do
   defp maybe_drain_pending(state, key) do
     case Map.get(state.pending_queue, key) do
       nil ->
-        state
+        update_queue_count(state, key, 0)
 
       queue ->
+        state = update_queue_count(state, key, :queue.len(queue))
+
         case :queue.out(queue) do
           {{:value, {session_key, workspace, content, envelope}}, rest} ->
             remaining =
@@ -673,6 +784,7 @@ defmodule Nex.Agent.InboundWorker do
                 else: Map.put(state.pending_queue, key, rest)
 
             state = %{state | pending_queue: remaining}
+            state = update_queue_count(state, key, :queue.len(rest))
 
             Logger.info(
               "[InboundWorker] Draining queued message for #{inspect(key)} (remaining=#{:queue.len(rest)})"
@@ -681,31 +793,33 @@ defmodule Nex.Agent.InboundWorker do
             dispatch_async(state, key, session_key, workspace, content, envelope)
 
           {:empty, _} ->
-            %{state | pending_queue: Map.delete(state.pending_queue, key)}
+            state
+            |> Map.update!(:pending_queue, &Map.delete(&1, key))
+            |> update_queue_count(key, 0)
         end
     end
   end
 
-  defp cancel_active_task(state, key) do
+  defp cancel_active_task(state, key, session_key, workspace, reason) do
     case Map.get(state.active_tasks, key) do
       nil ->
-        state
+        cancel_session_subagents(state, session_key, workspace)
 
-      pid ->
-        Process.exit(pid, :kill)
-        %{state | active_tasks: Map.delete(state.active_tasks, key)}
+      %{pid: pid, run_id: run_id} ->
+        state
+        |> cancel_owner_run(key, session_key, workspace, run_id, pid, reason)
+        |> cancel_session_subagents(session_key, workspace)
     end
   end
 
   defp stop_session(state, key, session_key, workspace) do
-    count =
+    {count, state} =
       case Map.get(state.active_tasks, key) do
         nil ->
-          0
+          {0, state}
 
-        pid ->
-          Process.exit(pid, :kill)
-          1
+        %{pid: pid, run_id: run_id} ->
+          {1, cancel_owner_run(state, key, session_key, workspace, run_id, pid, :user_stop)}
       end
 
     subagent_count =
@@ -717,7 +831,6 @@ defmodule Nex.Agent.InboundWorker do
       end
 
     state = abort_session_agent(state, key)
-    state = %{state | active_tasks: Map.delete(state.active_tasks, key)}
     {count + subagent_count, state}
   end
 
@@ -1045,8 +1158,18 @@ defmodule Nex.Agent.InboundWorker do
         handled? =
           case result do
             {:ok, _value} when is_binary(buffer) and buffer != "" ->
-              {channel, chat_id} = parse_session_key(elem(key, 1))
-              Bus.publish(Outbound.topic_for_channel(channel), %{chat_id: chat_id, content: buffer, metadata: %{}})
+              {channel, chat_id} =
+                key
+                |> stream_runtime_key()
+                |> elem(1)
+                |> parse_session_key()
+
+              Bus.publish(Outbound.topic_for_channel(channel), %{
+                chat_id: chat_id,
+                content: buffer,
+                metadata: %{}
+              })
+
               true
 
             _ ->
@@ -1118,6 +1241,9 @@ defmodule Nex.Agent.InboundWorker do
 
   defp session_key(channel, chat_id), do: "#{channel}:#{chat_id}"
   defp runtime_key(workspace, session_key), do: {Path.expand(workspace), session_key}
+  defp stream_key(runtime_key, run_id), do: {runtime_key, run_id}
+  defp stream_runtime_key({runtime_key, _run_id}), do: runtime_key
+  defp stream_run_id({_runtime_key, run_id}), do: run_id
 
   defp format_reason(reason) when is_binary(reason), do: reason
   defp format_reason(reason), do: inspect(reason)
@@ -1136,6 +1262,75 @@ defmodule Nex.Agent.InboundWorker do
       origin_channel_id: Map.get(envelope.metadata || %{}, "origin_channel_id"),
       status: status
     })
+  end
+
+  defp start_owner_run(workspace, session_key, channel, chat_id) do
+    RunControl.start_owner(workspace, session_key, %{
+      channel: channel,
+      chat_id: chat_id
+    })
+  end
+
+  defp queued_count(state, key) do
+    state.pending_queue
+    |> Map.get(key, :queue.new())
+    |> :queue.len()
+  end
+
+  defp update_queue_count(state, key, count) do
+    case Map.get(state.active_tasks, key) do
+      %{run_id: run_id} ->
+        _ = RunControl.set_queued_count(run_id, count)
+        state
+
+      _ ->
+        state
+    end
+  end
+
+  defp task_running?(state, key), do: match?(%{pid: _pid}, Map.get(state.active_tasks, key))
+  defp active_task_pid(state, key), do: get_in(state.active_tasks, [key, :pid])
+
+  defp current_owner_run?(state, key, run_id) do
+    match?(%{run_id: ^run_id}, Map.get(state.active_tasks, key))
+  end
+
+  defp clear_active_task(state, key, run_id) do
+    case Map.get(state.active_tasks, key) do
+      %{run_id: ^run_id} -> %{state | active_tasks: Map.delete(state.active_tasks, key)}
+      _ -> state
+    end
+  end
+
+  defp find_active_task_by_pid(state, pid) do
+    Enum.find(state.active_tasks, fn {_key, entry} -> entry.pid == pid end)
+  end
+
+  defp drop_stream_state(state, key) do
+    %{state | stream_states: Map.delete(state.stream_states, key)}
+  end
+
+  defp cancel_owner_run(state, key, session_key, workspace, run_id, pid, reason) do
+    _ = RunControl.cancel_owner(workspace, session_key, reason)
+
+    if Process.whereis(Nex.Agent.Tool.Registry), do: Nex.Agent.Tool.Registry.cancel_run(run_id)
+    if Process.whereis(Nex.Agent.Subagent), do: Nex.Agent.Subagent.cancel_by_owner_run(run_id)
+
+    state =
+      case finalize_stream_session(state, stream_key(key, run_id), {:error, "Cancelled", :cancelled}) do
+        {state, _handled?} -> state
+      end
+
+    Process.exit(pid, :kill)
+    %{state | active_tasks: Map.delete(state.active_tasks, key)}
+  end
+
+  defp cancel_session_subagents(state, session_key, workspace) do
+    if Process.whereis(Nex.Agent.Subagent) do
+      _ = Nex.Agent.Subagent.cancel_by_session(session_key, workspace: workspace)
+    end
+
+    state
   end
 
   defp schedule_feishu_flush(%FeishuStreamState{flush_timer_ref: nil} = stream_state, key) do
