@@ -22,6 +22,7 @@ defmodule Nex.Agent.Tool.Registry do
     Nex.Agent.Tool.KnowledgeCapture,
     Nex.Agent.Tool.ExecutorDispatch,
     Nex.Agent.Tool.ExecutorStatus,
+    Nex.Agent.Tool.InterruptSession,
     Nex.Agent.Tool.MemoryConsolidate,
     Nex.Agent.Tool.MemoryStatus,
     Nex.Agent.Tool.MemoryRebuild,

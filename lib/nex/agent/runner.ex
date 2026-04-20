@@ -597,6 +597,7 @@ defmodule Nex.Agent.Runner do
 
         if notice != "" do
           _ = sink.({:text, notice})
+          Process.put(:_last_stream_was_tool_notice, true)
         end
 
         :ok
@@ -614,7 +615,7 @@ defmodule Nex.Agent.Runner do
     |> Enum.reject(&(&1 == ""))
     |> case do
       [] -> ""
-      lines -> Enum.join(lines, "\n") <> "\n\n"
+      lines -> Enum.join(lines, "\n") <> "\n"
     end
   end
 
@@ -697,6 +698,7 @@ defmodule Nex.Agent.Runner do
   defp maybe_stream_text(opts, text) when is_binary(text) and text != "" do
     case Keyword.get(opts, :stream_sink) do
       sink when is_function(sink, 1) ->
+        maybe_flush_tool_notice_separator(opts)
         _ = sink.({:text, text})
         Keyword.put(opts, :_llm_text_streamed, true)
 
@@ -1021,7 +1023,7 @@ defmodule Nex.Agent.Runner do
 
     if is_list(runtime_definitions) do
       runtime_definitions
-      |> append_ephemeral_tools(opts)
+      |> append_ephemeral_tools(filter, opts)
       |> normalize_tool_definitions()
     else
       registry_definitions_from_registry(filter, opts)
@@ -1031,14 +1033,16 @@ defmodule Nex.Agent.Runner do
   defp registry_definitions_from_registry(filter, opts) do
     if Process.whereis(ToolRegistry) do
       ToolRegistry.definitions(filter)
-      |> append_ephemeral_tools(opts)
+      |> append_ephemeral_tools(filter, opts)
       |> normalize_tool_definitions()
     else
       []
     end
   end
 
-  defp append_ephemeral_tools(definitions, opts) do
+  defp append_ephemeral_tools(definitions, :follow_up, _opts), do: definitions
+
+  defp append_ephemeral_tools(definitions, _filter, opts) do
     runtime_tools =
       opts
       |> Keyword.get(:skill_runtime_prepared_run, %Nex.SkillRuntime.PreparedRun{})
@@ -1809,6 +1813,7 @@ defmodule Nex.Agent.Runner do
     if Keyword.get(drain_opts, :stream_output?, false) and
          not Keyword.get(opts, :_suppress_current_reply_stream, false) and
          text != "" do
+      maybe_flush_tool_notice_separator(opts)
       maybe_call_stream_sink(opts, {:text, text})
     end
 
@@ -1848,6 +1853,19 @@ defmodule Nex.Agent.Runner do
       _ ->
         :ok
     end
+  end
+
+  # Flush a blank-line separator between tool-call notices and the next text output.
+  # The notice itself ends with "\n"; when real text follows we need one more "\n" to
+  # produce the visual blank line.  When consecutive notices follow each other the flag
+  # is simply overwritten so no extra blank line appears between them.
+  defp maybe_flush_tool_notice_separator(opts) do
+    if Process.get(:_last_stream_was_tool_notice) do
+      Process.delete(:_last_stream_was_tool_notice)
+      maybe_call_stream_sink(opts, {:text, "\n"})
+    end
+
+    :ok
   end
 
   defp cancelled?(opts) do

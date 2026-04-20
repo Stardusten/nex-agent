@@ -15,6 +15,16 @@
 - 对于仓库内部 API，优先删掉旧 API、用编译错误驱动迁移，确保每个调用点都被有意识地更新。
 - 只有当任务明确要求保留外部/公开契约或用户可见行为时，才保留或添加兼容逻辑。
 
+## Review 注意点
+
+- review 先对照 `docs/dev/task-plan/*` 里的 phase 目标、冻结边界和验收条件，再看实现细节；不要脱离原始设计目标只做局部代码风格 review。
+- findings 优先级高于摘要；先报行为回归、正确性 bug、遗漏的错误处理、测试缺口、迁移/兼容风险，再谈实现是否优雅。
+- 先查真相源和控制面是否收口：同一能力如果同时被 deterministic command、tool、worker 内部 helper 使用，默认应该共用一条控制链路，不要各自维护一份 orchestration。
+- review 时主动检查有没有新增重复状态或平行抽象；能复用现有主链和最小状态模型时，不要接受“再加一层小系统”式实现。
+- 涉及 surface/filter/allowlist 的改动，要同时检查定义侧、运行时选择侧和测试侧是否一致；不要只看 tool registry 里的列表，不看 runner/runtime 是否会泄漏额外能力。
+- 对外或 phase 已冻结的接口，review 时要检查实现、调用点、文档、测试是否仍然对齐同一 contract；不要出现“内部其实已经换了 shape，但文档和测试没跟上”。
+- 验收前至少确认关键 contract 测试覆盖到主成功路径和主中断路径；只跑 happy path 不足以证明控制链路正确。
+
 ## 架构与分层
 
 改代码前先判断你在改哪一层：
@@ -225,20 +235,3 @@ pkill -f "mix nex.agent gateway" 2>/dev/null; sleep 3
 cd /Users/krisxin/nex-agent && MIX_ENV=dev /Users/krisxin/.local/bin/mise exec -- mix nex.agent gateway --log > /tmp/nex-agent-gateway.log 2>&1 &
 sleep 6; tail -5 /tmp/nex-agent-gateway.log
 ```
-
-## 浏览器自动化
-
-使用 `agent-browser` 进行网页自动化。运行 `agent-browser --help` 查看所有命令。
-
-核心流程：
-
-1. `agent-browser open <url>` — 导航到页面
-2. `agent-browser snapshot -i` — 获取可交互元素及引用（`@e1`、`@e2`）
-3. `agent-browser click @e1` / `agent-browser fill @e2 "text"` — 用引用进行交互
-4. 页面变化后重新 snapshot
-
-GitHub issue 相关操作：
-
-1. issue 已选中且目标是推进到已验证的 PR 时，使用 `issue_to_pr`。
-2. 验证通过、改动准备好 commit/push/开 PR 后，才使用 `pr_open`。
-3. 使用 `issue_sync` 在 issue 上留简短的阻塞或交接说明。

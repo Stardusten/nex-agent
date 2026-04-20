@@ -14,14 +14,64 @@ defmodule Nex.Agent.FollowUp do
                    "list_dir",
                    "memory_status",
                    "read",
-                   "skill_discover",
-                   "skill_get",
-                   "tool_list",
-                   "web_fetch",
-                   "web_search"
-                 ])
+                 "skill_discover",
+                 "skill_get",
+                 "interrupt_session",
+                 "tool_list",
+                 "web_fetch",
+                 "web_search"
+               ])
 
   @type owner_snapshot :: RunControl.Run.t()
+  @type mode :: :busy | :idle
+
+  @spec prompt(owner_snapshot() | nil, String.t(), keyword()) :: String.t()
+  def prompt(owner_snapshot, question, opts \\ [])
+
+  def prompt(%RunControl.Run{} = run, question, opts) when is_binary(question) do
+    mode = Keyword.get(opts, :mode, :busy)
+
+    """
+    You are handling a short follow-up turn for a busy chat session.
+
+    Hard rules:
+    - You are not the owner run.
+    - Do not modify or continue the owner's main task.
+    - Do not claim you stopped anything unless you actually used the interrupt tool.
+    - Keep the reply concise and directly answer the user's side question.
+    - Only use tools exposed in this turn. They are read-only except a possible interrupt tool.
+    - Use the interrupt tool only when the user clearly asks to stop, cancel, abort, or switch away from the current owner task.
+
+    Session mode: #{mode}
+
+    Owner snapshot:
+    #{render_status(run)}
+
+    User follow-up question:
+    #{String.trim(question)}
+    """
+    |> String.trim()
+  end
+
+  def prompt(nil, question, opts) when is_binary(question) do
+    mode = Keyword.get(opts, :mode, :idle)
+
+    """
+    You are handling a short side-question turn for a chat session with no active owner run.
+
+    Hard rules:
+    - There is no current owner run.
+    - Answer the user's question directly and concisely.
+    - Do not invent hidden state or claim a task is still running.
+    - Only use tools exposed in this turn.
+
+    Session mode: #{mode}
+
+    User follow-up question:
+    #{String.trim(question)}
+    """
+    |> String.trim()
+  end
 
   @spec allowed_tool_definition?(map()) :: boolean()
   def allowed_tool_definition?(definition) when is_map(definition) do
@@ -49,41 +99,6 @@ defmodule Nex.Agent.FollowUp do
     """
     |> String.trim()
   end
-
-  @spec render_busy_follow_up(owner_snapshot(), String.t()) :: String.t()
-  def render_busy_follow_up(%RunControl.Run{} = run, question) when is_binary(question) do
-    condensed_question =
-      question
-      |> String.trim()
-      |> String.replace(~r/\s+/, " ")
-
-    base =
-      "Owner run is still #{run.status}. Phase=#{run.current_phase}, tool=#{run.current_tool || "-"}, queued=#{run.queued_count}."
-
-    case condensed_question do
-      "" ->
-        base <> " " <> render_tail_sentence(run)
-
-      _ ->
-        base <> " Follow-up: #{condensed_question}. " <> render_tail_sentence(run)
-    end
-  end
-
-  defp render_tail_sentence(%RunControl.Run{} = run) do
-    cond do
-      present?(run.latest_tool_output_tail) ->
-        "Latest tool output: #{present_tail(run.latest_tool_output_tail)}"
-
-      present?(run.latest_assistant_partial) ->
-        "Latest assistant partial: #{present_tail(run.latest_assistant_partial)}"
-
-      true ->
-        "No shareable partial output yet."
-    end
-  end
-
-  defp present?(text) when is_binary(text), do: String.trim(text) != ""
-  defp present?(_text), do: false
 
   defp present_tail(text) when is_binary(text) do
     text

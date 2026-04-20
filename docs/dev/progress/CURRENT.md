@@ -2,7 +2,7 @@
 
 ## Active Workstream
 
-Phase 1 runtime reload foundation is implemented. Phase 3 streaming delivery and Phase 3A architecture convergence are in place. Phase 4 is now closed as the text-IR foundation, Phase 4A is superseded, Phase 5 IM inbound architecture and media projection is implemented, and Phase 7 Feishu streaming converter simplification is in place. Phase 8 session run control and busy follow-up is now the active mainline. Phase 6 Feishu outbound official format/media send remains landed.
+Phase 1 runtime reload foundation is implemented. Phase 3 streaming delivery and Phase 3A architecture convergence are in place. Phase 4 is now closed as the text-IR foundation, Phase 4A is superseded, Phase 5 IM inbound architecture and media projection is implemented, and Phase 7 Feishu streaming converter simplification is in place. Phase 8 session run control and busy follow-up is landed, and Phase 9 follow-up LLM turn and interrupt request is now landed on top of it. Phase 6 Feishu outbound official format/media send remains landed.
 
 ## Why This Is Active
 
@@ -66,7 +66,7 @@ Phase 7 established the current Feishu streaming correction:
 - the hard acceptance bar is now:
   - Feishu streaming multi-message works correctly under real credentials
 
-Phase 8 is now the active workstream:
+Phase 8 established the current session control baseline:
 
 - add explicit session busy / idle state
 - ensure each session has at most one owner run
@@ -75,6 +75,15 @@ Phase 8 is now the active workstream:
 - add `/queue`, `/btw`, and `/status` as user control commands
 - make cancellation run-id based so stale owner run results cannot write back after stop
 - push cancellation down into Runner / Tool.Registry / long tools so heavy logic can be stopped promptly
+
+Phase 9 tightened the follow-up path on top of Phase 8:
+
+- replace deterministic busy follow-up replies with a real follow-up LLM turn
+- reuse the current owner snapshot instead of introducing a new event/state subsystem
+- reuse `Nex.Agent.prompt/3` with `skip_consolidation: true` and `tools_filter: :follow_up`
+- keep `/stop` deterministic while allowing an optional thin follow-up interrupt tool that reuses the same control lane
+- keep follow-up tools frozen to the minimal read-only surface plus the thin interrupt tool
+- prevent follow-up turns from inheriting skill runtime ephemeral tools
 
 ## Current Plan Pointer
 
@@ -87,6 +96,7 @@ Phase 8 is now the active workstream:
 - [Phase 6 Feishu Outbound Official Format And Media Send](../task-plan/phase6-feishu-outbound-official-format-and-media-send.md)
 - [Phase 7 Feishu Streaming Converter Simplification](../task-plan/phase7-feishu-streaming-converter-simplification.md)
 - [Phase 8 Session Run Control And Busy Follow-up](../task-plan/phase8-session-run-control-and-followup.md)
+- [Phase 9 Follow-up LLM Turn And Interrupt Request](../task-plan/phase9-follow-up-llm-turn-and-interrupt-request.md)
 - [2026-04-16 IM Inbound Media Architecture](../findings/2026-04-16-im-inbound-media-architecture.md)
 - [2026-04-16 IM Streaming Capabilities And Delivery Contract](../findings/2026-04-16-im-streaming-capabilities.md)
 - [2026-04-16 Streaming Architecture Convergence](../findings/2026-04-16-streaming-architecture-convergence.md)
@@ -96,9 +106,9 @@ Phase 8 is now the active workstream:
 
 ## Immediate Next Steps
 
-1. 跑更完整的 phase8 回归：`test/nex/agent/message_tool_test.exs`、`test/nex/agent/channel_discord_test.exs`、`test/nex/agent/channel_feishu_test.exs`。
-2. 用真实 gateway/manual 场景检查 `/status`、`/queue`、`/btw`、`/stop` 交互和 stop 后新 owner run 重启。
-3. 如需继续收紧 phase8，下一步是把 HTTP 级取消从 tool 层早退推进到底层 `Nex.Agent.HTTP` / provider path。
+1. 用真实 gateway/manual 场景检查 busy 普通消息 follow-up、`/btw`、`/status`、`/stop` 和可选 interrupt tool 的实际交互时序。
+2. 跑更完整的 channel 回归：`test/nex/agent/channel_discord_test.exs`、`test/nex/agent/channel_feishu_test.exs`。
+3. 如需继续收紧取消链路，下一步是把 HTTP 级取消从 tool 层早退推进到底层 `Nex.Agent.HTTP` / provider path。
 4. Phase 7 留存问题仍需后续处理：Finch 连接池泄漏、飞书 `close_streaming_mode` 404、LLM 空返回兜底。
 
 ## Reviewer Verification

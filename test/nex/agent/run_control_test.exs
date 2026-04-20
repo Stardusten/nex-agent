@@ -94,4 +94,5 @@ defmodule Nex.Agent.RunControlTest do
     assert {:ok, %{cancelled?: false, run_id: nil}} =
              RunControl.cancel_owner(workspace, session_key, :user_stop, server: server)
   end
+
 end

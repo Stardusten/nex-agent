@@ -63,17 +63,23 @@ defmodule Nex.Agent.WS do
   @impl true
   def init(state) do
     case state.connect_fun.(state.url, extra_headers: state.extra_headers) do
-      {:ok, conn, websocket, request_ref, resp_headers} ->
+      {:ok, conn, websocket, request_ref, resp_headers, early_data} ->
         case state.callback_module.handle_connect(conn_info(conn, resp_headers), state.callback_state) do
           {:ok, callback_state} ->
-            {:ok,
-             Map.merge(state, %{
-               conn: conn,
-               websocket: websocket,
-               request_ref: request_ref,
-               resp_headers: resp_headers,
-               callback_state: callback_state
-             })}
+            new_state =
+              Map.merge(state, %{
+                conn: conn,
+                websocket: websocket,
+                request_ref: request_ref,
+                resp_headers: resp_headers,
+                callback_state: callback_state
+              })
+
+            if early_data == [] do
+              {:ok, new_state}
+            else
+              {:ok, new_state, {:continue, {:early_data, early_data}}}
+            end
 
           other ->
             _ = Mint.HTTP.close(conn)
@@ -83,6 +89,11 @@ defmodule Nex.Agent.WS do
       {:error, reason} ->
         {:stop, reason}
     end
+  end
+
+  @impl true
+  def handle_continue({:early_data, data_list}, state) do
+    handle_responses(Enum.map(data_list, &{:data, state.request_ref, &1}), state)
   end
 
   @impl true
@@ -138,7 +149,7 @@ defmodule Nex.Agent.WS do
   end
 
   @spec connect(String.t(), keyword()) ::
-          {:ok, Mint.HTTP.t(), Mint.WebSocket.t(), reference(), Mint.Types.headers()}
+          {:ok, Mint.HTTP.t(), Mint.WebSocket.t(), reference(), Mint.Types.headers(), [binary()]}
           | {:error, term()}
   def connect(url, opts \\ []) when is_binary(url) and is_list(opts) do
     with {:ok, uri} <- parse_uri(url),
@@ -153,7 +164,9 @@ defmodule Nex.Agent.WS do
              response_status(responses, request_ref),
              response_headers(responses, request_ref)
            ) do
-      {:ok, conn, websocket, request_ref, response_headers(responses, request_ref)}
+      # Collect any data frames that arrived piggy-backed with the handshake
+      early_data = for {:data, ^request_ref, data} <- responses, do: data
+      {:ok, conn, websocket, request_ref, response_headers(responses, request_ref), early_data}
     else
       {:error, _} = error -> error
       {:error, _conn, reason} -> {:error, reason}

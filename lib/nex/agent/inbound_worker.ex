@@ -30,6 +30,7 @@ defmodule Nex.Agent.InboundWorker do
     :agent_abort_fun,
     agents: %{},
     active_tasks: %{},
+    active_follow_ups: %{},
     agent_last_active: %{},
     pending_queue: %{},
     stream_states: %{}
@@ -46,6 +47,14 @@ defmodule Nex.Agent.InboundWorker do
           session_key: String.t()
         }
 
+  @type active_follow_up_entry :: %{
+          pid: pid(),
+          workspace: String.t(),
+          session_key: String.t()
+        }
+
+  @type follow_up_mode :: :busy | :idle
+
   @type t :: %__MODULE__{
           config: Config.t(),
           agent_start_fun: agent_start_fun(),
@@ -53,6 +62,7 @@ defmodule Nex.Agent.InboundWorker do
           agent_abort_fun: agent_abort_fun(),
           agents: %{String.t() => term()},
           active_tasks: %{String.t() => active_run_entry()},
+          active_follow_ups: %{String.t() => active_follow_up_entry()},
           agent_last_active: %{String.t() => integer()},
           pending_queue: %{term() => :queue.queue()},
           stream_states: %{term() => term()}
@@ -69,6 +79,15 @@ defmodule Nex.Agent.InboundWorker do
     GenServer.call(__MODULE__, {:reset_session, channel, chat_id, opts})
   end
 
+  @spec request_interrupt(String.t(), String.t(), term(), keyword()) ::
+          {:ok, %{cancelled?: boolean(), run_id: String.t() | nil}}
+  def request_interrupt(workspace, session_key, reason, opts \\ []) do
+    GenServer.call(
+      Keyword.get(opts, :server, __MODULE__),
+      {:request_interrupt, Path.expand(workspace), session_key, reason, opts}
+    )
+  end
+
   @impl true
   def init(opts) do
     state = %__MODULE__{
@@ -78,6 +97,7 @@ defmodule Nex.Agent.InboundWorker do
       agent_abort_fun: Keyword.get(opts, :agent_abort_fun, &Nex.Agent.abort/1),
       agents: %{},
       active_tasks: %{},
+      active_follow_ups: %{},
       agent_last_active: %{},
       pending_queue: %{},
       stream_states: %{}
@@ -93,9 +113,28 @@ defmodule Nex.Agent.InboundWorker do
     session_key = session_key(channel, chat_id)
     workspace = Keyword.get(opts, :workspace, Workspace.root())
     key = runtime_key(workspace, session_key)
+    state = cancel_follow_up_task(state, key)
     state = cancel_active_task(state, key, session_key, workspace, :reset_session)
     Nex.Agent.reset_session(channel, chat_id, workspace: workspace)
     {:reply, :ok, %{state | agents: Map.delete(state.agents, key)}}
+  end
+
+  @impl true
+  def handle_call({:request_interrupt, workspace, session_key, reason, opts}, _from, state) do
+    workspace = Keyword.get(opts, :workspace, workspace)
+    key = runtime_key(workspace, session_key)
+
+    {reply, state} =
+      request_interrupt_impl(
+        state,
+        key,
+        session_key,
+        workspace,
+        reason,
+        Keyword.get(opts, :requester_pid)
+      )
+
+    {:reply, reply, state}
   end
 
   @impl true
@@ -211,6 +250,31 @@ defmodule Nex.Agent.InboundWorker do
   end
 
   @impl true
+  def handle_info({:follow_up_result, key, pid, result, %Envelope{} = payload}, state) do
+    state = clear_follow_up_task(state, key, pid)
+
+    case result do
+      {:ok, response, updated_agent} ->
+        state = maybe_store_follow_up_agent(state, payload, updated_agent)
+
+        unless suppress_outbound?(response) and empty_content?(response) do
+          publish_outbound(payload, response, _from_follow_up: true)
+        end
+
+        {:noreply, state}
+
+      {:error, reason, updated_agent} ->
+        state = maybe_store_follow_up_agent(state, payload, updated_agent)
+        maybe_publish_follow_up_error(payload, reason)
+        {:noreply, state}
+
+      {:error, reason} ->
+        maybe_publish_follow_up_error(payload, reason)
+        {:noreply, state}
+    end
+  end
+
+  @impl true
   def handle_info({:check_timeout, key, pid}, state) do
     if active_task_pid(state, key) == pid and Process.alive?(pid) do
       Logger.warning("[InboundWorker] Task #{key} timed out after 10 minutes, killing")
@@ -222,15 +286,20 @@ defmodule Nex.Agent.InboundWorker do
 
   @impl true
   def handle_info({:DOWN, _ref, :process, pid, reason}, state) do
-    if reason != :normal and reason != :killed do
-      Logger.warning("[InboundWorker] Task process #{inspect(pid)} crashed: #{inspect(reason)}")
-    end
+    cond do
+      match = find_follow_up_by_pid(state, pid) ->
+        {key, _entry} = match
+        if reason != :normal and reason != :killed do
+          Logger.warning("[InboundWorker] Follow-up task #{inspect(pid)} exited: #{inspect(reason)}")
+        end
+        {:noreply, %{state | active_follow_ups: Map.delete(state.active_follow_ups, key)}}
 
-    case find_active_task_by_pid(state, pid) do
-      nil ->
-        {:noreply, state}
+      match = find_active_task_by_pid(state, pid) ->
+        {key, %{run_id: run_id, workspace: workspace, session_key: session_key}} = match
+        if reason != :normal and reason != :killed do
+          Logger.warning("[InboundWorker] Task process #{inspect(pid)} crashed: #{inspect(reason)}")
+        end
 
-      {key, %{run_id: run_id, workspace: workspace, session_key: session_key}} ->
         _ =
           case reason do
             :normal -> RunControl.fail_owner(run_id, :task_exited)
@@ -239,6 +308,9 @@ defmodule Nex.Agent.InboundWorker do
           end
 
         {:noreply, %{state | active_tasks: Map.delete(state.active_tasks, key)}}
+
+      true ->
+        {:noreply, state}
     end
   end
 
@@ -445,6 +517,7 @@ defmodule Nex.Agent.InboundWorker do
   end
 
   defp handle_new_command(state, key, session_key, workspace, %Envelope{} = envelope) do
+    state = cancel_follow_up_task(state, key)
     state = cancel_active_task(state, key, session_key, workspace, :new_session)
     publish_outbound(envelope, "New session started.")
 
@@ -456,7 +529,11 @@ defmodule Nex.Agent.InboundWorker do
   end
 
   defp handle_stop_command(state, key, session_key, workspace, %Envelope{} = envelope) do
-    {count, state} = stop_session(state, key, session_key, workspace)
+    {{:ok, %{cancelled?: cancelled?, count: count}}, state} =
+      request_interrupt_local(state, key, session_key, workspace, :user_stop)
+
+    _ = cancelled?
+
     dropped = :queue.len(Map.get(state.pending_queue, key, :queue.new()))
     state = %{state | pending_queue: Map.delete(state.pending_queue, key)}
     state = update_queue_count(state, key, 0)
@@ -517,30 +594,65 @@ defmodule Nex.Agent.InboundWorker do
         state
 
       true ->
-        reply =
-          case RunControl.owner_snapshot(workspace, session_key) do
-            {:ok, run} -> FollowUp.render_busy_follow_up(run, question)
-            {:error, :idle} -> "No owner run is active. Side question: #{question}"
-          end
-
-        publish_outbound(envelope, reply, _from_follow_up: true)
-        state
+        dispatch_follow_up(state, session_key, workspace, question, envelope)
     end
   end
 
   defp maybe_dispatch_prompt(state, key, session_key, workspace, content, envelope) do
     if task_running?(state, key) do
-      reply =
-        case RunControl.owner_snapshot(workspace, session_key) do
-          {:ok, run} -> FollowUp.render_busy_follow_up(run, content)
-          {:error, :idle} -> "Owner run changed state. Retry your message."
-        end
-
-      publish_outbound(envelope, reply, _from_follow_up: true)
-      state
+      dispatch_follow_up(state, session_key, workspace, content, envelope)
     else
       dispatch_async(state, key, session_key, workspace, content, envelope)
     end
+  end
+
+  defp dispatch_follow_up(state, session_key, workspace, question, %Envelope{} = envelope) do
+    key = runtime_key(workspace, session_key)
+    state = cancel_follow_up_task(state, key)
+
+    {:ok, agent, state} =
+      ensure_agent(state, key, session_key, workspace)
+
+    owner_snapshot =
+      case RunControl.owner_snapshot(workspace, session_key) do
+        {:ok, run} -> run
+        {:error, :idle} -> nil
+      end
+
+    mode = if owner_snapshot, do: :busy, else: :idle
+    prompt = FollowUp.prompt(owner_snapshot, question, mode: mode)
+    parent = self()
+    {channel, chat_id} = parse_session_key(session_key)
+
+    {:ok, pid} =
+      Task.Supervisor.start_child(Nex.Agent.TaskSupervisor, fn ->
+        result =
+          run_prompt_task(
+            state.agent_prompt_fun,
+            agent,
+            prompt,
+            [
+              channel: channel,
+              chat_id: chat_id,
+              workspace: workspace,
+              skip_consolidation: true,
+              tools_filter: :follow_up,
+              schedule_memory_refresh: false,
+              skip_skills: true,
+              metadata:
+                (envelope.metadata || %{})
+                |> Map.new()
+                |> Map.put("_follow_up", true)
+                |> Map.put("follow_up_question", question)
+                |> Map.put("follow_up_mode", Atom.to_string(mode))
+            ]
+          )
+
+        send(parent, {:follow_up_result, key, self(), result, envelope})
+      end)
+
+    Process.monitor(pid)
+    put_in(state.active_follow_ups[key], %{pid: pid, workspace: workspace, session_key: session_key})
   end
 
   defp dispatch_async(state, key, session_key, workspace, content, %Envelope{} = envelope) do
@@ -587,41 +699,31 @@ defmodule Nex.Agent.InboundWorker do
 
     {:ok, pid} =
       Task.Supervisor.start_child(Nex.Agent.TaskSupervisor, fn ->
-        try do
-          stream_sink =
-            if from_cron do
-              nil
-            else
-              build_stream_sink(parent, stream_key, channel, chat_id, envelope, state.config)
-            end
+        stream_sink =
+          if from_cron do
+            nil
+          else
+            build_stream_sink(parent, stream_key, channel, chat_id, envelope, state.config)
+          end
 
-          result =
-            state.agent_prompt_fun.(
-              agent,
-              content,
-              [
-                channel: channel,
-                chat_id: chat_id,
-                stream_sink: stream_sink,
-                owner_run_id: run.id,
-                workspace: workspace,
-                schedule_memory_refresh: false
-              ]
-              |> maybe_put_opt(:media, attachments)
-              |> Kernel.++(cron_opts)
-            )
+        result =
+          run_prompt_task(
+            state.agent_prompt_fun,
+            agent,
+            content,
+            [
+              channel: channel,
+              chat_id: chat_id,
+              stream_sink: stream_sink,
+              owner_run_id: run.id,
+              workspace: workspace,
+              schedule_memory_refresh: false
+            ]
+            |> maybe_put_opt(:media, attachments)
+            |> Kernel.++(cron_opts)
+          )
 
-          send(parent, {:async_result, key, run.id, result, envelope})
-        rescue
-          e ->
-            send(parent, {:async_result, key, run.id, {:error, Exception.message(e)}, envelope})
-        catch
-          kind, reason ->
-            send(
-              parent,
-              {:async_result, key, run.id, {:error, "#{kind}: #{inspect(reason)}"}, envelope}
-            )
-        end
+        send(parent, {:async_result, key, run.id, result, envelope})
       end)
 
     Process.monitor(pid)
@@ -812,14 +914,21 @@ defmodule Nex.Agent.InboundWorker do
     end
   end
 
-  defp stop_session(state, key, session_key, workspace) do
+  defp request_interrupt_impl(state, key, session_key, workspace, reason, requester_pid) do
+    interrupted_run_id = current_run_id(state, key)
+    follow_up_cancelled? =
+      case Map.get(state.active_follow_ups, key) do
+        %{pid: pid} when pid != requester_pid -> true
+        _ -> false
+      end
+
     {count, state} =
       case Map.get(state.active_tasks, key) do
         nil ->
           {0, state}
 
         %{pid: pid, run_id: run_id} ->
-          {1, cancel_owner_run(state, key, session_key, workspace, run_id, pid, :user_stop)}
+          {1, cancel_owner_run(state, key, session_key, workspace, run_id, pid, reason)}
       end
 
     subagent_count =
@@ -830,8 +939,16 @@ defmodule Nex.Agent.InboundWorker do
         0
       end
 
+    state = cancel_follow_up_task(state, key, requester_pid)
     state = abort_session_agent(state, key)
-    {count + subagent_count, state}
+
+    total_count = count + subagent_count + if(follow_up_cancelled?, do: 1, else: 0)
+    reply = {:ok, %{cancelled?: total_count > 0, run_id: interrupted_run_id, count: total_count}}
+    {reply, state}
+  end
+
+  defp request_interrupt_local(state, key, session_key, workspace, reason, requester_pid \\ nil) do
+    request_interrupt_impl(state, key, session_key, workspace, reason, requester_pid)
   end
 
   defp ensure_agent(state, key, session_key, workspace) do
@@ -1219,6 +1336,13 @@ defmodule Nex.Agent.InboundWorker do
     |> to_string()
   end
 
+  defp maybe_store_follow_up_agent(state, %Envelope{} = payload, %Nex.Agent{} = updated_agent) do
+    key = runtime_key(payload_workspace(payload), session_key(payload.channel, payload_chat_id(payload)))
+    put_in(state.agents[key], %{updated_agent | workspace: payload_workspace(payload)})
+  end
+
+  defp maybe_store_follow_up_agent(state, _payload, _updated_agent), do: state
+
   defp payload_workspace(%Envelope{} = payload) do
     workspace = Map.get(payload.metadata || %{}, "workspace") || Map.get(payload.metadata || %{}, :workspace)
 
@@ -1306,6 +1430,10 @@ defmodule Nex.Agent.InboundWorker do
     Enum.find(state.active_tasks, fn {_key, entry} -> entry.pid == pid end)
   end
 
+  defp find_follow_up_by_pid(state, pid) do
+    Enum.find(state.active_follow_ups, fn {_key, entry} -> entry.pid == pid end)
+  end
+
   defp drop_stream_state(state, key) do
     %{state | stream_states: Map.delete(state.stream_states, key)}
   end
@@ -1323,6 +1451,50 @@ defmodule Nex.Agent.InboundWorker do
 
     Process.exit(pid, :kill)
     %{state | active_tasks: Map.delete(state.active_tasks, key)}
+  end
+
+  defp cancel_follow_up_task(state, key, requester_pid \\ nil) do
+    case Map.get(state.active_follow_ups, key) do
+      %{pid: pid} when pid == requester_pid ->
+        state
+
+      %{pid: pid} ->
+        if Process.alive?(pid), do: Process.exit(pid, :kill)
+        %{state | active_follow_ups: Map.delete(state.active_follow_ups, key)}
+
+      _ ->
+        state
+    end
+  end
+
+  defp clear_follow_up_task(state, key, pid) do
+    case Map.get(state.active_follow_ups, key) do
+      %{pid: ^pid} -> %{state | active_follow_ups: Map.delete(state.active_follow_ups, key)}
+      _ -> state
+    end
+  end
+
+  defp run_prompt_task(prompt_fun, agent, prompt, opts) do
+    prompt_fun.(agent, prompt, opts)
+  rescue
+    e ->
+      {:error, Exception.message(e)}
+  catch
+    kind, reason ->
+      {:error, "#{kind}: #{inspect(reason)}"}
+  end
+
+  defp current_run_id(state, key) do
+    case Map.get(state.active_tasks, key) do
+      %{run_id: run_id} -> run_id
+      _ -> nil
+    end
+  end
+
+  defp maybe_publish_follow_up_error(payload, reason) do
+    unless suppress_outbound?(reason) do
+      publish_outbound(payload, "Error: #{format_reason(reason)}", _from_follow_up: true)
+    end
   end
 
   defp cancel_session_subagents(state, session_key, workspace) do

@@ -5,10 +5,15 @@ defmodule Nex.Agent.MessageToolTest do
   alias Nex.Agent.Channel.Feishu
   alias Nex.Agent.Config
   alias Nex.Agent.Tool.Message
+  alias Nex.Agent.Tool.Registry
 
   setup do
     if Process.whereis(Bus) == nil do
       start_supervised!({Bus, name: Bus})
+    end
+
+    if Process.whereis(Nex.Agent.Tool.Registry) == nil do
+      start_supervised!({Registry, name: Registry})
     end
 
     Bus.subscribe(:feishu_outbound)
@@ -31,6 +36,37 @@ defmodule Nex.Agent.MessageToolTest do
     assert payload.content == "hello"
     assert payload.metadata["_from_tool"] == true
     refute Map.has_key?(payload.metadata, "msg_type")
+  end
+
+  test "follow-up tool surface stays read-only and includes interrupt_session" do
+    names =
+      Registry.definitions(:follow_up)
+      |> Enum.map(& &1["name"])
+      |> MapSet.new()
+
+    assert MapSet.subset?(
+             MapSet.new([
+               "executor_status",
+               "interrupt_session",
+               "list_dir",
+               "memory_status",
+               "read",
+               "skill_discover",
+               "skill_get",
+               "tool_list",
+               "web_fetch",
+               "web_search"
+             ]),
+             names
+           )
+
+    refute MapSet.member?(names, "bash")
+    refute MapSet.member?(names, "edit")
+    refute MapSet.member?(names, "write")
+    refute MapSet.member?(names, "message")
+    refute MapSet.member?(names, "spawn_task")
+    refute MapSet.member?(names, "cron")
+    refute MapSet.member?(names, "memory_write")
   end
 
   test "message tool forwards explicit feishu structured message metadata" do
@@ -254,11 +290,15 @@ defmodule Nex.Agent.MessageToolTest do
     assert url1 =~ "/auth/v3/tenant_access_token/internal"
 
     posts = collect_http_posts([])
-    {url2, body2} = Enum.find(posts, fn {url, body} -> url =~ "/im/v1/messages" and body["msg_type"] == "text" end)
+    {url2, body2} =
+      Enum.find(posts, fn {url, body} ->
+        url =~ "/im/v1/messages" and body["msg_type"] == "interactive"
+      end)
+
     assert url2 =~ "/im/v1/messages"
     assert body2["receive_id"] == "ou_combo"
-    assert body2["msg_type"] == "text"
-    assert Jason.decode!(body2["content"]) == %{"text" => "海报已生成，见下图。"}
+    assert body2["msg_type"] == "interactive"
+    assert Jason.decode!(body2["content"])["elements"] != []
 
     assert_receive {:http_post_multipart, upload_url, multipart_body, _headers3}
     assert upload_url =~ "/im/v1/images"

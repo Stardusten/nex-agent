@@ -293,7 +293,7 @@ defmodule Nex.Agent.RunnerStreamTest do
                llm_stream_client: llm_stream_client
              )
 
-    assert [{:text, "📂 ListDir - path=.\n\n"}, {:text, "done"}, :finish] =
+    assert [{:text, "📂 ListDir - path=.\n"}, {:text, "\n"}, {:text, "done"}, :finish] =
              collect_stream_events([])
   end
 
@@ -363,7 +363,12 @@ defmodule Nex.Agent.RunnerStreamTest do
                llm_stream_client: llm_stream_client
              )
 
-    assert [{:text, "⚙️ Bash - `ps aux | grep nex-agent`\n\n"}, {:text, "done"}, :finish] =
+    assert [
+             {:text, "⚙️ Bash - `ps aux | grep nex-agent`\n"},
+             {:text, "\n"},
+             {:text, "done"},
+             :finish
+           ] =
              collect_stream_events([])
   end
 
