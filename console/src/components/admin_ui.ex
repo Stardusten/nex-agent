@@ -649,12 +649,12 @@ defmodule NexAgentConsole.Components.AdminUI do
         <section class="section-card">
           <div class="section-head">
             <div>
-              <p class="section-kicker">versions</p>
-              <h2>版本轨迹</h2>
+              <p class="section-kicker">releases</p>
+              <h2>发布轨迹</h2>
             </div>
           </div>
 
-          {version_list(%{versions: @state.versions, selected_module: @state.selected_module})}
+          {version_list(%{versions: @state.releases, selected_module: @state.selected_module})}
         </section>
       </aside>
 
@@ -669,7 +669,7 @@ defmodule NexAgentConsole.Components.AdminUI do
 
           <div class="detail-grid">
             {detail_item(%{label: "当前模块", value: @state.selected_module})}
-            {detail_item(%{label: "版本数", value: length(@state.versions)})}
+            {detail_item(%{label: "发布数", value: length(@state.releases)})}
             {detail_item(%{label: "最近代码事件", value: length(@state.recent_events)})}
           </div>
         </section>
@@ -700,60 +700,38 @@ defmodule NexAgentConsole.Components.AdminUI do
           <section class="section-card section-card--editor">
             <div class="section-head">
               <div>
-                <p class="section-kicker">editor</p>
-                <h2>热更与回滚</h2>
+                <p class="section-kicker">workflow</p>
+                <h2>只读检查与回滚</h2>
               </div>
             </div>
 
             <div id="code-action-result" class="action-result"></div>
 
-            <form class="editor-form editor-form--candidate">
-              <input type="hidden" name="module" value={@state.selected_module} />
+            <%= if @state.deployable do %>
+              <article class="detail-card">
+                <span class="section-kicker">preferred path</span>
+                <p>Console 不再提供整块源码粘贴覆盖。推荐工作流：</p>
+                <p>`find` 定位代码，`read` / `reflect` 检查上下文，`apply_patch` 修改磁盘文件，`self_update deploy` 激活 CODE 变更。</p>
+                <p>这里保留当前源码只读预览和 release rollback，用于审查与恢复，不作为主要编辑入口。</p>
+              </article>
 
-              <label for="reason">变更原因</label>
-              <input id="reason" type="text" name="reason" value="Console hot upgrade" />
-
-              <label for="code">候选新源码</label>
-              <textarea
-                id="code"
-                name="code"
-                placeholder="把候选源码粘贴到这里，再预览 diff 或应用热更。当前源码请看上方只读预览。"
-              ></textarea>
-
-              <div class="actions-row">
-                <button
-                  type="submit"
-                  class="action-button"
-                  hx-post="/preview"
-                  hx-target="#code-action-result"
-                  hx-swap="innerHTML"
-                >
-                  预览 diff
-                </button>
-
-                <button
-                  type="submit"
-                  class="action-button action-button--primary"
-                  hx-post="/hot_upgrade"
-                  hx-target="#code-action-result"
-                  hx-swap="innerHTML"
-                >
-                  应用热更
-                </button>
-              </div>
-            </form>
-
-            <form class="inline-form" hx-post="/rollback" hx-target="#code-action-result" hx-swap="innerHTML">
-              <input type="hidden" name="module" value={@state.selected_module} />
-              <label for="version_id">回滚目标</label>
-              <select id="version_id" name="version_id">
-                <option value="">最近一个历史版本</option>
-                <%= for version <- @state.versions do %>
-                  <option value={version.id}>{version.id}</option>
-                <% end %>
-              </select>
-              <button class="action-button action-button--danger" type="submit">回滚</button>
-            </form>
+              <form class="inline-form" hx-post="/rollback" hx-target="#code-action-result" hx-swap="innerHTML">
+                <input type="hidden" name="module" value={@state.selected_module} />
+                <label for="version_id">回滚目标</label>
+                <select id="version_id" name="version_id">
+                  <option value="">上一个 release</option>
+                  <%= for version <- @state.releases do %>
+                    <option value={version["id"]}>{version["id"]}</option>
+                  <% end %>
+                </select>
+                <button class="action-button action-button--danger" type="submit">回滚</button>
+              </form>
+            <% else %>
+              {empty_state(%{
+                title: "当前模块不支持 self_update deploy",
+                body: @state.deploy_warning || "只有 repo 内的 CODE-layer framework 模块可以走 deploy/rollback 主链。"
+              })}
+            <% end %>
           </section>
         </div>
       </div>
@@ -1517,13 +1495,13 @@ defmodule NexAgentConsole.Components.AdminUI do
   defp version_list(assigns) do
     ~H"""
     <%= if @versions == [] do %>
-      {empty_state(%{title: "还没有 code versions", body: "第一次热更成功后，这里会出现版本轨迹。"})}
+      {empty_state(%{title: "还没有 code releases", body: "第一次 self_update deploy 成功后，这里会出现发布轨迹。"})}
     <% else %>
       <div class="audit-table">
         <%= for version <- @versions do %>
           <article class="audit-table__row">
-            <time>{version.timestamp}</time>
-            <strong>{version.id}</strong>
+            <time>{version["timestamp"]}</time>
+            <strong>{version["id"]}</strong>
             <p>{@selected_module}</p>
           </article>
         <% end %>

@@ -31,9 +31,10 @@ defmodule Nex.Agent.HotReload do
     end
   end
 
-  defp compile_and_load(_path, content, module_str, expected_module) do
+  defp compile_and_load(path, content, module_str, expected_module) do
+    purge_module(expected_module)
     quoted = Code.string_to_quoted!(content)
-    compiled = Code.compile_quoted(quoted)
+    compiled = Code.compile_quoted(quoted, path)
 
     case pick_compiled_module(compiled, expected_module) do
       {:ok, {module, _binary}} ->
@@ -44,6 +45,12 @@ defmodule Nex.Agent.HotReload do
     end
   rescue
     e -> failure(module_str, Exception.message(e))
+  end
+
+  defp purge_module(module) when is_atom(module) do
+    :code.purge(module)
+    :code.delete(module)
+    :ok
   end
 
   defp pick_compiled_module(compiled, expected_module) do

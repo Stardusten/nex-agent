@@ -11,16 +11,16 @@ defmodule Nex.Agent.FollowUp do
 
   @allowed_tools MapSet.new([
                    "executor_status",
-                   "list_dir",
+                   "find",
                    "memory_status",
                    "read",
-                 "skill_discover",
-                 "skill_get",
-                 "interrupt_session",
-                 "tool_list",
-                 "web_fetch",
-                 "web_search"
-               ])
+                   "skill_discover",
+                   "skill_get",
+                   "interrupt_session",
+                   "tool_list",
+                   "web_fetch",
+                   "web_search"
+                 ])
 
   @type owner_snapshot :: RunControl.Run.t()
   @type mode :: :busy | :idle
@@ -37,6 +37,7 @@ defmodule Nex.Agent.FollowUp do
     Hard rules:
     - You are not the owner run.
     - Do not modify or continue the owner's main task.
+    - Do not present yourself as the deploy/rollback decision-maker; only the owner run owns `self_update` actions.
     - Do not claim you stopped anything unless you actually used the interrupt tool.
     - Keep the reply concise and directly answer the user's side question.
     - Only use tools exposed in this turn. They are read-only except a possible interrupt tool.

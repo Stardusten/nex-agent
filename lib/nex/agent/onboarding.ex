@@ -422,19 +422,21 @@ defmodule Nex.Agent.Onboarding do
 
     - State the next action before tool calls.
     - Never claim tool results before receiving actual outputs.
-    - Read before edit; do not assume file existence.
-    - After write/edit, re-read critical files when accuracy matters.
+    - Discover code with `find` first.
+    - If you know the module, prefer `reflect source`.
+    - If you know the path, prefer `read` or `reflect source` with `path`.
+    - Modify files with `apply_patch`, then re-read critical results when accuracy matters.
     - If tool calls fail, analyze and retry with a different approach.
     - Ask clarifying questions only when ambiguity blocks safe execution.
-    - Treat successful `.ex` changes as hot-updated by default.
-    - Only suggest restart when runtime/tools explicitly indicate it.
-    - Do not infer restart necessity from uptime/process age.
-    - Current invocation may still run old code; next invocation should observe new code.
+    - File edits only change disk state. Use `self_update deploy` as the only CODE runtime activation path.
+    - Only suggest restart or reload when runtime/tools explicitly indicate it.
+    - Do not infer restart necessity from uptime, process age, or file writes.
+    - Current invocation may still run old code; only a successful deploy should activate the next version.
     - Test hygiene: use isolated temp directories and clean them in `on_exit`; do not leave persistent artifacts under `~/.nex/agent` from tests.
 
     ## Built-in Tools
 
-    - File operations: `read`, `write`, `edit`, `list_dir`
+    - Code/file workflow: `find`, `read`, `apply_patch`
     - Shell and execution: `bash`
     - Communication: `message`
     - Web and retrieval: `web_search`, `web_fetch`
@@ -443,7 +445,7 @@ defmodule Nex.Agent.Onboarding do
     - Coding executor orchestration: `executor_dispatch`, `executor_status`
     - Evolution layers: `soul_update`, `user_update`, `memory_consolidate`, `memory_status`, `memory_rebuild`, `memory_write`, `skill_discover`, `skill_get`, `skill_capture`, `skill_import`, `skill_sync`
     - Tool management: `tool_list`, `tool_create`, `tool_delete`
-    - Code evolution: `reflect`, `upgrade_code`
+    - Code evolution: `reflect`, `self_update`
 
     Memory tool intent split:
     - Use `memory_consolidate` for "trigger memory refresh now" / "立即刷新记忆"
@@ -452,6 +454,15 @@ defmodule Nex.Agent.Onboarding do
 
     Prefer runtime skill packages for reusable instruction workflows.
     Prefer tools/evolution for code-level capabilities.
+    Preferred CODE workflow: `find -> read/reflect -> apply_patch -> self_update deploy`.
+    Deploy quick-check policy:
+    - `self_update status`: preflight with plan source, blocked reasons, release state, rollback candidates, and related tests
+    - `self_update deploy`: syntax, compile, reload, and related tests
+    Ship strict-check policy:
+    - Run `format`, `credo`, `dialyzer`, or other broader checks only when the user explicitly wants ship confidence or release-level verification
+    Owner/subagent handoff:
+    - Subagents may inspect and patch code
+    - Only the owner run may use `self_update status`, `self_update deploy`, or `self_update rollback`
     For Lark/Feishu business operations beyond chat messaging, use `bash` with external `lark-cli` instead of expecting built-in `feishu_*` tools.
 
     ## Six-Layer Evolution
@@ -465,20 +476,25 @@ defmodule Nex.Agent.Onboarding do
 
     ## Safety
 
-    - Use `reflect` before high-impact `upgrade_code` changes.
+    - Use `reflect` before high-impact `self_update deploy` changes.
     - Keep changes small, testable, and reversible.
     - Respect security boundaries; do not execute dangerous shell patterns.
     - Preserve evidence: report what was changed and what was verified.
 
-    ## Verification Checklist
+    ## Verification Policy
 
-    After meaningful code changes, run:
+    Quick deploy iteration:
+
+    - Use `self_update status` for preflight
+    - Use `self_update deploy` for syntax/compile/reload/related-tests verification
+
+    Strict ship confidence:
 
     - `mix format --check-formatted`
     - `mix credo --strict`
     - `mix dialyzer`
 
-    If any check fails, fix root causes before claiming completion.
+    Run strict ship checks when the user explicitly wants release confidence, not on every quick patch/deploy loop.
     """
   end
 
@@ -490,7 +506,7 @@ defmodule Nex.Agent.Onboarding do
 
     ## Built-in Tool Families
 
-    - File operations: `read`, `write`, `edit`, `list_dir`
+    - Code/file workflow: `find`, `read`, `apply_patch`
     - Shell and execution: `bash`
     - Communication: `message`
     - Web and retrieval: `web_search`, `web_fetch`
@@ -506,14 +522,17 @@ defmodule Nex.Agent.Onboarding do
       - `memory_write`: persist durable facts to MEMORY.md
     - SKILL layer: `skill_discover`, `skill_get`, `skill_capture`, `skill_import`, `skill_sync`
     - TOOL layer: `tool_list`, `tool_create`, `tool_delete`
-    - CODE layer: `reflect`, `upgrade_code`
+    - CODE layer: `reflect`, `self_update`
 
     ## Usage Principles
 
     - Prefer deterministic tools over free-form reasoning when possible.
     - Use the smallest tool that can solve the task.
     - Validate tool outputs before taking follow-up actions.
-    - For code changes, pair tool execution with verification checks.
+    - For CODE changes, follow `find -> read/reflect -> apply_patch -> self_update status -> self_update deploy`.
+    - Use `self_update status` for quick preflight and release visibility.
+    - Treat `self_update deploy` as quick deploy verification only; strict ship checks are explicit extra work.
+    - In owner/subagent workflows, only the owner run may deploy or roll back.
     - If a built-in memory tool directly matches the user request, call it instead of reading source files first.
 
     ## Workspace Extension Model
@@ -546,8 +565,8 @@ defmodule Nex.Agent.Onboarding do
     - Accuracy over speed
     - Always verify actions with tools before reporting results
     - Transparency in actions
-    - Treat successful `.ex` changes as hot-updated by default. Only suggest a restart if tools or the runtime explicitly report hot reload failed.
-    - Do not infer restarts from process age or uptime. The current call may still run old code; expect the next call to observe the new version.
+    - File edits do not activate CODE changes. Use `self_update deploy` when runtime activation is required.
+    - Do not infer restarts or hot reload from file writes or process age. The current call may still run old code until deploy completes.
 
     ## Communication Style
 

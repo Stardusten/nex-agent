@@ -1,3 +1,3 @@
 defmodule Nex.Agent.Test.UpgradeTarget do
-  def value, do: :v2
+  def value, do: :v1
 end

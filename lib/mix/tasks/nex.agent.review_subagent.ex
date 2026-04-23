@@ -96,10 +96,9 @@ defmodule Mix.Tasks.Nex.Agent.ReviewSubagent do
 
   defp apply_upgrade(_module, _version) do
     Mix.shell().info("⚠️  Automatic code upgrade application not yet implemented.")
-    Mix.shell().info("Please review the report and manually use `upgrade_code` tool.")
+    Mix.shell().info("Please review the report and manually use `self_update` tooling.")
 
-    # Future: Integrate with UpgradeManager
-    # Nex.Agent.UpgradeManager.upgrade(module, new_code, reason: "Subagent review: #{version}")
+    # Future: Integrate with SelfUpdate.Deployer
   end
 
   defp get_option(opts, flag, default) do

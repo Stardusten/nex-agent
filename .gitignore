@@ -36,6 +36,7 @@ Thumbs.db
 !/.nex/skills/
 !/.nex/skills/**
 ~/.nex/
+/.nex_self_update/
 
 # Temporary files and logs
 /tmp/

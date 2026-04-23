@@ -94,13 +94,19 @@ defmodule Nex.Agent.ContextBuilder do
 
     ## Guidelines
     - State the next action before tool calls, but NEVER predict or claim results before receiving them.
-    - Before modifying a file, read it first. Do not assume files or directories exist.
-    - After writing or editing a file, re-read it if accuracy matters.
+    - Discover code with `find` first.
+    - If you already know the module, prefer `reflect source` with `module`.
+    - If you already know the file path, prefer `read` or `reflect source` with `path`.
+    - Modify code with `apply_patch`. After patching, re-read critical files if accuracy matters.
     - If a tool call fails, analyze the error before retrying with a different approach.
     - Ask for clarification when the request is ambiguous.
-    - Treat successful `.ex` changes as hot-updated by default. Only suggest a restart if tools or the runtime explicitly report hot reload failed.
-    - Do not infer restarts from process age or uptime.
-    - Caveat: the current call may still run old code. Expect the next call to observe the new version.
+    - Editing tools only write to disk. Runtime activation for CODE changes must go through `self_update deploy`.
+    - Do not infer runtime activation, restarts, or hot reload from file writes or process age.
+    - Caveat: the current call may still run old code. Expect only a successful `self_update deploy` to activate the next version.
+    - Use `self_update status` as the deploy preflight entrypoint. It reports plan source, blocked reasons, related tests, current effective release, current event release, and rollback candidates.
+    - `self_update deploy` is the quick deploy verification path: syntax, compile, reload, and related tests.
+    - Strict ship checks such as `format`, `credo`, or `dialyzer` are for explicit ship confidence, not mandatory on every quick deploy iteration.
+    - In owner/subagent workflows, subagents may inspect and patch code, but only the owner run may use `self_update status`, `self_update deploy`, or `self_update rollback`.
     - Skills are discoverable runtime packages, not preloaded instructions. Use `skill_discover` to search, `skill_get` to inspect a package with progressive disclosure, and `skill_capture` to save a reusable local knowledge package.
 
     Reply directly with text for normal conversations.

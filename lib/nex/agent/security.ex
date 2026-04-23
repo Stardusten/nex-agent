@@ -84,6 +84,36 @@ defmodule Nex.Agent.Security do
     end
   end
 
+  @doc """
+  Validate a write target, including files that do not exist yet.
+
+  For non-existent paths, validation is anchored on the nearest existing ancestor
+  so symlink escapes still fail the allowed-roots check.
+  """
+  @spec validate_write_path(String.t()) :: {:ok, String.t()} | {:error, String.t()}
+  def validate_write_path(path) do
+    expanded = Path.expand(path)
+
+    if String.contains?(path, "..") and not safe_traversal?(path) do
+      {:error, "Path traversal not allowed: #{path}"}
+    else
+      roots = allowed_roots()
+
+      with true <- path_within_allowed_roots?(expanded, roots),
+           {:ok, ancestor} <- nearest_existing_ancestor(expanded),
+           {:ok, real_ancestor} <- realpath_if_possible(ancestor),
+           true <- path_within_allowed_roots?(real_ancestor, roots) do
+        {:ok, expanded}
+      else
+        false ->
+          {:error, "Path not within allowed roots. Allowed: #{Enum.join(roots, ", ")}"}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
   defp safe_traversal?(path) do
     expanded = Path.expand(path)
     roots = allowed_roots()
@@ -107,6 +137,28 @@ defmodule Nex.Agent.Security do
     end
   rescue
     _ -> false
+  end
+
+  defp nearest_existing_ancestor(path) do
+    parent = Path.dirname(path)
+
+    cond do
+      File.exists?(path) ->
+        {:ok, path}
+
+      parent == path ->
+        {:error, "No existing ancestor for path: #{path}"}
+
+      true ->
+        nearest_existing_ancestor(parent)
+    end
+  end
+
+  defp realpath_if_possible(path) do
+    case :file.read_link_all(String.to_charlist(path)) do
+      {:ok, resolved} -> {:ok, List.to_string(resolved)}
+      {:error, _reason} -> {:ok, Path.expand(path)}
+    end
   end
 
   @doc """

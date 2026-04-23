@@ -5,7 +5,6 @@ defmodule Nex.Agent.Heartbeat do
   Built-in maintenance (once per day):
   - Session GC: delete sessions older than 30 days
   - Memory log archive: archive daily logs older than 60 days
-  - Code upgrade cleanup: keep only latest 10 versions per module
 
   User-defined tasks from HEARTBEAT.md:
   - `every:` interval-based tasks
@@ -17,7 +16,6 @@ defmodule Nex.Agent.Heartbeat do
   use GenServer
   require Logger
 
-  alias Nex.Agent.CodeUpgrade
   alias Nex.Agent.Inbound.Envelope
 
   # 30 minutes
@@ -25,7 +23,6 @@ defmodule Nex.Agent.Heartbeat do
   @maintenance_cooldown_seconds 86_400
   @session_max_age_days 30
   @log_archive_age_days 60
-  @code_upgrade_versions_to_keep 10
   @max_history 50
 
   defstruct [
@@ -233,8 +230,7 @@ defmodule Nex.Agent.Heartbeat do
         Task.Supervisor.start_child(Nex.Agent.TaskSupervisor, fn ->
           results = [
             {:session_gc, run_session_gc(workspace)},
-            {:log_archive, run_log_archive(workspace)},
-            {:code_upgrade_cleanup, run_code_upgrade_cleanup()}
+            {:log_archive, run_log_archive(workspace)}
           ]
 
           send(heartbeat, {:maintenance_done, results})
@@ -324,51 +320,6 @@ defmodule Nex.Agent.Heartbeat do
     e ->
       Logger.warning("[Heartbeat] Log archive error: #{Exception.message(e)}")
       :error
-  end
-
-  defp run_code_upgrade_cleanup do
-    versions_root = CodeUpgrade.versions_root()
-
-    if File.exists?(versions_root) do
-      versions_root
-      |> File.ls!()
-      |> Enum.each(fn module_name ->
-        module_dir = Path.join(versions_root, module_name)
-
-        if File.dir?(module_dir) do
-          module_dir
-          |> version_files()
-          |> Enum.drop(@code_upgrade_versions_to_keep)
-          |> Enum.each(fn path ->
-            File.rm_rf!(path)
-            Logger.info("[Heartbeat] Removed old code upgrade version: #{Path.basename(path)}")
-          end)
-        end
-      end)
-    end
-
-    :ok
-  rescue
-    e ->
-      Logger.warning("[Heartbeat] Code upgrade cleanup error: #{Exception.message(e)}")
-      :error
-  end
-
-  defp version_files(module_dir) do
-    module_dir
-    |> File.ls!()
-    |> Enum.reject(&(&1 == "backup.ex"))
-    |> Enum.filter(&String.ends_with?(&1, ".ex"))
-    |> Enum.map(&Path.join(module_dir, &1))
-    |> Enum.sort_by(
-      fn path ->
-        case File.stat(path) do
-          {:ok, stat} -> stat.mtime
-          _ -> {{0, 0, 0}, {0, 0, 0}}
-        end
-      end,
-      :desc
-    )
   end
 
   # ── HEARTBEAT.md Tasks ──

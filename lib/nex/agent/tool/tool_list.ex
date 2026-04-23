@@ -167,7 +167,7 @@ defmodule Nex.Agent.Tool.ToolList do
         "executor_dispatch" -> ["tool"]
         "executor_status" -> ["tool"]
         "reflect" -> ["code"]
-        "upgrade_code" -> ["code"]
+        "self_update" -> ["code"]
         _ -> ["tool"]
       end
     else

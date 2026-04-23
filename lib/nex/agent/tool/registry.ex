@@ -11,9 +11,8 @@ defmodule Nex.Agent.Tool.Registry do
 
   @default_tools [
     Nex.Agent.Tool.Read,
-    Nex.Agent.Tool.Write,
-    Nex.Agent.Tool.Edit,
-    Nex.Agent.Tool.ListDir,
+    Nex.Agent.Tool.Find,
+    Nex.Agent.Tool.ApplyPatch,
     Nex.Agent.Tool.Bash,
     Nex.Agent.Tool.WebSearch,
     Nex.Agent.Tool.WebFetch,
@@ -38,7 +37,7 @@ defmodule Nex.Agent.Tool.Registry do
     Nex.Agent.Tool.ToolDelete,
     Nex.Agent.Tool.SoulUpdate,
     Nex.Agent.Tool.SpawnTask,
-    Nex.Agent.Tool.UpgradeCode,
+    Nex.Agent.Tool.SelfUpdate,
     Nex.Agent.Tool.Reflect,
     Nex.Agent.Tool.Cron
   ]
@@ -182,7 +181,7 @@ defmodule Nex.Agent.Tool.Registry do
       |> filter_tools(filter)
       |> Enum.sort_by(fn {name, _module} -> {definition_priority(name), name} end)
       |> Enum.map(fn {name, module} ->
-        def_map = module.definition() |> normalize_definition()
+        def_map = module |> tool_definition(filter) |> normalize_definition()
 
         %{
           "name" => get_def_name(def_map) || name,
@@ -230,7 +229,10 @@ defmodule Nex.Agent.Tool.Registry do
 
         state =
           if is_binary(run_id) do
-            put_in(state.active_runs[run_id], track_tool_pid(Map.get(state.active_runs, run_id), pid))
+            put_in(
+              state.active_runs[run_id],
+              track_tool_pid(Map.get(state.active_runs, run_id), pid)
+            )
           else
             state
           end
@@ -295,6 +297,14 @@ defmodule Nex.Agent.Tool.Registry do
 
       true ->
         :error
+    end
+  end
+
+  defp tool_definition(module, filter) do
+    if function_exported?(module, :definition, 1) do
+      module.definition(filter)
+    else
+      module.definition()
     end
   end
 
@@ -482,18 +492,18 @@ defmodule Nex.Agent.Tool.Registry do
 
   @cron_tools ~w(bash read message web_search web_fetch task)
   @subagent_tools ~w(
+    apply_patch
     bash
-    edit
     executor_dispatch
     executor_status
-    list_dir
+    find
     memory_status
     read
+    reflect
     skill_discover
     skill_get
     web_fetch
     web_search
-    write
   )
 
   defp filter_tools(tools, :all), do: tools
@@ -537,7 +547,8 @@ defmodule Nex.Agent.Tool.Registry do
       %MapSet{} = pids ->
         if MapSet.size(pids) == 0, do: Map.delete(active_runs, run_id), else: active_runs
 
-      _ -> active_runs
+      _ ->
+        active_runs
     end
   end
 end

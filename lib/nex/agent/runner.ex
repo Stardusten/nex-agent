@@ -1394,6 +1394,7 @@ defmodule Nex.Agent.Runner do
       session_key: Keyword.get(opts, :session_key),
       run_id: Keyword.get(opts, :run_id),
       cancel_ref: Keyword.get(opts, :cancel_ref),
+      tools_filter: Keyword.get(opts, :tools_filter),
       provider: Keyword.get(opts, :provider),
       model: Keyword.get(opts, :model),
       api_key: Keyword.get(opts, :api_key),

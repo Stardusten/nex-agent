@@ -14,11 +14,11 @@ defmodule Nex.Agent.Admin do
     Gateway,
     Heartbeat,
     RequestTrace,
+    SelfUpdate,
     Session,
     SessionManager,
     Skills,
     Tasks,
-    UpgradeManager,
     Workspace
   }
 
@@ -242,13 +242,16 @@ defmodule Nex.Agent.Admin do
     modules = code_modules()
     selected_name = Keyword.get(opts, :module) || List.first(modules)
     selected_module = if selected_name, do: resolve_module(selected_name), else: nil
+    deploy_error = deploy_guard_reason(selected_name)
 
     %{
       modules: modules,
       selected_module: selected_name,
       current_source: source_for(selected_module),
       current_source_preview: source_preview_for(selected_module),
-      versions: versions_for(selected_module),
+      deployable: is_nil(deploy_error),
+      deploy_warning: deploy_error,
+      releases: releases_for(selected_name),
       recent_events:
         Audit.recent(Keyword.put(workspace_opts(opts), :limit, 30))
         |> Enum.filter(&String.starts_with?(Map.get(&1, "event", ""), "code."))
@@ -392,70 +395,33 @@ defmodule Nex.Agent.Admin do
     result
   end
 
-  @spec code_preview(String.t(), String.t()) :: {:ok, map()} | {:error, String.t()}
-  def code_preview(module_name, code)
-      when is_binary(module_name) and is_binary(code) and code != "" do
-    case resolve_module(module_name) do
-      nil ->
-        {:error, "Unknown module: #{module_name}"}
-
-      module ->
-        {:ok,
-         %{
-           module: module_name,
-           diff: CodeUpgrade.diff(module, code),
-           current_source: source_preview_for(module)
-         }}
-    end
-  end
-
-  def code_preview(_module_name, _code), do: {:error, "module and code are required"}
-
-  @spec hot_upgrade_code(String.t(), String.t(), String.t(), keyword()) ::
+  @spec rollback_code_update(String.t(), String.t() | nil, keyword()) ::
           {:ok, map()} | {:error, String.t()}
-  def hot_upgrade_code(module_name, code, reason, opts \\ [])
-      when is_binary(module_name) and is_binary(code) and is_binary(reason) do
-    case resolve_module(module_name) do
-      nil ->
-        {:error, "Unknown module: #{module_name}"}
+  def rollback_code_update(module_name, version_id \\ nil, opts \\ [])
 
-      module ->
-        UpgradeManager.hot_upgrade(module, code,
-          reason: reason,
-          workspace: workspace(opts)
-        )
-    end
-  end
+  def rollback_code_update(module_name, version_id, opts) when is_binary(module_name) do
+    with {:ok, _module, _path} <- resolve_code_deploy_target(module_name) do
+      result = SelfUpdate.Deployer.rollback(if(present?(version_id), do: version_id, else: nil))
 
-  @spec rollback_code(String.t(), String.t() | nil, keyword()) :: :ok | {:error, String.t()}
-  def rollback_code(module_name, version_id \\ nil, opts \\ [])
+      case result do
+        %{status: :failed, error: error} ->
+          {:error, error}
 
-  def rollback_code(module_name, version_id, opts) when is_binary(module_name) do
-    case resolve_module(module_name) do
-      nil ->
-        {:error, "Unknown module: #{module_name}"}
-
-      module ->
-        result =
-          if present?(version_id) do
-            CodeUpgrade.rollback(module, version_id)
-          else
-            CodeUpgrade.rollback(module)
-          end
-
-        if result == :ok do
+        payload ->
           Audit.append(
             "code.rollback",
             %{
               "module" => module_name,
-              "version_id" => version_id,
+              "release_id" => payload.release_id,
               "workspace" => workspace(opts)
             },
             workspace_opts(opts)
           )
-        end
 
-        result
+          {:ok, payload}
+      end
+    else
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -625,7 +591,7 @@ defmodule Nex.Agent.Admin do
         "tool_list" -> ["tool"]
         "tool_delete" -> ["tool"]
         "reflect" -> ["code"]
-        "upgrade_code" -> ["code"]
+        "self_update" -> ["code"]
         _ -> ["tool"]
       end
     else
@@ -719,11 +685,41 @@ defmodule Nex.Agent.Admin do
     |> Enum.sort()
   end
 
-  defp versions_for(nil), do: []
+  defp deploy_guard_reason(nil), do: nil
 
-  defp versions_for(module) do
-    CodeUpgrade.list_versions(module)
-    |> Enum.sort_by(&Map.get(&1, :timestamp), :desc)
+  defp deploy_guard_reason(module_name) do
+    case resolve_code_deploy_target(module_name) do
+      {:ok, _module, _path} -> nil
+      {:error, reason} -> reason
+    end
+  end
+
+  defp resolve_code_deploy_target(module_name) when is_binary(module_name) do
+    case resolve_module(module_name) do
+      nil ->
+        {:error, "Unknown module: #{module_name}"}
+
+      module ->
+        path = CodeUpgrade.source_path(module)
+
+        cond do
+          not CodeUpgrade.code_layer_file?(path) ->
+            {:error, "Only repo CODE-layer modules under lib/nex/agent can be deployed via self_update: #{module_name}"}
+
+          CodeUpgrade.protected_module?(module) ->
+            {:error, "Protected module cannot be deployed via self_update: #{module_name}"}
+
+          true ->
+            {:ok, module, path}
+        end
+    end
+  end
+
+  defp releases_for(nil), do: []
+
+  defp releases_for(module_name) do
+    Nex.Agent.SelfUpdate.ReleaseStore.list_releases()
+    |> Enum.filter(fn release -> module_name in List.wrap(release["modules"]) end)
   end
 
   defp source_for(nil), do: ""
@@ -1081,8 +1077,6 @@ defmodule Nex.Agent.Admin do
   end
 
   defp external_gateway_running?(opts) do
-    config = Config.load(config_path: Keyword.get(opts, :config_path))
-
     pid_path =
       Path.join(
         Path.dirname(Config.config_path(config_path: Keyword.get(opts, :config_path))),
