@@ -34,6 +34,12 @@ defmodule Nex.Agent.ContextBuilderTest do
     assert prompt =~ "use `memory_consolidate` directly"
     assert prompt =~ "inspect MEMORY.md and the current session state before answering"
     assert prompt =~ "do not inspect implementation with `read` or `bash` first"
+    assert prompt =~ "Use `self_update status` as the deploy preflight entrypoint."
+    assert prompt =~ "`self_update deploy` is the quick deploy verification path"
+    assert prompt =~ "Strict ship checks such as `format`, `credo`, or `dialyzer`"
+
+    assert prompt =~
+             "only the owner run may use `self_update status`, `self_update deploy`, or `self_update rollback`"
 
     assert prompt =~
              "Empty `MEMORY.md` does not imply this is the first conversation or that no prior session history exists."
@@ -67,7 +73,7 @@ defmodule Nex.Agent.ContextBuilderTest do
   end
 
   test "runtime context falls back to plain text guidance for non-feishu channels", %{} do
-    config = %Config{Config.default() | telegram: %{"enabled" => true, "streaming" => false}}
+    config = Config.default()
 
     context = ContextBuilder.build_runtime_context("telegram", "chat-1", config: config)
 

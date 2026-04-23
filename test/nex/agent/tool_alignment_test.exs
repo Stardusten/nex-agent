@@ -77,9 +77,9 @@ defmodule Nex.Agent.ToolAlignmentTest do
     memory_status = Enum.find(builtins, &(&1["name"] == "memory_status"))
     memory_write = Enum.find(builtins, &(&1["name"] == "memory_write"))
     reflect = Enum.find(builtins, &(&1["name"] == "reflect"))
+    self_update = Enum.find(builtins, &(&1["name"] == "self_update"))
     skill_get = Enum.find(builtins, &(&1["name"] == "skill_get"))
     skill_capture = Enum.find(builtins, &(&1["name"] == "skill_capture"))
-    upgrade = Enum.find(builtins, &(&1["name"] == "upgrade_code"))
     tool_create = Enum.find(builtins, &(&1["name"] == "tool_create"))
 
     assert memory_consolidate["layers"] == ["memory"]
@@ -87,9 +87,9 @@ defmodule Nex.Agent.ToolAlignmentTest do
     assert memory_status["layers"] == ["memory"]
     assert memory_write["layers"] == ["memory"]
     assert reflect["layers"] == ["code"]
+    assert self_update["layers"] == ["code"]
     assert skill_get["layers"] == ["skill"]
     assert skill_capture["layers"] == ["skill"]
-    assert upgrade["layers"] == ["code"]
     assert tool_create["layers"] == ["tool"]
     refute Enum.any?(builtins, &(&1["name"] == "skill_list"))
     refute Enum.any?(builtins, &(&1["name"] == "skill_read"))
@@ -148,12 +148,13 @@ defmodule Nex.Agent.ToolAlignmentTest do
       |> Enum.map(& &1["name"])
 
     assert "read" in names
-    assert "edit" in names
-    assert "list_dir" in names
+    assert "find" in names
+    assert "apply_patch" in names
     assert "executor_dispatch" in names
     assert "executor_status" in names
     assert "skill_discover" in names
     assert "skill_get" in names
+    assert "reflect" in names
     refute "skill_list" in names
     refute "skill_read" in names
     refute "skill_create" in names
@@ -166,6 +167,26 @@ defmodule Nex.Agent.ToolAlignmentTest do
     refute "knowledge_capture" in names
     refute "memory_consolidate" in names
     refute "memory_write" in names
+    refute "edit" in names
+    refute "write" in names
+    refute "list_dir" in names
+    refute "self_update" in names
+
+    reflect = Enum.find(Registry.definitions(:subagent), &(&1["name"] == "reflect"))
+    action_enum = get_in(reflect, ["input_schema", :properties, :action, :enum])
+
+    assert Enum.sort(action_enum) == Enum.sort(~w(source versions introspect list_modules))
+    refute "trigger_evolution" in action_enum
+  end
+
+  test "follow-up tool surface keeps read-only discovery path without patch mutation" do
+    names =
+      Registry.definitions(:follow_up)
+      |> Enum.map(& &1["name"])
+
+    assert "read" in names
+    assert "find" in names
+    refute "apply_patch" in names
   end
 
   test "memory tool descriptions clearly separate consolidate status and rebuild intents" do

@@ -2,6 +2,7 @@ defmodule Nex.Agent.AdminTest do
   use ExUnit.Case, async: false
 
   alias Nex.Agent.{Admin, Audit, Bus, CodeUpgrade, RequestTrace, Session, Skills, Workspace}
+  alias Nex.Agent.SelfUpdate.ReleaseStore
   alias Nex.Agent.Tool.CustomTools
 
   setup do
@@ -9,17 +10,28 @@ defmodule Nex.Agent.AdminTest do
       Path.join(System.tmp_dir!(), "nex-agent-admin-#{System.unique_integer([:positive])}")
 
     Workspace.ensure!(workspace: workspace)
+    repo_root = Path.join(System.tmp_dir!(), "nex-agent-admin-repo-#{System.unique_integer([:positive])}")
+    previous_repo_root = Application.get_env(:nex_agent, :repo_root)
+    Application.put_env(:nex_agent, :repo_root, repo_root)
+    File.mkdir_p!(repo_root)
 
     if Process.whereis(Bus) == nil do
       start_supervised!({Bus, name: Bus})
     end
 
     on_exit(fn ->
+      if previous_repo_root do
+        Application.put_env(:nex_agent, :repo_root, previous_repo_root)
+      else
+        Application.delete_env(:nex_agent, :repo_root)
+      end
+
       Bus.unsubscribe(:admin_events)
       File.rm_rf!(workspace)
+      File.rm_rf!(repo_root)
     end)
 
-    {:ok, workspace: workspace}
+    {:ok, workspace: workspace, repo_root: repo_root}
   end
 
   test "sessions_state and overview_state tolerate empty sessions and sort by updated_at", %{
@@ -301,9 +313,40 @@ defmodule Nex.Agent.AdminTest do
     assert selected.selected_module == tool_module
     assert selected.current_source =~ "defmodule #{tool_module} do"
     assert selected.current_source_preview =~ "defmodule #{tool_module} do"
+    assert selected.releases == []
 
     assert CodeUpgrade.source_path(CustomTools.module_for_name(tool_name)) ==
              Path.join(tool_dir, "tool.ex")
+  end
+
+  test "code_state surfaces release history for selected module", %{repo_root: repo_root} do
+    ReleaseStore.ensure_layout()
+
+    path = CodeUpgrade.source_path(Nex.Agent.Admin)
+
+    :ok =
+      ReleaseStore.save_release(%{
+        "id" => "rel-admin-test",
+        "parent_release_id" => nil,
+        "timestamp" => "2026-04-24T10:00:00Z",
+        "reason" => "admin test",
+        "files" => [%{"path" => Path.relative_to(path, CodeUpgrade.repo_root()), "before_sha" => "a", "after_sha" => "b"}],
+        "modules" => ["Nex.Agent.Admin"],
+        "tests" => [],
+        "status" => "deployed"
+      })
+
+    state = Admin.code_state(module: "Nex.Agent.Admin")
+
+    assert [%{"id" => "rel-admin-test"} | _] = state.releases
+    assert ReleaseStore.root_dir() == Path.join(repo_root, ".nex_self_update")
+  end
+
+  test "code_state marks tool-layer modules as read-only deploy targets" do
+    state = Admin.code_state(module: "Nex.Agent.Tool.ToolList")
+
+    refute state.deployable
+    assert state.deploy_warning =~ "Only repo CODE-layer modules"
   end
 
   test "publish_draft_skill republishes local and runtime copies", %{workspace: workspace} do

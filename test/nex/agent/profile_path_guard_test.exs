@@ -1,7 +1,7 @@
 defmodule Nex.Agent.ProfilePathGuardTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.Tool.{Edit, Read, Write}
+  alias Nex.Agent.Tool.{ApplyPatch, Read}
 
   setup do
     workspace = Path.join("/tmp", "nex-agent-profile-guard-#{System.unique_integer([:positive])}")
@@ -18,17 +18,26 @@ defmodule Nex.Agent.ProfilePathGuardTest do
     {:ok, workspace: workspace}
   end
 
-  test "read/write/edit block workspace/memory/USER.md", %{workspace: workspace} do
+  test "read/apply_patch block workspace/memory/USER.md", %{workspace: workspace} do
     shadow_path = Path.join(workspace, "memory/USER.md")
 
     assert {:error, msg} = Read.execute(%{"path" => shadow_path}, %{})
     assert msg =~ "workspace/USER.md"
 
-    assert {:error, msg} = Write.execute(%{"path" => shadow_path, "content" => "x"}, %{})
-    assert msg =~ "user_update"
-
     assert {:error, msg} =
-             Edit.execute(%{"path" => shadow_path, "search" => "shadow", "replace" => "x"}, %{})
+             ApplyPatch.execute(
+               %{
+                 "patch" => """
+                 *** Begin Patch
+                 *** Update File: #{shadow_path}
+                 @@
+                 -shadow
+                 +x
+                 *** End Patch
+                 """
+               },
+               %{}
+             )
 
     assert msg =~ "user_update"
   end

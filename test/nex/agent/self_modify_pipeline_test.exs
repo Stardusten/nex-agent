@@ -1,52 +1,46 @@
 defmodule Nex.Agent.SelfModifyPipelineTest do
-  @moduledoc """
-  Phase 0 验证：agent 自修改管线端到端测试。
-
-  覆盖链路：read code → modify code → hot-reload → rollback
-
-  ## 手工 E2E 测试（gateway 运行时）
-
-  1. 启动 gateway: `MIX_ENV=dev mise exec -- mix nex.agent gateway --log`
-  2. 在任意 channel 发送：「用 reflect tool 查看 Nex.Agent.Tool.Reflect 的源码」
-  3. 发送：「用 upgrade_code 修改 Reflect 模块，在 evolution_status action 的输出开头加一行 "[self-modify test ok]"，reason 填 "phase0 e2e test"」
-  4. 发送：「再用 reflect 查看 evolution_status」
-  5. 验证输出开头出现 "[self-modify test ok]"
-  6. 发送：「用 reflect 的 versions action 查看 Nex.Agent.Tool.Reflect 的版本历史」
-  7. 验证有刚才的版本记录
-  8. 手动 `git checkout lib/nex/agent/tool/reflect.ex` 恢复原始代码
-  """
-
   use ExUnit.Case, async: false
 
   alias Nex.Agent.{CodeUpgrade, HotReload}
+  alias Nex.Agent.SelfUpdate.{Deployer, ReleaseStore}
   alias Nex.Agent.Tool.Registry
 
   @tmp_prefix "nex-selfmod-test"
+  @repo_root File.cwd!()
 
   setup do
     tmp = Path.join(System.tmp_dir!(), "#{@tmp_prefix}-#{System.unique_integer([:positive])}")
     File.mkdir_p!(tmp)
+    previous_repo_root = Application.get_env(:nex_agent, :repo_root)
+    existing_artifacts = self_update_artifacts()
 
-    prev_upgrades = Application.get_env(:nex_agent, :code_upgrades_path)
-    upgrades_dir = Path.join(tmp, "code_upgrades")
-    File.mkdir_p!(upgrades_dir)
-    Application.put_env(:nex_agent, :code_upgrades_path, upgrades_dir)
+    targets = %{
+      upgrade: tracked_target_spec("UpgradeTarget"),
+      rollback: tracked_target_spec("RollbackTarget")
+    }
+
+    Application.put_env(:nex_agent, :repo_root, @repo_root)
+
+    if Process.whereis(Nex.Agent.TaskSupervisor) == nil do
+      start_supervised!({Task.Supervisor, name: Nex.Agent.TaskSupervisor})
+    end
 
     on_exit(fn ->
-      if prev_upgrades do
-        Application.put_env(:nex_agent, :code_upgrades_path, prev_upgrades)
+      if previous_repo_root do
+        Application.put_env(:nex_agent, :repo_root, previous_repo_root)
       else
-        Application.delete_env(:nex_agent, :code_upgrades_path)
+        Application.delete_env(:nex_agent, :repo_root)
       end
 
-      purge_test_modules()
+      unregister_test_tools()
+      purge_test_modules(targets)
+      restore_tracked_sources(targets)
+      remove_new_artifacts(existing_artifacts)
       File.rm_rf!(tmp)
     end)
 
-    {:ok, tmp: tmp, upgrades_dir: upgrades_dir}
+    {:ok, tmp: tmp, targets: targets}
   end
-
-  # ── Test 1: HotReload 编译加载全新模块 ──
 
   test "hot_reload compiles and loads a new module from source", %{tmp: tmp} do
     source_path = Path.join(tmp, "hot_reload_test_tool.ex")
@@ -58,12 +52,11 @@ defmodule Nex.Agent.SelfModifyPipelineTest do
     assert result.reload_succeeded == true
     assert result.restart_required == false
     assert result.module == "Nex.Agent.Tool.HotReloadTestTool"
+    assert CodeUpgrade.source_path(Nex.Agent.Tool.HotReloadTestTool) == source_path
 
     module = Nex.Agent.Tool.HotReloadTestTool
     assert {:ok, "hello from hot reload"} = module.execute(%{}, %{})
   end
-
-  # ── Test 2: HotReload + Registry hot-swap ──
 
   test "hot_reload swaps a registered tool in the registry", %{tmp: tmp} do
     ensure_registry!()
@@ -75,7 +68,6 @@ defmodule Nex.Agent.SelfModifyPipelineTest do
     r1 = HotReload.reload(v1_path, v1_code)
     assert r1.reload_succeeded
     wait_for_registry("swap_test")
-
     assert {:ok, "v1"} = Registry.execute("swap_test", %{}, %{})
 
     v2_code = fresh_tool_code("SwapTestTool", "swap_test", "v2")
@@ -84,93 +76,347 @@ defmodule Nex.Agent.SelfModifyPipelineTest do
     r2 = HotReload.reload_expected(v1_path, v2_code, Nex.Agent.Tool.SwapTestTool)
     assert r2.reload_succeeded
     wait_for_registry("swap_test")
-
     assert {:ok, "v2"} = Registry.execute("swap_test", %{}, %{})
   end
 
-  # ── Test 3: CodeUpgrade 完整升级 + 版本管理 + 回滚 ──
+  test "self_update deploy writes a release and keeps deployed code on success", %{
+    targets: targets
+  } do
+    target = targets.upgrade
+    write_source(target, :v1)
+    Code.compile_file(target.source_path)
 
-  test "code_upgrade upgrades, versions, and rolls back a module", %{tmp: tmp} do
-    source_path = Path.join(tmp, "upgrade_target.ex")
-    v1_code = simple_module_code("UpgradeTarget", :v1)
-    File.write!(source_path, v1_code)
-    Code.compile_string(v1_code)
+    File.write!(
+      target.test_path,
+      module_test_code(target, "assert value(target_module()) == :v2")
+    )
 
-    v2_code = simple_module_code("UpgradeTarget", :v2)
+    write_source(target, :v2)
 
-    assert {:ok, %{version: version, hot_reload: hr}} =
-             CodeUpgrade.upgrade_module(Nex.Agent.Test.UpgradeTarget, v2_code)
+    assert %{status: :deployed, release_id: release_id, rollback_available: true} =
+             Deployer.deploy("phase10d success", [target.source_path])
 
-    assert hr.reload_succeeded
-    assert version.id |> is_binary()
-    assert Nex.Agent.Test.UpgradeTarget.value() == :v2
+    assert is_binary(release_id)
+    assert value(target.module) == :v2
 
-    versions = CodeUpgrade.list_versions(Nex.Agent.Test.UpgradeTarget)
-    assert length(versions) >= 1
+    assert {:ok, release} = ReleaseStore.load_release(release_id)
+    assert release["reason"] == "phase10d success"
+    assert module_name(target.module) in release["modules"]
 
-    v3_code = simple_module_code("UpgradeTarget", :v3)
-    assert {:ok, _} = CodeUpgrade.upgrade_module(Nex.Agent.Test.UpgradeTarget, v3_code)
-    assert Nex.Agent.Test.UpgradeTarget.value() == :v3
-
-    assert :ok = CodeUpgrade.rollback(Nex.Agent.Test.UpgradeTarget)
-    assert Nex.Agent.Test.UpgradeTarget.value() == :v2
+    assert Enum.any?(
+             release["tests"],
+             &(Map.get(&1, "path") == target.test_path or Map.get(&1, :path) == target.test_path)
+           )
   end
 
-  # ── Test 4: 语法错误自动回滚 ──
+  test "self_update status surfaces current release and related test paths", %{targets: targets} do
+    target = targets.upgrade
+    write_source(target, :v1)
+    Code.compile_file(target.source_path)
 
-  test "code_upgrade auto-rolls back on syntax error", %{tmp: tmp} do
-    source_path = Path.join(tmp, "rollback_target.ex")
-    good_code = simple_module_code("RollbackTarget", :good)
-    File.write!(source_path, good_code)
-    Code.compile_string(good_code)
+    File.write!(
+      target.test_path,
+      module_test_code(target, "assert value(target_module()) == :v2")
+    )
 
-    assert {:ok, _} = CodeUpgrade.upgrade_module(Nex.Agent.Test.RollbackTarget, good_code)
-    assert Nex.Agent.Test.RollbackTarget.value() == :good
+    write_source(target, :v2)
 
-    bad_code = """
-    defmodule Nex.Agent.Test.RollbackTarget do
-      def value, do: :bad
-      # missing end
-    """
+    assert %{status: :deployed, release_id: release_id} =
+             Deployer.deploy("status target", [target.source_path])
 
-    assert {:error, reason} = CodeUpgrade.upgrade_module(Nex.Agent.Test.RollbackTarget, bad_code)
-    assert reason =~ "Validation failed"
-    assert Nex.Agent.Test.RollbackTarget.value() == :good
+    assert %{
+             status: :ok,
+             plan_source: :explicit,
+             current_effective_release: ^release_id,
+             current_event_release: ^release_id,
+             previous_rollback_target: nil,
+             pending_files: [pending_file],
+             modules: [module_name],
+             related_tests: [related_test],
+             rollback_candidates: [],
+             deployable: true,
+             blocked_reasons: []
+           } = Deployer.status([target.source_path])
+
+    assert pending_file == Path.relative_to(target.source_path, @repo_root)
+    assert module_name == target.module_name
+    assert related_test == target.test_path
   end
 
-  # ── Test 5: UpgradeCode tool 接口 ──
+  test "self_update history returns newest release first", %{targets: targets} do
+    target = targets.upgrade
+    write_source(target, :v1)
+    Code.compile_file(target.source_path)
 
-  test "upgrade_code tool executes a full self-modify cycle", %{tmp: tmp} do
-    ensure_registry!()
-    ensure_upgrade_manager!()
+    File.write!(
+      target.test_path,
+      module_test_code(target, "assert value(target_module()) in [:v2, :v3]")
+    )
 
-    source_path = Path.join(tmp, "tool_upgrade_target.ex")
-    v1_code = fresh_tool_code("ToolUpgradeTarget", "tool_upgrade_target", "before")
-    File.write!(source_path, v1_code)
-    HotReload.reload(source_path, v1_code)
-    wait_for_registry("tool_upgrade_target")
+    write_source(target, :v2)
 
-    v2_code = fresh_tool_code("ToolUpgradeTarget", "tool_upgrade_target", "after")
+    assert %{status: :deployed, release_id: release_v2} =
+             Deployer.deploy("history v2", [target.source_path])
 
-    result =
-      Nex.Agent.Tool.UpgradeCode.execute(
-        %{
-          "module" => "Nex.Agent.Tool.ToolUpgradeTarget",
-          "code" => v2_code,
-          "reason" => "phase0 test"
-        },
-        %{}
-      )
+    write_source(target, :v3)
 
-    assert {:ok, %{message: msg}} = result
-    assert msg =~ "upgraded"
-    assert msg =~ "phase0 test"
+    assert %{status: :deployed, release_id: release_v3} =
+             Deployer.deploy("history v3", [target.source_path])
 
-    wait_for_registry("tool_upgrade_target")
-    assert {:ok, "after"} = Registry.execute("tool_upgrade_target", %{}, %{})
+    assert %{
+             status: :ok,
+             current_effective_release: ^release_v3,
+             releases: [%{id: ^release_v3, effective: true}, %{id: ^release_v2} | _]
+           } = Deployer.history()
   end
 
-  # ── Helpers ──
+  test "self_update deploy fails syntax check before snapshotting", %{targets: targets} do
+    target = targets.upgrade
+    File.write!(target.source_path, "defmodule #{target.module_name} do\n  def value( do\nend\n")
+
+    assert %{
+             status: :failed,
+             phase: :syntax,
+             rolled_back: false,
+             restored_files: [],
+             runtime_restored: :none,
+             error: error
+           } = Deployer.deploy("syntax fail", [target.source_path])
+
+    assert error =~ "Syntax check failed"
+    assert File.read!(target.source_path) =~ "def value( do"
+  end
+
+  test "self_update deploy restores tracked file after compile failure", %{targets: targets} do
+    target = targets.upgrade
+    write_source(target, :v1)
+    Code.compile_file(target.source_path)
+
+    File.write!(
+      target.test_path,
+      module_test_code(target, "assert value(target_module()) == :v2")
+    )
+
+    write_source(target, :v2)
+
+    assert %{status: :deployed} =
+             Deployer.deploy("stable release before compile failure", [target.source_path])
+
+    File.write!(
+      target.source_path,
+      """
+      defmodule #{target.module_name} do
+        raise "compile boom"
+        def value, do: :bad
+      end
+      """
+    )
+
+    assert %{
+             status: :failed,
+             phase: :compile,
+             rolled_back: true,
+             restored_files: [restored_file],
+             runtime_restored: runtime_restored,
+             error: error
+           } = Deployer.deploy("compile fail", [target.source_path])
+
+    assert restored_file == Path.relative_to(target.source_path, @repo_root)
+    assert runtime_restored in [:best_effort, :none]
+    assert error =~ "compile boom"
+    assert File.read!(target.source_path) =~ "def value, do: :v2"
+  end
+
+  test "self_update rollback restores the previous release snapshot", %{targets: targets} do
+    target = targets.rollback
+    write_source(target, :good)
+    Code.compile_file(target.source_path)
+
+    File.write!(
+      target.test_path,
+      module_test_code(target, "assert value(target_module()) in [:v2, :good]")
+    )
+
+    write_source(target, :v2)
+
+    assert %{status: :deployed, release_id: _release_id} =
+             Deployer.deploy("deploy v2", [target.source_path])
+
+    assert value(target.module) == :v2
+
+    assert %{status: :rolled_back, target_release_id: nil} = Deployer.rollback("previous")
+    assert File.read!(target.source_path) =~ "def value, do: :good"
+
+    :code.purge(target.module)
+    :code.delete(target.module)
+    Code.compile_file(target.source_path)
+    assert value(target.module) == :good
+    assert %{"status" => "rolled_back"} = ReleaseStore.current_release()
+  end
+
+  test "self_update rollback to an explicit release restores that release state", %{
+    targets: targets
+  } do
+    target = targets.rollback
+    write_source(target, :good)
+    Code.compile_file(target.source_path)
+
+    File.write!(
+      target.test_path,
+      module_test_code(target, "assert value(target_module()) in [:good, :v2, :v3]")
+    )
+
+    write_source(target, :v2)
+
+    assert %{status: :deployed, release_id: release_v2} =
+             Deployer.deploy("deploy v2", [target.source_path])
+
+    write_source(target, :v3)
+    assert %{status: :deployed} = Deployer.deploy("deploy v3", [target.source_path])
+
+    assert %{status: :rolled_back, target_release_id: ^release_v2} =
+             Deployer.rollback(release_v2)
+
+    :code.purge(target.module)
+    :code.delete(target.module)
+    Code.compile_file(target.source_path)
+    assert value(target.module) == :v2
+  end
+
+  test "self_update rollback previous follows the restored release lineage", %{targets: targets} do
+    target = targets.rollback
+    write_source(target, :good)
+    Code.compile_file(target.source_path)
+
+    File.write!(
+      target.test_path,
+      module_test_code(target, "assert value(target_module()) in [:good, :v2, :v3]")
+    )
+
+    write_source(target, :v2)
+
+    assert %{status: :deployed, release_id: release_v2} =
+             Deployer.deploy("deploy v2", [target.source_path])
+
+    write_source(target, :v3)
+    assert %{status: :deployed} = Deployer.deploy("deploy v3", [target.source_path])
+
+    assert %{status: :rolled_back, target_release_id: ^release_v2} =
+             Deployer.rollback("previous")
+
+    assert %{status: :rolled_back, target_release_id: nil} = Deployer.rollback("previous")
+
+    :code.purge(target.module)
+    :code.delete(target.module)
+    Code.compile_file(target.source_path)
+    assert value(target.module) == :good
+  end
+
+  test "self_update rollback rejects missing release ids" do
+    assert %{
+             status: :failed,
+             phase: :plan,
+             rolled_back: false,
+             runtime_restored: :none,
+             error: "Rollback target release not found: missing-release"
+           } = Deployer.rollback("missing-release")
+  end
+
+  test "self_update rollback rejects the current effective release", %{targets: targets} do
+    target = targets.rollback
+    write_source(target, :good)
+    Code.compile_file(target.source_path)
+
+    File.write!(
+      target.test_path,
+      module_test_code(target, "assert value(target_module()) == :v2")
+    )
+
+    write_source(target, :v2)
+
+    assert %{status: :deployed, release_id: release_v2} =
+             Deployer.deploy("deploy v2", [target.source_path])
+
+    assert %{
+             status: :failed,
+             phase: :plan,
+             rolled_back: false,
+             runtime_restored: :none,
+             error: "Already at target release: " <> ^release_v2
+           } = Deployer.rollback(release_v2)
+  end
+
+  test "self_update rollback restores current code when rollback tests fail", %{targets: targets} do
+    target = targets.rollback
+    write_source(target, :good)
+    Code.compile_file(target.source_path)
+
+    File.write!(
+      target.test_path,
+      module_test_code(target, "assert value(target_module()) in [:v2, :v3]")
+    )
+
+    write_source(target, :v2)
+
+    assert %{status: :deployed, release_id: release_v2} =
+             Deployer.deploy("deploy v2", [target.source_path])
+
+    write_source(target, :v3)
+    assert %{status: :deployed} = Deployer.deploy("deploy v3", [target.source_path])
+
+    File.write!(
+      target.test_path,
+      module_test_code(target, "assert value(target_module()) == :v3")
+    )
+
+    assert %{
+             status: :failed,
+             phase: :tests,
+             rolled_back: true,
+             restored_files: [restored_file],
+             warnings: ["Rollback target restore failed"],
+             runtime_restored: runtime_restored
+           } = Deployer.rollback(release_v2)
+
+    assert restored_file == Path.relative_to(target.source_path, @repo_root)
+    assert runtime_restored in [:best_effort, :none]
+    assert File.read!(target.source_path) =~ "def value, do: :v3"
+
+    :code.purge(target.module)
+    :code.delete(target.module)
+    Code.compile_file(target.source_path)
+    assert value(target.module) == :v3
+  end
+
+  test "self_update deploy reports test failure for untracked files without promising snapshot restore" do
+    target = untracked_target_spec("VerifiedTarget")
+    File.mkdir_p!(Path.dirname(target.source_path))
+    write_source(target, :good)
+    Code.compile_file(target.source_path)
+
+    File.write!(
+      target.test_path,
+      module_test_code(target, "assert value(target_module()) == :good")
+    )
+
+    write_source(target, :bad)
+
+    assert %{
+             status: :failed,
+             phase: :tests,
+             rolled_back: true,
+             runtime_restored: runtime_restored
+           } =
+             Deployer.deploy("phase10d failure", [target.source_path])
+
+    assert runtime_restored in [:best_effort, :none]
+    assert File.read!(target.source_path) =~ "def value, do: :bad"
+
+    File.rm_rf!(target.source_path)
+    File.rm_rf!(target.test_path)
+    :code.purge(target.module)
+    :code.delete(target.module)
+  end
 
   defp fresh_tool_code(module_suffix, tool_name, return_value) do
     """
@@ -187,9 +433,9 @@ defmodule Nex.Agent.SelfModifyPipelineTest do
     """
   end
 
-  defp simple_module_code(module_suffix, value) do
+  defp simple_module_code(module_name, value) do
     """
-    defmodule Nex.Agent.Test.#{module_suffix} do
+    defmodule #{module_name} do
       def value, do: #{inspect(value)}
     end
     """
@@ -197,14 +443,7 @@ defmodule Nex.Agent.SelfModifyPipelineTest do
 
   defp ensure_registry! do
     if Process.whereis(Registry) == nil do
-      start_supervised!({Task.Supervisor, name: Nex.Agent.TaskSupervisor})
       start_supervised!({Registry, name: Registry})
-    end
-  end
-
-  defp ensure_upgrade_manager! do
-    if Process.whereis(Nex.Agent.UpgradeManager) == nil do
-      start_supervised!({Nex.Agent.UpgradeManager, []})
     end
   end
 
@@ -212,21 +451,113 @@ defmodule Nex.Agent.SelfModifyPipelineTest do
     if attempts > 0 and Registry.get(tool_name) == nil do
       Process.sleep(10)
       wait_for_registry(tool_name, attempts - 1)
+    else
+      :ok
     end
   end
 
-  defp purge_test_modules do
+  defp unregister_test_tools do
+    Registry.unregister("hot_reload_test")
+    Registry.unregister("swap_test")
+    Process.sleep(20)
+  end
+
+  defp purge_test_modules(targets) do
     test_modules = [
       Nex.Agent.Tool.HotReloadTestTool,
-      Nex.Agent.Tool.SwapTestTool,
-      Nex.Agent.Tool.ToolUpgradeTarget,
-      Nex.Agent.Test.UpgradeTarget,
-      Nex.Agent.Test.RollbackTarget
+      Nex.Agent.Tool.SwapTestTool
+      | Enum.map(Map.values(targets), & &1.module)
     ]
 
     for mod <- test_modules do
       :code.purge(mod)
       :code.delete(mod)
     end
+  end
+
+  defp self_update_artifacts do
+    root = ReleaseStore.root_dir()
+
+    if File.dir?(root) do
+      root
+      |> Path.join("**/*")
+      |> Path.wildcard()
+      |> Enum.filter(&File.regular?/1)
+      |> MapSet.new()
+    else
+      MapSet.new()
+    end
+  end
+
+  defp remove_new_artifacts(existing_artifacts) do
+    self_update_artifacts()
+    |> MapSet.difference(existing_artifacts)
+    |> Enum.each(&File.rm_rf!/1)
+  end
+
+  defp tracked_target_spec(base) do
+    module_name = "Nex.Agent.Test.#{base}"
+
+    %{
+      module: Module.concat([module_name]),
+      module_name: module_name,
+      source_path: tracked_source_path(base),
+      test_path: tracked_test_path(base),
+      original_source: File.read!(tracked_source_path(base)),
+      original_test: File.read!(tracked_test_path(base))
+    }
+  end
+
+  defp untracked_target_spec(base) do
+    module_name = "Nex.Agent.Test.#{base}"
+
+    %{
+      module: Module.concat([module_name]),
+      module_name: module_name,
+      source_path: tracked_source_path(base),
+      test_path: tracked_test_path(base)
+    }
+  end
+
+  defp value(module), do: apply(module, :value, [])
+
+  defp write_source(target, value) do
+    File.write!(target.source_path, simple_module_code(target.module_name, value))
+  end
+
+  defp module_test_code(target, assertion) do
+    """
+    defmodule #{module_name(target.module)}Test do
+      use ExUnit.Case, async: false
+
+      defp target_module, do: #{module_name(target.module)}
+      defp value(module), do: apply(module, :value, [])
+
+      test "value" do
+        #{assertion}
+      end
+    end
+    """
+  end
+
+  defp restore_tracked_sources(targets) do
+    Enum.each(Map.values(targets), fn target ->
+      File.write!(target.source_path, target.original_source)
+      File.write!(target.test_path, target.original_test)
+    end)
+  end
+
+  defp tracked_source_path(base) do
+    Path.join(@repo_root, "lib/nex/agent/test/#{Macro.underscore(base)}.ex")
+  end
+
+  defp tracked_test_path(base) do
+    Path.join(@repo_root, "test/nex/agent/test/#{Macro.underscore(base)}_test.exs")
+  end
+
+  defp module_name(module) do
+    module
+    |> Module.split()
+    |> Enum.join(".")
   end
 end

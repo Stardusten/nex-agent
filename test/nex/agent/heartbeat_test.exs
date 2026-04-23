@@ -1,18 +1,15 @@
 defmodule Nex.Agent.HeartbeatTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{CodeUpgrade, Heartbeat}
+  alias Nex.Agent.Heartbeat
 
   setup do
     unique = System.unique_integer([:positive])
     workspace = Path.join(System.tmp_dir!(), "nex-agent-heartbeat-#{unique}")
-    code_upgrades_path = Path.join(System.tmp_dir!(), "nex-agent-code-upgrades-#{unique}")
     heartbeat_name = String.to_atom("heartbeat_test_#{unique}")
 
     File.mkdir_p!(Path.join(workspace, "sessions"))
     File.mkdir_p!(Path.join(workspace, "memory"))
-
-    Application.put_env(:nex_agent, :code_upgrades_path, code_upgrades_path)
 
     if Process.whereis(Nex.Agent.TaskSupervisor) == nil do
       start_supervised!({Task.Supervisor, name: Nex.Agent.TaskSupervisor})
@@ -22,9 +19,7 @@ defmodule Nex.Agent.HeartbeatTest do
     :ok = GenServer.call(heartbeat_name, :start)
 
     on_exit(fn ->
-      Application.delete_env(:nex_agent, :code_upgrades_path)
       File.rm_rf!(workspace)
-      File.rm_rf!(code_upgrades_path)
     end)
 
     {:ok, workspace: workspace, heartbeat_name: heartbeat_name}
@@ -63,73 +58,18 @@ defmodule Nex.Agent.HeartbeatTest do
     assert File.read!(archive_file) =~ "archived content"
   end
 
-  test "heartbeat keeps only the latest code upgrade versions", %{heartbeat_name: heartbeat_name} do
-    module_dir = Path.join(CodeUpgrade.versions_root(), "HeartbeatCleanup.Test")
-    File.mkdir_p!(module_dir)
-    File.write!(Path.join(module_dir, "backup.ex"), "backup")
-
-    Enum.each(1..12, fn n ->
-      path = Path.join(module_dir, "#{n}.ex")
-      File.write!(path, ~s({"id":"#{n}","timestamp":"2026-03-18 00:00:00Z","code":"ok"}))
-      File.touch!(path, {{2020, 1, n}, {0, 0, 0}})
-    end)
-
-    trigger_maintenance(heartbeat_name)
-
-    assert wait_until(fn -> count_version_files(module_dir) == 10 end)
-    assert File.exists?(Path.join(module_dir, "backup.ex"))
-    assert File.exists?(Path.join(module_dir, "12.ex"))
-    refute File.exists?(Path.join(module_dir, "1.ex"))
-    assert count_version_files(module_dir) == 10
-  end
-
-  test "heartbeat records daily evolution failures in execution history", %{
-    workspace: workspace,
+  test "heartbeat records weekly evolution failures in execution history", %{
     heartbeat_name: heartbeat_name
   } do
-    config_path = Path.join(workspace, "heartbeat-config.json")
-    write_test_config(config_path)
-    Application.put_env(:nex_agent, :config_path, config_path)
-
-    on_exit(fn ->
-      Application.delete_env(:nex_agent, :config_path)
-    end)
-
-    trigger_maintenance(heartbeat_name)
+    completed_at = System.system_time(:second)
+    send(heartbeat_name, {:weekly_evolution_done, completed_at, {:error, :llm_unavailable}})
 
     assert wait_until(fn ->
-             status = GenServer.call(heartbeat_name, :status)
-
-             Enum.any?(status.recent_history, fn
-               {"evolution", _timestamp, %{trigger: "scheduled_daily", result: {:error, _reason}}} ->
-                 true
-
-               _ ->
-                 false
-             end)
-           end)
-  end
-
-  test "heartbeat does not advance weekly cooldown when weekly evolution fails", %{
-    workspace: workspace,
-    heartbeat_name: heartbeat_name
-  } do
-    config_path = Path.join(workspace, "heartbeat-config.json")
-    write_test_config(config_path)
-    Application.put_env(:nex_agent, :config_path, config_path)
-
-    on_exit(fn ->
-      Application.delete_env(:nex_agent, :config_path)
-    end)
-
-    trigger_maintenance(heartbeat_name)
-
-    assert wait_until(fn ->
-             state = :sys.get_state(heartbeat_name)
+      state = :sys.get_state(heartbeat_name)
 
              Enum.any?(state.execution_history, fn
                {"evolution", _timestamp,
-                %{trigger: "scheduled_weekly", result: {:error, _reason}}} ->
+               %{trigger: "scheduled_weekly", result: {:error, _reason}}} ->
                  true
 
                _ ->
@@ -138,24 +78,28 @@ defmodule Nex.Agent.HeartbeatTest do
            end)
   end
 
-  defp trigger_maintenance(heartbeat_name) do
-    send(Process.whereis(heartbeat_name), :tick)
+  test "heartbeat advances weekly cooldown on weekly evolution success", %{
+    heartbeat_name: heartbeat_name
+  } do
+    completed_at = System.system_time(:second)
+    send(heartbeat_name, {:weekly_evolution_done, completed_at, {:ok, %{applied: 1}}})
+
+    assert wait_until(fn ->
+             state = :sys.get_state(heartbeat_name)
+
+             state.last_weekly_evolution == completed_at and
+               Enum.any?(state.execution_history, fn
+                 {"evolution", ^completed_at, %{trigger: "scheduled_weekly", result: {:ok, _}}} ->
+                   true
+
+                 _ ->
+                   false
+               end)
+           end)
   end
 
-  defp write_test_config(path) do
-    File.write!(
-      path,
-      Jason.encode!(%{
-        "provider" => "openai",
-        "model" => "gpt-4o",
-        "providers" => %{
-          "openai" => %{
-            "api_key" => "test-openai-key",
-            "base_url" => "http://127.0.0.1:1"
-          }
-        }
-      })
-    )
+  defp trigger_maintenance(heartbeat_name) do
+    send(Process.whereis(heartbeat_name), :tick)
   end
 
   defp wait_until(fun, attempts \\ 40)
@@ -169,12 +113,5 @@ defmodule Nex.Agent.HeartbeatTest do
       Process.sleep(50)
       wait_until(fun, attempts - 1)
     end
-  end
-
-  defp count_version_files(module_dir) do
-    module_dir
-    |> File.ls!()
-    |> Enum.filter(&(String.ends_with?(&1, ".ex") and &1 != "backup.ex"))
-    |> length()
   end
 end
