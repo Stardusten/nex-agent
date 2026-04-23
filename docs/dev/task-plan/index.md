@@ -12,3 +12,6 @@
 - [Phase 7 Feishu Streaming Converter Simplification](./phase7-feishu-streaming-converter-simplification.md)
 - [Phase 8 Session Run Control And Busy Follow-up](./phase8-session-run-control-and-followup.md)
 - [Phase 9 Follow-up LLM Turn And Interrupt Request](./phase9-follow-up-llm-turn-and-interrupt-request.md)
+- [Phase 10d Self-Update Deploy Control Plane](./phase10d-self-update-deploy-control-plane.md)
+- [Phase 10e Code Editing Toolchain Reset](./phase10e-code-editing-toolchain-reset.md)
+- [Phase 10f Self-Iteration UX And Release Visibility](./phase10f-self-iteration-ux-and-release-visibility.md)
