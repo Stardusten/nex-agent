@@ -4,6 +4,10 @@ defmodule Nex.Agent.RunnerStreamTest do
   alias Nex.Agent.{Runner, Session}
   alias Nex.Agent.Stream.Result
 
+  defmodule TransportError do
+    defexception [:message]
+  end
+
   test "runner emits unified stream events and preserves final session content" do
     parent = self()
 
@@ -370,6 +374,70 @@ defmodule Nex.Agent.RunnerStreamTest do
              :finish
            ] =
              collect_stream_events([])
+  end
+
+  test "runner resumes interrupted stream with continue prompt and preserves partial output" do
+    parent = self()
+
+    workspace =
+      Path.join(
+        System.tmp_dir!(),
+        "nex-agent-runner-stream-continue-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(Path.join(workspace, "memory"))
+    File.write!(Path.join(workspace, "AGENTS.md"), "# AGENTS\n")
+    File.write!(Path.join(workspace, "SOUL.md"), "# SOUL\n")
+    File.write!(Path.join(workspace, "USER.md"), "# USER\n")
+    File.write!(Path.join(workspace, "TOOLS.md"), "# TOOLS\n")
+    File.write!(Path.join(workspace, "memory/MEMORY.md"), "# Memory\n")
+
+    on_exit(fn -> File.rm_rf!(workspace) end)
+
+    stream_sink = fn event ->
+      send(parent, {:stream_event, event})
+      :ok
+    end
+
+    turn_key = {:stream_continue_turn, self()}
+    Process.put(turn_key, 0)
+
+    llm_stream_client = fn messages, _opts, callback ->
+      turn = Process.get(turn_key, 0)
+      Process.put(turn_key, turn + 1)
+
+      case turn do
+        0 ->
+          callback.({:delta, "hello "})
+          {:error, %TransportError{message: "connection closed"}}
+
+        1 ->
+          assert %{"role" => "assistant", "content" => "hello "} = Enum.at(messages, -2)
+
+          assert %{"role" => "user", "content" => continue_prompt} = Enum.at(messages, -1)
+          assert continue_prompt =~ "Continue from the exact breakpoint"
+          assert continue_prompt =~ "Do not repeat any text"
+
+          callback.({:delta, "world"})
+          callback.({:done, %{finish_reason: "stop", usage: nil, model: "mock-model"}})
+          :ok
+      end
+    end
+
+    assert {:ok, %Result{handled?: true, status: :ok, final_content: "hello world"}, session} =
+             Runner.run(Session.new("stream:continue"), "hi",
+               workspace: workspace,
+               provider: :anthropic,
+               model: "claude-sonnet-4-20250514",
+               skip_consolidation: true,
+               skip_skills: true,
+               stream_sink: stream_sink,
+               llm_stream_client: llm_stream_client,
+               llm_retry_delay_ms: 0
+             )
+
+    assert [{:text, "hello "}, {:text, "world"}, :finish] = collect_stream_events([])
+    assert List.last(session.messages)["content"] == "hello world"
   end
 
   defp collect_stream_events(acc) do

@@ -365,14 +365,18 @@ defmodule Nex.Agent.Runner do
 
         {:error, reason} ->
           Logger.error("[Runner] LLM call failed: #{inspect(reason)}")
-          emit_stream_error(opts, reason)
+          emit_stream_error(opts, stream_error_reason(reason))
           iter_total = System.monotonic_time(:millisecond) - iter_start
 
           Logger.info(
             "[Runner] === Iteration #{iteration + 1} finished in #{iter_total}ms (failed) ==="
           )
 
-          {:error, stream_result(:error, opts, nil, %{error: reason}), session}
+          {:error,
+           stream_result(:error, opts, stream_error_partial_content(reason), %{
+             error: stream_error_reason(reason),
+             partial_content: stream_error_partial_content(reason)
+           }), session}
       end
       end
     end
@@ -842,9 +846,29 @@ defmodule Nex.Agent.Runner do
 
         {:error, reason} = error ->
           cond do
+            retries_left > 0 and resumable_stream_error?(reason) ->
+              partial_content = stream_error_partial_content(reason)
+
+              Logger.warning(
+                "[Runner] LLM stream interrupted after #{byte_size(partial_content)} bytes, " <>
+                  "retrying with continue prompt in #{llm_retry_delay_ms(opts)}ms: #{inspect(stream_error_reason(reason))}"
+              )
+
+              sleep_with_cancel(llm_retry_delay_ms(opts), opts)
+
+              messages
+              |> stream_continue_messages(partial_content)
+              |> call_llm_with_retry(
+                opts
+                |> Keyword.put(:__stream_continue, true)
+                |> Keyword.put(:_llm_text_streamed, true),
+                retries_left - 1
+              )
+              |> merge_stream_continue_result(partial_content)
+
             retries_left > 0 and transient_error?(reason) ->
               Logger.warning("[Runner] LLM transient error, retrying in 2s: #{inspect(reason)}")
-              sleep_with_cancel(2_000, opts)
+              sleep_with_cancel(llm_retry_delay_ms(opts), opts)
               call_llm_with_retry(messages, opts, retries_left - 1)
 
             not Keyword.get(opts, :__recovered, false) ->
@@ -981,11 +1005,79 @@ defmodule Nex.Agent.Runner do
     String.contains?(struct_name, "TransportError") or String.contains?(struct_name, "Mint")
   end
 
+  defp transient_error?(%{type: :stream_interrupted, reason: reason}),
+    do: transient_error?(reason)
+
   defp transient_error?(%{status: status}) when status in [429, 500, 502, 503, 504], do: true
   defp transient_error?(:timeout), do: true
   defp transient_error?(:closed), do: true
-  defp transient_error?(reason) when is_binary(reason), do: String.contains?(reason, "timeout")
+  defp transient_error?(reason) when is_binary(reason) do
+    reason = String.downcase(reason)
+
+    String.contains?(reason, "timeout") or
+      String.contains?(reason, "transporterror") or
+      String.contains?(reason, "transport error") or
+      String.contains?(reason, "mint") or
+      String.contains?(reason, "connection closed") or
+      String.contains?(reason, "reason: :closed") or
+      String.contains?(reason, "econnreset")
+  end
+
   defp transient_error?(_), do: false
+
+  defp resumable_stream_error?(reason) do
+    transient_error?(reason) and byte_size(stream_error_partial_content(reason)) > 0
+  end
+
+  defp llm_retry_delay_ms(opts), do: Keyword.get(opts, :llm_retry_delay_ms, 2_000)
+
+  defp stream_continue_messages(messages, partial_content) do
+    messages
+    |> ContextBuilder.add_assistant_message(partial_content)
+    |> Kernel.++([
+      %{
+        "role" => "user",
+        "content" =>
+          "The previous assistant response was interrupted. Continue from the exact breakpoint " <>
+            "after the immediately preceding assistant message. Do not repeat any text already " <>
+            "present there. Do not summarize or restart; output only the remaining continuation."
+      }
+    ])
+  end
+
+  defp merge_stream_continue_result({:ok, response}, partial_content) when is_map(response) do
+    {:ok,
+     response
+     |> Map.update(:content, partial_content, &(partial_content <> render_text(&1)))
+     |> Map.update(:reasoning_content, nil, &merge_optional_text(nil, &1))
+     |> Map.put(:streamed_text, true)}
+  end
+
+  defp merge_stream_continue_result({:error, reason}, partial_content) do
+    retry_partial = stream_error_partial_content(reason)
+
+    {:error,
+     %{
+       type: :stream_interrupted,
+       reason: stream_error_reason(reason),
+       partial_content: partial_content <> retry_partial,
+       retry_error: reason
+     }}
+  end
+
+  defp merge_stream_continue_result(other, _partial_content), do: other
+
+  defp merge_optional_text(nil, value), do: value
+  defp merge_optional_text(prefix, value), do: render_text(prefix) <> render_text(value)
+
+  defp stream_error_reason(%{type: :stream_interrupted, reason: reason}), do: reason
+  defp stream_error_reason(reason), do: reason
+
+  defp stream_error_partial_content(%{type: :stream_interrupted, partial_content: content})
+       when is_binary(content),
+       do: content
+
+  defp stream_error_partial_content(_reason), do: ""
 
   defp call_llm(messages, opts) do
     tools =
@@ -1783,10 +1875,10 @@ defmodule Nex.Agent.Runner do
 
     cond do
       match?({:error, reason} when not is_nil(reason), result) ->
-        {:error, elem(result, 1)}
+        {:error, wrap_stream_error(elem(result, 1), state)}
 
       state.error ->
-        {:error, state.error}
+        {:error, wrap_stream_error(state.error, state)}
 
       true ->
         {:ok,
@@ -1800,6 +1892,19 @@ defmodule Nex.Agent.Runner do
            streamed_text: state.streamed_text
          }}
     end
+  end
+
+  defp wrap_stream_error(reason, state) do
+    partial_content = Enum.reverse(state.content_parts) |> IO.iodata_to_binary()
+
+    %{
+      type: :stream_interrupted,
+      reason: reason,
+      partial_content: partial_content,
+      finish_reason: state.finish_reason,
+      usage: state.usage,
+      model: state.model
+    }
   end
 
   defp handle_stream_event(state, {:delta, text}, opts, drain_opts) when is_binary(text) do
