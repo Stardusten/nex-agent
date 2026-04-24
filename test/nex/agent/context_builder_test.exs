@@ -37,6 +37,8 @@ defmodule Nex.Agent.ContextBuilderTest do
     assert prompt =~ "Use `self_update status` as the deploy preflight entrypoint."
     assert prompt =~ "`self_update deploy` is the quick deploy verification path"
     assert prompt =~ "Strict ship checks such as `format`, `credo`, or `dialyzer`"
+    assert prompt =~ "minimal self-healing loop records structured failure signals"
+    assert prompt =~ "do not auto-repair code, write memory/skills, or bypass owner-only deploy"
 
     assert prompt =~
              "only the owner run may use `self_update status`, `self_update deploy`, or `self_update rollback`"

@@ -85,6 +85,36 @@ Phase 9 tightened the follow-up path on top of Phase 8:
 - keep follow-up tools frozen to the minimal read-only surface plus the thin interrupt tool
 - prevent follow-up turns from inheriting skill runtime ephemeral tools
 
+Phase 10/11 planning now defines the self-iteration direction beyond session control:
+
+- Phase 10d/e/f establish the CODE-layer self-update mainline:
+  - code discovery/editing flows through `find -> read/reflect -> apply_patch`
+  - runtime activation flows only through `self_update status/deploy/rollback`
+  - release visibility, rollback candidates, quick deploy checks, and owner/subagent handoff are explicit
+- Phase 11 is the self-healing driver plan:
+  - this is exploratory, not a one-shot refactor
+  - first priority is a low-cost, budget-driven minimal loop that can observe failures and produce structured signals
+  - self-healing is split into hot-path deterministic recovery, near-path bounded reflection, and long-path evolution
+  - an energy/metabolism ledger controls how often and how deeply the agent may self-iterate
+- Phase 11A is the first executable step:
+  - only `tool.call.failed`, `llm.call.failed`, and `self_update.deploy.failed` are in scope
+  - no LLM reflection, memory writes, skill drafts, patch generation, or deploy automation in 11A
+  - output is durable structured events, cheap aggregation, and bounded router decisions
+  - the first implementation is now in place: event store, energy ledger, aggregator, router, Runner hooks, self_update deploy failure hook, prompt/onboarding guidance, and focused tests
+
+Phase 12 now establishes the LLM provider adapter boundary:
+
+- provider-specific LLM behavior should live in independent adapter modules
+- `ReqLLM` should stay on a provider-agnostic facade and never import concrete provider modules
+- `ProviderProfile` is now the profile struct/facade/registry dispatch point, not the place where provider policy accumulates
+- known provider behavior now lives under `Nex.Agent.LLM.Providers.*` adapters registered by `ProviderRegistry`
+- thin adapters only implement behavior that differs from the default adapter fallback
+- provider 默认模型选择归 adapter/facade 所有，`ReqLLM` 不维护 provider-specific default model 分支
+- `openai-codex` OAuth is the first concrete forcing function:
+  - ChatGPT Codex backend owns a provider-specific Responses payload policy
+  - that policy lives under the OpenAI Codex provider adapter namespace
+  - third-party codex-compatible API key routes must remain independent
+
 ## Current Plan Pointer
 
 - [Phase 1 Runtime Reload Foundation](../task-plan/phase1-runtime-reload-foundation.md)
@@ -97,6 +127,13 @@ Phase 9 tightened the follow-up path on top of Phase 8:
 - [Phase 7 Feishu Streaming Converter Simplification](../task-plan/phase7-feishu-streaming-converter-simplification.md)
 - [Phase 8 Session Run Control And Busy Follow-up](../task-plan/phase8-session-run-control-and-followup.md)
 - [Phase 9 Follow-up LLM Turn And Interrupt Request](../task-plan/phase9-follow-up-llm-turn-and-interrupt-request.md)
+- [Phase 10 Self-Iteration Foundation](../task-plan/phase10-self-iteration-foundation.md)
+- [Phase 10d Self-Update Deploy Control Plane](../task-plan/phase10d-self-update-deploy-control-plane.md)
+- [Phase 10e Code Editing Toolchain Reset](../task-plan/phase10e-code-editing-toolchain-reset.md)
+- [Phase 10f Self-Iteration UX And Release Visibility](../task-plan/phase10f-self-iteration-ux-and-release-visibility.md)
+- [Phase 11 Self-Healing Driver](../task-plan/phase11-self-healing-driver.md)
+- [Phase 11A Minimal Self-Healing Loop](../task-plan/phase11a-minimal-self-healing-loop.md)
+- [Phase 12 LLM Provider Adapter Architecture](../task-plan/phase12-llm-provider-adapter-architecture.md)
 - [2026-04-16 IM Inbound Media Architecture](../findings/2026-04-16-im-inbound-media-architecture.md)
 - [2026-04-16 IM Streaming Capabilities And Delivery Contract](../findings/2026-04-16-im-streaming-capabilities.md)
 - [2026-04-16 Streaming Architecture Convergence](../findings/2026-04-16-streaming-architecture-convergence.md)
@@ -106,10 +143,12 @@ Phase 9 tightened the follow-up path on top of Phase 8:
 
 ## Immediate Next Steps
 
-1. 用真实 gateway/manual 场景检查 busy 普通消息 follow-up、`/btw`、`/status`、`/stop` 和可选 interrupt tool 的实际交互时序。
-2. 跑更完整的 channel 回归：`test/nex/agent/channel_discord_test.exs`、`test/nex/agent/channel_feishu_test.exs`。
-3. 如需继续收紧取消链路，下一步是把 HTTP 级取消从 tool 层早退推进到底层 `Nex.Agent.HTTP` / provider path。
-4. Phase 7 留存问题仍需后续处理：Finch 连接池泄漏、飞书 `close_streaming_mode` 404、LLM 空返回兜底。
+1. 验收 Phase 11A：跑 self-healing focused tests、Runner/self_update/context_builder 回归，并确认 hook failure 不影响主返回。
+2. 用真实 gateway/manual 场景检查 busy 普通消息 follow-up、`/btw`、`/status`、`/stop` 和可选 interrupt tool 的实际交互时序。
+3. 跑更完整的 channel 回归：`test/nex/agent/channel_discord_test.exs`、`test/nex/agent/channel_feishu_test.exs`。
+4. 如需继续收紧取消链路，下一步是把 HTTP 级取消从 tool 层早退推进到底层 `Nex.Agent.HTTP` / provider path。
+5. Phase 7 留存问题仍需后续处理：Finch 连接池泄漏、飞书 `close_streaming_mode` 404、LLM 空返回兜底。
+6. 后续新增 LLM provider 时，只新增 `lib/nex/agent/llm/providers/<provider>.ex`、注册 `ProviderRegistry`、补 focused provider tests；不要在 `ReqLLM` 或 `ProviderProfile` 增加 provider 分支。
 
 ## Reviewer Verification
 

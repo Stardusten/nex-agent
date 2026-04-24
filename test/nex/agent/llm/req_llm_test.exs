@@ -2,6 +2,7 @@ defmodule Nex.Agent.LLM.ReqLLMTest do
   use ExUnit.Case, async: false
 
   alias Nex.Agent.LLM.ReqLLM, as: AgentReqLLM
+  alias Nex.Agent.LLM.Providers.OpenAICodex.Stream
   alias ReqLLM.Message
 
   test "ollama requests use a non-empty placeholder api key" do
@@ -99,6 +100,111 @@ defmodule Nex.Agent.LLM.ReqLLMTest do
     assert metadata[:finish_reason] == "stop"
   end
 
+  test "openai-codex stream adapter writes instructions into codex request body" do
+    model =
+      ReqLLM.model!(%{
+        id: "gpt-5.5",
+        provider: :openai,
+        base_url: "https://chatgpt.com/backend-api/codex"
+      })
+
+    context = ReqLLM.Context.new([ReqLLM.Context.user("refresh memory")])
+
+    tool =
+      ReqLLM.Tool.new!(
+        name: "save_memory",
+        description: "Save updated memory",
+        parameter_schema: %{
+          "type" => "object",
+          "properties" => %{
+            "action" => %{"type" => "string"}
+          }
+        },
+        callback: fn _args -> {:ok, "ok"} end
+      )
+
+    assert {:ok, request} =
+             Stream.attach_stream(
+               model,
+               context,
+               [
+                 base_url: "https://chatgpt.com/backend-api/codex",
+                 provider_options: [
+                   auth_mode: :oauth,
+                   access_token: "oauth-access-token",
+                   instructions: "You are a memory refresh agent."
+                 ],
+                 tools: [tool],
+                 tool_choice: %{type: "tool", name: "save_memory"},
+                 max_tokens: 4096
+               ],
+               ReqLLM.Finch
+             )
+
+    body = request.body |> IO.iodata_to_binary() |> Jason.decode!()
+
+    assert body["instructions"] == "You are a memory refresh agent."
+    assert body["store"] == false
+    refute Map.has_key?(body, "max_output_tokens")
+    assert body["tool_choice"] == %{"type" => "function", "name" => "save_memory"}
+    assert [%{"role" => "user", "content" => [%{"text" => "refresh memory"}]}] = body["input"]
+  end
+
+  test "openai-codex stream adapter disables server-side response chaining" do
+    model =
+      ReqLLM.model!(%{
+        id: "gpt-5.5",
+        provider: :openai,
+        base_url: "https://chatgpt.com/backend-api/codex"
+      })
+
+    reasoning = %Message.ReasoningDetails{
+      provider: :openai,
+      encrypted?: true,
+      signature: "encrypted-reasoning",
+      index: 0,
+      provider_data: %{"id" => "rs_123", "type" => "reasoning"}
+    }
+
+    assistant =
+      "stored turn"
+      |> ReqLLM.Context.assistant(metadata: %{response_id: "resp_123"})
+      |> Map.put(:reasoning_details, [reasoning])
+
+    context =
+      ReqLLM.Context.new([
+        ReqLLM.Context.user("first turn"),
+        assistant,
+        ReqLLM.Context.user("next turn")
+      ])
+
+    assert {:ok, request} =
+             Stream.attach_stream(
+               model,
+               context,
+               [
+                 base_url: "https://chatgpt.com/backend-api/codex",
+                 provider_options: [
+                   auth_mode: :oauth,
+                   access_token: "oauth-access-token",
+                   instructions: "You are a memory refresh agent.",
+                   previous_response_id: "resp_from_provider_options"
+                 ]
+               ],
+               ReqLLM.Finch
+             )
+
+    body = request.body |> IO.iodata_to_binary() |> Jason.decode!()
+
+    refute Map.has_key?(body, "previous_response_id")
+    assert body["store"] == false
+
+    assert %{"type" => "reasoning", "encrypted_content" => "encrypted-reasoning"} =
+             Enum.find(body["input"], &(&1["type"] == "reasoning"))
+
+    refute body["input"] |> Enum.find(&(&1["type"] == "reasoning")) |> Map.has_key?("id")
+  end
+
   test "openai-codex requests use regular api key auth for third-party codex-compatible base urls" do
     parent = self()
 
@@ -138,6 +244,7 @@ defmodule Nex.Agent.LLM.ReqLLMTest do
     assert [%Message{role: :user}] = messages
     assert opts[:api_key] == "third-party-api-key"
     assert opts[:base_url] == third_party_base_url
+    assert opts[:system_prompt] == "You are the project copilot."
     assert opts[:provider_options][:auth_mode] == :api_key
     refute Keyword.has_key?(opts[:provider_options], :instructions)
     refute Keyword.has_key?(opts[:provider_options], :access_token)
@@ -186,6 +293,7 @@ defmodule Nex.Agent.LLM.ReqLLMTest do
     assert [%Message{role: :user}] = messages
     assert opts[:api_key] == "custom-api-key"
     assert opts[:base_url] == custom_base_url
+    assert opts[:system_prompt] == "You are the project copilot."
     assert opts[:provider_options][:auth_mode] == :api_key
     refute Keyword.has_key?(opts[:provider_options], :instructions)
     refute Keyword.has_key?(opts[:provider_options], :access_token)
@@ -195,9 +303,39 @@ defmodule Nex.Agent.LLM.ReqLLMTest do
     assert metadata[:finish_reason] == "stop"
   end
 
+  test "provider adapter owns default model selection" do
+    parent = self()
+
+    stream_text_fun = fn model_spec, _messages, _opts ->
+      send(parent, {:req_llm_call, model_spec})
+      {:ok, %{stream: [%{type: :content, text: "ok"}], finish_reason: :stop}}
+    end
+
+    assert :ok =
+             AgentReqLLM.stream(
+               [%{"role" => "user", "content" => "hello"}],
+               [
+                 provider: :openrouter,
+                 api_key: "openrouter-key",
+                 req_llm_stream_text_fun: stream_text_fun
+               ],
+               fn _event -> :ok end
+             )
+
+    assert_receive {:req_llm_call,
+                    %{
+                      id: "anthropic/claude-3.5-sonnet",
+                      provider: :openrouter,
+                      base_url: "https://openrouter.ai/api/v1"
+                    }}
+  end
+
   test "file-backed image content is converted to data url before req_llm call" do
     parent = self()
-    image_path = Path.join(System.tmp_dir!(), "req-llm-image-#{System.unique_integer([:positive])}.png")
+
+    image_path =
+      Path.join(System.tmp_dir!(), "req-llm-image-#{System.unique_integer([:positive])}.png")
+
     File.write!(image_path, <<137, 80, 78, 71, 13, 10, 26, 10>>)
 
     on_exit(fn -> File.rm(image_path) end)

@@ -46,8 +46,8 @@ defmodule Nex.Agent.Tool.SelfUpdate do
     {:ok, Deployer.history()}
   end
 
-  def execute(%{"action" => "deploy", "reason" => reason} = args, _ctx) do
-    {:ok, Deployer.deploy(reason, Map.get(args, "files"))}
+  def execute(%{"action" => "deploy", "reason" => reason} = args, ctx) do
+    {:ok, Deployer.deploy(reason, Map.get(args, "files"), workspace: workspace_from_ctx(ctx))}
   end
 
   def execute(%{"action" => "rollback"} = args, _ctx) do
@@ -60,4 +60,10 @@ defmodule Nex.Agent.Tool.SelfUpdate do
     do: {:error, "Unsupported self_update action: #{action}"}
 
   def execute(_args, _ctx), do: {:error, "action is required"}
+
+  defp workspace_from_ctx(ctx) when is_map(ctx) do
+    Map.get(ctx, :workspace) || Map.get(ctx, "workspace")
+  end
+
+  defp workspace_from_ctx(_ctx), do: nil
 end

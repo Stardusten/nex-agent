@@ -1,0 +1,32 @@
+defmodule Nex.Agent.LLM.Providers.OpenRouter do
+  @moduledoc false
+
+  @behaviour Nex.Agent.LLM.ProviderAdapter
+
+  alias Nex.Agent.LLM.ProviderProfile
+
+  @base_url "https://openrouter.ai/api/v1"
+  @app_referer "https://nex.dev"
+  @app_title "Nex Agent"
+
+  @impl true
+  def build_profile(options) do
+    %ProviderProfile{
+      provider: :openrouter,
+      resolved_provider: :openrouter,
+      base_url: Keyword.get(options, :base_url) || @base_url,
+      auth_mode: nil,
+      adapter: __MODULE__
+    }
+  end
+
+  @impl true
+  def default_model, do: "anthropic/claude-3.5-sonnet"
+
+  @impl true
+  def default_base_url, do: @base_url
+
+  @impl true
+  def provider_options(_profile, _options),
+    do: [app_referer: @app_referer, app_title: @app_title]
+end

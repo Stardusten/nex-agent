@@ -15,3 +15,6 @@
 - [Phase 10d Self-Update Deploy Control Plane](./phase10d-self-update-deploy-control-plane.md)
 - [Phase 10e Code Editing Toolchain Reset](./phase10e-code-editing-toolchain-reset.md)
 - [Phase 10f Self-Iteration UX And Release Visibility](./phase10f-self-iteration-ux-and-release-visibility.md)
+- [Phase 11 Self-Healing Driver](./phase11-self-healing-driver.md)
+- [Phase 11A Minimal Self-Healing Loop](./phase11a-minimal-self-healing-loop.md)
+- [Phase 12 LLM Provider Adapter Architecture](./phase12-llm-provider-adapter-architecture.md)

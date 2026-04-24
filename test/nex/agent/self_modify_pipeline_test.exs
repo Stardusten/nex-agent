@@ -3,6 +3,7 @@ defmodule Nex.Agent.SelfModifyPipelineTest do
 
   alias Nex.Agent.{CodeUpgrade, HotReload}
   alias Nex.Agent.SelfUpdate.{Deployer, ReleaseStore}
+  alias Nex.Agent.SelfHealing.EventStore
   alias Nex.Agent.Tool.Registry
 
   @tmp_prefix "nex-selfmod-test"
@@ -12,6 +13,7 @@ defmodule Nex.Agent.SelfModifyPipelineTest do
     tmp = Path.join(System.tmp_dir!(), "#{@tmp_prefix}-#{System.unique_integer([:positive])}")
     File.mkdir_p!(tmp)
     previous_repo_root = Application.get_env(:nex_agent, :repo_root)
+    previous_workspace = Application.get_env(:nex_agent, :workspace_path)
     existing_artifacts = self_update_artifacts()
 
     targets = %{
@@ -20,6 +22,7 @@ defmodule Nex.Agent.SelfModifyPipelineTest do
     }
 
     Application.put_env(:nex_agent, :repo_root, @repo_root)
+    Application.put_env(:nex_agent, :workspace_path, tmp)
 
     if Process.whereis(Nex.Agent.TaskSupervisor) == nil do
       start_supervised!({Task.Supervisor, name: Nex.Agent.TaskSupervisor})
@@ -30,6 +33,12 @@ defmodule Nex.Agent.SelfModifyPipelineTest do
         Application.put_env(:nex_agent, :repo_root, previous_repo_root)
       else
         Application.delete_env(:nex_agent, :repo_root)
+      end
+
+      if previous_workspace do
+        Application.put_env(:nex_agent, :workspace_path, previous_workspace)
+      else
+        Application.delete_env(:nex_agent, :workspace_path)
       end
 
       unregister_test_tools()
@@ -185,6 +194,11 @@ defmodule Nex.Agent.SelfModifyPipelineTest do
 
     assert error =~ "Syntax check failed"
     assert File.read!(target.source_path) =~ "def value( do"
+
+    assert [event] = EventStore.recent(5)
+    assert event["name"] == "self_update.deploy.failed"
+    assert event["classifier"]["deploy_phase"] == "syntax"
+    assert event["evidence"]["self_update_error_summary"] =~ "Syntax check failed"
   end
 
   test "self_update deploy restores tracked file after compile failure", %{targets: targets} do

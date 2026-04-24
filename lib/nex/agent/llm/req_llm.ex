@@ -25,8 +25,11 @@ defmodule Nex.Agent.LLM.ReqLLM do
       |> sanitize_messages()
       |> prepare_messages_and_options(profile, options)
 
-    req_options = build_req_llm_options(prepared_options)
-    stream_text_fun = Keyword.get(options, :req_llm_stream_text_fun) || (&ReqLLM.stream_text/3)
+    req_options = build_req_llm_options(prepared_options, profile)
+
+    stream_text_fun =
+      Keyword.get(options, :req_llm_stream_text_fun) || ProviderProfile.stream_text_fun(profile)
+
     started_at = System.monotonic_time(:millisecond)
 
     Logger.info(
@@ -38,7 +41,8 @@ defmodule Nex.Agent.LLM.ReqLLM do
       case stream_text_fun.(model_spec, req_messages, req_options) do
         {:ok, %StreamResponse{} = response} ->
           state =
-            Enum.reduce(response.stream, %{stream_chunks: [], started_at: started_at}, fn chunk, acc ->
+            Enum.reduce(response.stream, %{stream_chunks: [], started_at: started_at}, fn chunk,
+                                                                                          acc ->
               handle_stream_chunk(chunk, callback, acc)
             end)
 
@@ -165,14 +169,17 @@ defmodule Nex.Agent.LLM.ReqLLM do
     end)
   end
 
-  defp build_req_llm_options(options) do
-    provider = Keyword.get(options, :provider, :anthropic)
-    profile = ProviderProfile.for(provider, options)
+  defp build_req_llm_options(options, profile) do
     {api_key, should_include_api_key} = ProviderProfile.api_key_config(profile, options)
 
     []
     |> maybe_put_keyword(:api_key, should_include_api_key, api_key)
     |> maybe_put_keyword(:base_url, present?(profile.base_url), profile.base_url)
+    |> maybe_put_keyword(
+      :system_prompt,
+      present?(options[:system_prompt]),
+      options[:system_prompt]
+    )
     |> maybe_put_keyword(:temperature, is_number(options[:temperature]), options[:temperature])
     |> maybe_put_keyword(:max_tokens, is_integer(options[:max_tokens]), options[:max_tokens])
     |> maybe_put_keyword(:tools, true, transform_tools(options[:tools] || []))
@@ -246,8 +253,7 @@ defmodule Nex.Agent.LLM.ReqLLM do
   defp normalize_parameter_schema(_), do: %{}
 
   defp resolve_model(profile, options) do
-    provider = Keyword.get(options, :provider, :anthropic)
-    model = Keyword.get(options, :model) || default_model(provider)
+    model = Keyword.get(options, :model) || ProviderProfile.default_model(profile)
     ProviderProfile.model_spec(profile, model)
   end
 
@@ -650,14 +656,6 @@ defmodule Nex.Agent.LLM.ReqLLM do
 
   defp present?(value) when value in [nil, "", []], do: false
   defp present?(_), do: true
-
-  defp default_model(:anthropic), do: "claude-sonnet-4-20250514"
-  defp default_model(:openai), do: "gpt-4o"
-  defp default_model(:openai_codex), do: "gpt-5.3-codex"
-  defp default_model(:openai_codex_custom), do: "gpt-5.4"
-  defp default_model(:openrouter), do: "anthropic/claude-3.5-sonnet"
-  defp default_model(:ollama), do: "llama3.1"
-  defp default_model(_), do: "gpt-4o"
 
   defp generate_tool_call_id do
     "call_" <> (:crypto.strong_rand_bytes(12) |> Base.encode16(case: :lower))

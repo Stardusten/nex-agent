@@ -463,6 +463,10 @@ defmodule Nex.Agent.Onboarding do
     Owner/subagent handoff:
     - Subagents may inspect and patch code
     - Only the owner run may use `self_update status`, `self_update deploy`, or `self_update rollback`
+    Self-healing loop:
+    - Runtime records structured failure signals for LLM calls, tool calls, and self_update deploy attempts
+    - In the current minimal loop, self-healing only produces record/hint/reflection candidates
+    - It does not automatically repair code, write memory or skills, or bypass owner-only deploy
     For Lark/Feishu business operations beyond chat messaging, use `bash` with external `lark-cli` instead of expecting built-in `feishu_*` tools.
 
     ## Six-Layer Evolution
@@ -533,6 +537,7 @@ defmodule Nex.Agent.Onboarding do
     - Use `self_update status` for quick preflight and release visibility.
     - Treat `self_update deploy` as quick deploy verification only; strict ship checks are explicit extra work.
     - In owner/subagent workflows, only the owner run may deploy or roll back.
+    - Self-healing records LLM/tool/deploy failure signals, but the minimal loop does not auto-repair code or write memory/skills.
     - If a built-in memory tool directly matches the user request, call it instead of reading source files first.
 
     ## Workspace Extension Model

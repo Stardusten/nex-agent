@@ -13,6 +13,7 @@ defmodule Nex.Agent.Runner do
     Stream.Result
   }
 
+  alias Nex.Agent.SelfHealing.Router, as: SelfHealingRouter
   alias Nex.Agent.Runtime.Snapshot
   alias Nex.Agent.Tool.Registry, as: ToolRegistry
   alias Nex.SkillRuntime
@@ -288,96 +289,117 @@ defmodule Nex.Agent.Runner do
       {:error, stream_result(:error, opts, nil, %{error: :cancelled}), session}
     else
       if iteration >= max_iterations do
-      Logger.warning("[Runner] Max iterations reached (#{max_iterations})")
-      {:error, :max_iterations_exceeded, session}
+        Logger.warning("[Runner] Max iterations reached (#{max_iterations})")
+        {:error, :max_iterations_exceeded, session}
       else
-      # Time the LLM call
-      llm_start = System.monotonic_time(:millisecond)
+        # Time the LLM call
+        llm_start = System.monotonic_time(:millisecond)
 
-      llm_result =
-        try do
-          call_llm_with_retry(
-            messages,
-            Keyword.put(opts, :trace_iteration, iteration + 1),
-            _retries = 1
-          )
-        rescue
-          e ->
-            Logger.error("[Runner] LLM call crashed: #{Exception.message(e)}")
-            {:error, "LLM call failed: #{Exception.message(e)}"}
-        catch
-          kind, reason ->
-            Logger.error("[Runner] LLM call crashed: #{kind} #{inspect(reason)}")
-            {:error, "LLM call failed: #{kind} #{inspect(reason)}"}
-        end
+        llm_result =
+          try do
+            call_llm_with_retry(
+              messages,
+              Keyword.put(opts, :trace_iteration, iteration + 1),
+              _retries = 1
+            )
+          rescue
+            e ->
+              Logger.error("[Runner] LLM call crashed: #{Exception.message(e)}")
+              {:error, "LLM call failed: #{Exception.message(e)}"}
+          catch
+            kind, reason ->
+              Logger.error("[Runner] LLM call crashed: #{kind} #{inspect(reason)}")
+              {:error, "LLM call failed: #{kind} #{inspect(reason)}"}
+          end
 
-      llm_duration = System.monotonic_time(:millisecond) - llm_start
-      Logger.info("[Runner] LLM call took #{llm_duration}ms")
+        llm_duration = System.monotonic_time(:millisecond) - llm_start
+        Logger.info("[Runner] LLM call took #{llm_duration}ms")
 
-      case llm_result do
-        {:ok, response} ->
-          content = response.content
-          finish_reason = Map.get(response, :finish_reason)
-          trace_llm_response(iteration + 1, response, llm_duration, opts)
+        case llm_result do
+          {:ok, response} ->
+            content = response.content
+            finish_reason = Map.get(response, :finish_reason)
+            trace_llm_response(iteration + 1, response, llm_duration, opts)
 
-          reasoning_content =
-            Map.get(response, :reasoning_content) || Map.get(response, "reasoning_content")
+            reasoning_content =
+              Map.get(response, :reasoning_content) || Map.get(response, "reasoning_content")
 
-          tool_calls = Map.get(response, :tool_calls) || Map.get(response, "tool_calls")
+            tool_calls = Map.get(response, :tool_calls) || Map.get(response, "tool_calls")
 
-          if finish_reason == "error" do
-            # Nanobot parity: keep the user turn, but never persist the assistant error response.
-            Logger.error("[Runner] LLM returned error finish_reason")
+            if finish_reason == "error" do
+              # Nanobot parity: keep the user turn, but never persist the assistant error response.
+              Logger.error("[Runner] LLM returned error finish_reason")
+              iter_total = System.monotonic_time(:millisecond) - iter_start
+
+              Logger.info(
+                "[Runner] === Iteration #{iteration + 1} finished in #{iter_total}ms (error) ==="
+              )
+
+              reason = "LLM returned an error"
+
+              emit_self_healing_event("llm.call.failed", opts, %{
+                "actor" => llm_actor(opts),
+                "classifier" => %{"family" => "llm", "retryable" => false},
+                "evidence" => %{"error_text" => reason}
+              })
+
+              emit_stream_error(opts, reason)
+              {:error, stream_result(:error, opts, nil, %{error: reason}), session}
+            else
+              opts =
+                if Map.get(response, :streamed_text, false) do
+                  Keyword.put(opts, :_llm_text_streamed, true)
+                else
+                  opts
+                end
+
+              result =
+                handle_response(
+                  session,
+                  messages,
+                  content,
+                  tool_calls,
+                  reasoning_content,
+                  iteration,
+                  max_iterations,
+                  _on_progress = nil,
+                  opts
+                )
+
+              iter_total = System.monotonic_time(:millisecond) - iter_start
+
+              Logger.info(
+                "[Runner] === Iteration #{iteration + 1} finished in #{iter_total}ms ==="
+              )
+
+              result
+            end
+
+          {:error, reason} ->
+            Logger.error("[Runner] LLM call failed: #{inspect(reason)}")
+
+            emit_self_healing_event("llm.call.failed", opts, %{
+              "actor" => llm_actor(opts),
+              "classifier" => %{
+                "family" => "llm",
+                "retryable" => transient_error?(reason)
+              },
+              "evidence" => %{"error_text" => stream_error_reason(reason) |> inspect(limit: 20)}
+            })
+
+            emit_stream_error(opts, stream_error_reason(reason))
             iter_total = System.monotonic_time(:millisecond) - iter_start
 
             Logger.info(
-              "[Runner] === Iteration #{iteration + 1} finished in #{iter_total}ms (error) ==="
+              "[Runner] === Iteration #{iteration + 1} finished in #{iter_total}ms (failed) ==="
             )
 
-            reason = "LLM returned an error"
-            emit_stream_error(opts, reason)
-            {:error, stream_result(:error, opts, nil, %{error: reason}), session}
-          else
-            opts =
-              if Map.get(response, :streamed_text, false) do
-                Keyword.put(opts, :_llm_text_streamed, true)
-              else
-                opts
-              end
-
-            result =
-              handle_response(
-                session,
-                messages,
-                content,
-                tool_calls,
-                reasoning_content,
-                iteration,
-                max_iterations,
-                _on_progress = nil,
-                opts
-              )
-
-            iter_total = System.monotonic_time(:millisecond) - iter_start
-            Logger.info("[Runner] === Iteration #{iteration + 1} finished in #{iter_total}ms ===")
-            result
-          end
-
-        {:error, reason} ->
-          Logger.error("[Runner] LLM call failed: #{inspect(reason)}")
-          emit_stream_error(opts, stream_error_reason(reason))
-          iter_total = System.monotonic_time(:millisecond) - iter_start
-
-          Logger.info(
-            "[Runner] === Iteration #{iteration + 1} finished in #{iter_total}ms (failed) ==="
-          )
-
-          {:error,
-           stream_result(:error, opts, stream_error_partial_content(reason), %{
-             error: stream_error_reason(reason),
-             partial_content: stream_error_partial_content(reason)
-           }), session}
-      end
+            {:error,
+             stream_result(:error, opts, stream_error_partial_content(reason), %{
+               error: stream_error_reason(reason),
+               partial_content: stream_error_partial_content(reason)
+             }), session}
+        end
       end
     end
   end
@@ -594,7 +616,8 @@ defmodule Nex.Agent.Runner do
     end)
   end
 
-  defp emit_stream_tool_call_notice(opts, tool_calls) when is_list(tool_calls) and tool_calls != [] do
+  defp emit_stream_tool_call_notice(opts, tool_calls)
+       when is_list(tool_calls) and tool_calls != [] do
     case Keyword.get(opts, :stream_sink) do
       sink when is_function(sink, 1) ->
         notice = render_tool_call_notice(tool_calls)
@@ -633,8 +656,11 @@ defmodule Nex.Agent.Runner do
       |> then(&summarize_args(tool_name, &1))
 
     case render_tool_call_notice_args(tool_name, args) do
-      "" -> "#{tool_notice_emoji(tool_name)} #{tool_notice_label(tool_name)}"
-      rendered_args -> "#{tool_notice_emoji(tool_name)} #{tool_notice_label(tool_name)} - #{rendered_args}"
+      "" ->
+        "#{tool_notice_emoji(tool_name)} #{tool_notice_label(tool_name)}"
+
+      rendered_args ->
+        "#{tool_notice_emoji(tool_name)} #{tool_notice_label(tool_name)} - #{rendered_args}"
     end
   end
 
@@ -1011,6 +1037,7 @@ defmodule Nex.Agent.Runner do
   defp transient_error?(%{status: status}) when status in [429, 500, 502, 503, 504], do: true
   defp transient_error?(:timeout), do: true
   defp transient_error?(:closed), do: true
+
   defp transient_error?(reason) when is_binary(reason) do
     reason = String.downcase(reason)
 
@@ -1277,6 +1304,8 @@ defmodule Nex.Agent.Runner do
            parse_args(args)}
       end)
 
+    emit_tool_failure_events(results, opts)
+
     {new_messages, session} =
       Enum.reduce(results, {messages, session}, fn {tool_call_id, tool_name, result, _args},
                                                    {msgs, sess} ->
@@ -1325,65 +1354,65 @@ defmodule Nex.Agent.Runner do
       "Error: cancelled"
     else
       if String.starts_with?(tool_name, "skill_run__") do
-      case SkillRuntime.execute_ephemeral_tool(tool_name, args, ctx) do
-        {:ok, result} when is_binary(result) -> result
-        {:ok, result} when is_map(result) -> Jason.encode!(result, pretty: true)
-        {:ok, result} -> render_text(result)
-        {:error, reason} -> "Error: #{reason}"
-      end
-    else
-      if Process.whereis(ToolRegistry) do
-        case ToolRegistry.execute(tool_name, args, ctx) do
-          {:ok, result} when is_binary(result) ->
-            result
-
-          {:ok, %{content: content}} when is_binary(content) ->
-            content
-
-          {:ok, %{error: error}} ->
-            "Error: #{error}"
-
-          {:ok, result} when is_map(result) ->
-            Jason.encode!(result, pretty: true)
-
-          {:ok, result} ->
-            render_text(result)
-
-          {:error, reason} ->
-            "Error: #{reason}"
-
-          %{content: content} when is_binary(content) ->
-            Logger.warning(
-              "[Runner] Tool #{tool_name} returned non-standard bare map result; coercing to success"
-            )
-
-            content
-
-          %{error: error} ->
-            Logger.warning(
-              "[Runner] Tool #{tool_name} returned non-standard bare error map; coercing to error"
-            )
-
-            "Error: #{error}"
-
-          result when is_map(result) ->
-            Logger.warning(
-              "[Runner] Tool #{tool_name} returned non-standard bare map result; coercing to success"
-            )
-
-            Jason.encode!(result, pretty: true)
-
-          result ->
-            Logger.warning(
-              "[Runner] Tool #{tool_name} returned non-standard result #{inspect(result, limit: 50)}; coercing to text"
-            )
-
-            render_text(result)
+        case SkillRuntime.execute_ephemeral_tool(tool_name, args, ctx) do
+          {:ok, result} when is_binary(result) -> result
+          {:ok, result} when is_map(result) -> Jason.encode!(result, pretty: true)
+          {:ok, result} -> render_text(result)
+          {:error, reason} -> "Error: #{reason}"
         end
       else
-        "Error: tool registry unavailable"
+        if Process.whereis(ToolRegistry) do
+          case ToolRegistry.execute(tool_name, args, ctx) do
+            {:ok, result} when is_binary(result) ->
+              result
+
+            {:ok, %{content: content}} when is_binary(content) ->
+              content
+
+            {:ok, %{error: error}} ->
+              "Error: #{error}"
+
+            {:ok, result} when is_map(result) ->
+              Jason.encode!(result, pretty: true)
+
+            {:ok, result} ->
+              render_text(result)
+
+            {:error, reason} ->
+              "Error: #{reason}"
+
+            %{content: content} when is_binary(content) ->
+              Logger.warning(
+                "[Runner] Tool #{tool_name} returned non-standard bare map result; coercing to success"
+              )
+
+              content
+
+            %{error: error} ->
+              Logger.warning(
+                "[Runner] Tool #{tool_name} returned non-standard bare error map; coercing to error"
+              )
+
+              "Error: #{error}"
+
+            result when is_map(result) ->
+              Logger.warning(
+                "[Runner] Tool #{tool_name} returned non-standard bare map result; coercing to success"
+              )
+
+              Jason.encode!(result, pretty: true)
+
+            result ->
+              Logger.warning(
+                "[Runner] Tool #{tool_name} returned non-standard result #{inspect(result, limit: 50)}; coercing to text"
+              )
+
+              render_text(result)
+          end
+        else
+          "Error: tool registry unavailable"
+        end
       end
-    end
     end
   end
 
@@ -1407,6 +1436,69 @@ defmodule Nex.Agent.Runner do
       skill_runtime: Keyword.get(opts, :skill_runtime, %{}),
       skill_runtime_prepared_run: Keyword.get(opts, :skill_runtime_prepared_run)
     }
+  end
+
+  defp emit_tool_failure_events(results, opts) do
+    Enum.each(results, fn {_tool_call_id, tool_name, result, args} ->
+      if String.starts_with?(render_text(result), "Error:") do
+        emit_self_healing_event("tool.call.failed", opts, %{
+          "actor" => %{
+            "component" => "tool",
+            "tool" => tool_name
+          },
+          "classifier" => %{
+            "family" => "tool",
+            "retryable" => tool_error_retryable?(result)
+          },
+          "evidence" => %{
+            "error_text" => render_text(result),
+            "args_summary" => summarize_args(tool_name, args)
+          }
+        })
+      end
+    end)
+  end
+
+  defp emit_self_healing_event(name, opts, attrs) do
+    event =
+      %{
+        "name" => name,
+        "phase" => "runner",
+        "severity" => "error",
+        "run_id" => Keyword.get(opts, :run_id),
+        "session_key" => Keyword.get(opts, :session_key),
+        "workspace" => Keyword.get(opts, :workspace),
+        "actor" => Map.get(attrs, "actor", %{}),
+        "classifier" => Map.get(attrs, "classifier", %{}),
+        "evidence" => Map.get(attrs, "evidence", %{}),
+        "outcome" => nil
+      }
+
+    case SelfHealingRouter.record_event(event, workspace: Keyword.get(opts, :workspace)) do
+      {:ok, _event} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("[Runner] self-healing event #{name} failed: #{inspect(reason)}")
+    end
+  rescue
+    e ->
+      Logger.warning("[Runner] self-healing event #{name} crashed: #{Exception.message(e)}")
+      :ok
+  end
+
+  defp llm_actor(opts) do
+    %{
+      "component" => "runner",
+      "provider" => Keyword.get(opts, :provider) |> to_string(),
+      "model" => Keyword.get(opts, :model) |> to_string()
+    }
+  end
+
+  defp tool_error_retryable?(result) do
+    result
+    |> render_text()
+    |> transient_error?()
   end
 
   defp generate_tool_call_id do
@@ -1452,7 +1544,7 @@ defmodule Nex.Agent.Runner do
 
         case consolidation_tool_choice_retry_reason(provider, tool_choice, err) do
           nil ->
-            {:error, err}
+            {:error, stream_error_reason(err)}
 
           reason ->
             Logger.warning("[Runner] #{consolidation_tool_choice_retry_message(reason)}")

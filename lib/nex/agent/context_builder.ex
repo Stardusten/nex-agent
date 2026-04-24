@@ -107,6 +107,8 @@ defmodule Nex.Agent.ContextBuilder do
     - `self_update deploy` is the quick deploy verification path: syntax, compile, reload, and related tests.
     - Strict ship checks such as `format`, `credo`, or `dialyzer` are for explicit ship confidence, not mandatory on every quick deploy iteration.
     - In owner/subagent workflows, subagents may inspect and patch code, but only the owner run may use `self_update status`, `self_update deploy`, or `self_update rollback`.
+    - The minimal self-healing loop records structured failure signals for LLM calls, tool calls, and self_update deploy attempts.
+    - Self-healing signals may surface hint or reflection candidates, but they do not auto-repair code, write memory/skills, or bypass owner-only deploy.
     - Skills are discoverable runtime packages, not preloaded instructions. Use `skill_discover` to search, `skill_get` to inspect a package with progressive disclosure, and `skill_capture` to save a reusable local knowledge package.
 
     Reply directly with text for normal conversations.

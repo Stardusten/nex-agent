@@ -3,6 +3,7 @@ defmodule Nex.Agent.SelfUpdate.Deployer do
 
   alias Nex.Agent.{CodeUpgrade, HotReload}
   alias Nex.Agent.SelfUpdate.{Planner, ReleaseStore}
+  alias Nex.Agent.SelfHealing.Router, as: SelfHealingRouter
 
   @rollback_baseline "__baseline__"
   @test_timeout_ms 20_000
@@ -51,8 +52,14 @@ defmodule Nex.Agent.SelfUpdate.Deployer do
   @spec history() :: map()
   def history, do: ReleaseStore.history_view()
 
-  @spec deploy(String.t(), nil | [String.t()]) :: map()
-  def deploy(reason, files \\ nil) when is_binary(reason) do
+  @spec deploy(String.t(), nil | [String.t()], keyword()) :: map()
+  def deploy(reason, files \\ nil, opts \\ []) when is_binary(reason) do
+    result = do_deploy(reason, files)
+    emit_deploy_failure_event(result, reason, files, opts)
+    result
+  end
+
+  defp do_deploy(reason, files) when is_binary(reason) do
     with {:ok, plan, warnings} <- Planner.plan(files),
          :ok <- syntax_check(plan),
          {:ok, snapshot} <- snapshot_files(plan),
@@ -330,6 +337,62 @@ defmodule Nex.Agent.SelfUpdate.Deployer do
       warnings: warnings
     }
   end
+
+  defp emit_deploy_failure_event(%{status: :failed} = result, deploy_reason, files, opts) do
+    workspace =
+      Keyword.get(opts, :workspace) ||
+        Application.get_env(:nex_agent, :workspace_path) ||
+        CodeUpgrade.repo_root()
+
+    event = %{
+      "name" => "self_update.deploy.failed",
+      "phase" => "self_update.deploy",
+      "severity" => "error",
+      "workspace" => workspace,
+      "actor" => %{
+        "component" => "self_update",
+        "module" => "Nex.Agent.SelfUpdate.Deployer"
+      },
+      "classifier" => %{
+        "family" => "self_update",
+        "deploy_phase" => result.phase |> to_string(),
+        "rollback_attempted" => result.rolled_back
+      },
+      "evidence" => %{
+        "reason" => deploy_reason,
+        "files" => files || [],
+        "self_update_error_summary" => result.error,
+        "warnings" => result.warnings
+      },
+      "outcome" => %{
+        "rolled_back" => result.rolled_back,
+        "runtime_restored" => result.runtime_restored |> to_string()
+      }
+    }
+
+    case SelfHealingRouter.record_event(event, workspace: workspace) do
+      {:ok, _event} ->
+        :ok
+
+      {:error, reason} ->
+        require Logger
+
+        Logger.warning(
+          "[SelfUpdate.Deployer] self-healing deploy event failed: #{inspect(reason)}"
+        )
+    end
+  rescue
+    e ->
+      require Logger
+
+      Logger.warning(
+        "[SelfUpdate.Deployer] self-healing deploy event crashed: #{Exception.message(e)}"
+      )
+
+      :ok
+  end
+
+  defp emit_deploy_failure_event(_result, _deploy_reason, _files, _opts), do: :ok
 
   defp rollback_plan(%{restore_source: {:snapshot, release}}) do
     rollback_plan_from_release(release, &ReleaseStore.read_snapshot/2)

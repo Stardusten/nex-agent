@@ -35,6 +35,8 @@ defmodule Nex.Agent.RunnerEvolutionTest do
     Skills
   }
 
+  alias Nex.Agent.SelfHealing.EventStore
+
   setup do
     workspace =
       Path.join(System.tmp_dir!(), "nex-agent-runner-#{System.unique_integer([:positive])}")
@@ -223,6 +225,70 @@ defmodule Nex.Agent.RunnerEvolutionTest do
     assert Enum.all?(events, &(&1["run_id"] == run_id))
     assert Enum.at(events, 2)["content"] == "ok"
     assert Enum.at(events, 3)["result"] == "ok"
+  end
+
+  test "runner records llm.call.failed self-healing event on final LLM failure", %{
+    workspace: workspace
+  } do
+    llm_client = fn _messages, _opts -> {:error, :timeout} end
+
+    assert {:error, :timeout, _session} =
+             Runner.run(Session.new("self-healing-llm"), "fail once",
+               llm_stream_client: stream_client_from_response(llm_client),
+               workspace: workspace,
+               skip_consolidation: true,
+               llm_retry_delay_ms: 0,
+               run_id: "run_self_healing_llm"
+             )
+
+    assert [event] = EventStore.recent(5, workspace: workspace)
+    assert event["name"] == "llm.call.failed"
+    assert event["run_id"] == "run_self_healing_llm"
+    assert event["actor"]["component"] == "runner"
+    assert event["decision"]["action"] in ["record_only", "reflect_candidate"]
+  end
+
+  test "runner records tool.call.failed self-healing event for tool errors", %{
+    workspace: workspace
+  } do
+    {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+    llm_client = fn _messages, _opts ->
+      turn = Agent.get_and_update(counter, &{&1, &1 + 1})
+
+      case turn do
+        0 ->
+          {:ok,
+           %{
+             content: "",
+             finish_reason: nil,
+             tool_calls: [
+               %{
+                 id: "call_missing",
+                 function: %{name: "missing_tool", arguments: %{"value" => "boom"}}
+               }
+             ]
+           }}
+
+        _ ->
+          {:ok, %{content: "done", finish_reason: nil, tool_calls: []}}
+      end
+    end
+
+    assert {:ok, "done", _session} =
+             Runner.run(Session.new("self-healing-tool"), "use missing tool",
+               llm_stream_client: stream_client_from_response(llm_client),
+               workspace: workspace,
+               skip_consolidation: true,
+               run_id: "run_self_healing_tool"
+             )
+
+    assert [event] = EventStore.recent(5, workspace: workspace)
+    assert event["name"] == "tool.call.failed"
+    assert event["run_id"] == "run_self_healing_tool"
+    assert event["actor"]["tool"] == "missing_tool"
+    assert event["evidence"]["error_text"] =~ "Unknown tool"
+    assert is_map(event["decision"])
   end
 
   test "runner records tool results and reuses run_id for skill runtime summaries", %{
