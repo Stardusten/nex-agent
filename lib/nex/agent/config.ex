@@ -260,58 +260,64 @@ defmodule Nex.Agent.Config do
   end
 
   @doc """
-  Get normalized capability configuration for `web_search`.
+  Get normalized backend selection for `web_search`.
   """
-  @spec web_search_capability(t() | nil) :: map()
-  def web_search_capability(%__MODULE__{tools: tools}) when is_map(tools) do
+  @spec web_search_provider_config(t() | nil) :: map()
+  def web_search_provider_config(%__MODULE__{tools: tools}) when is_map(tools) do
     raw =
       case Map.get(tools, "web_search") do
-        %{} = capability -> capability
+        %{} = config -> config
         _ -> %{}
       end
 
+    providers =
+      default_web_search_providers()
+      |> deep_merge_provider_configs(Map.get(raw, "providers"))
+
     %{
-      "strategy" => normalize_web_search_strategy(Map.get(raw, "strategy")),
-      "backend" => normalize_web_search_backend(Map.get(raw, "backend")),
-      "mode" => normalize_web_search_mode(Map.get(raw, "mode")),
-      "allowed_domains" => normalize_allowed_domains(Map.get(raw, "allowed_domains")),
-      "user_location" => normalize_user_location(Map.get(raw, "user_location"))
+      "provider" => normalize_tool_provider(Map.get(raw, "provider"), ["duckduckgo", "codex"], "duckduckgo"),
+      "providers" => %{
+        "duckduckgo" => normalize_web_search_duckduckgo_provider(Map.get(providers, "duckduckgo")),
+        "codex" => normalize_web_search_codex_provider(Map.get(providers, "codex"))
+      }
     }
   end
 
-  def web_search_capability(_config) do
+  def web_search_provider_config(_config) do
     %{
-      "strategy" => "auto",
-      "backend" => "auto",
-      "mode" => "live",
-      "allowed_domains" => [],
-      "user_location" => nil
+      "provider" => "duckduckgo",
+      "providers" => default_web_search_providers()
     }
   end
 
   @doc """
-  Get normalized capability configuration for `image_generation`.
+  Get normalized backend selection for `image_generation`.
   """
-  @spec image_generation_capability(t() | nil) :: map()
-  def image_generation_capability(%__MODULE__{tools: tools}) when is_map(tools) do
+  @spec image_generation_provider_config(t() | nil) :: map()
+  def image_generation_provider_config(%__MODULE__{tools: tools}) when is_map(tools) do
     raw =
       case Map.get(tools, "image_generation") do
-        %{} = capability -> capability
+        %{} = config -> config
         _ -> %{}
       end
 
+    providers =
+      default_image_generation_providers()
+      |> deep_merge_provider_configs(Map.get(raw, "providers"))
+
     %{
-      "strategy" => normalize_image_generation_strategy(Map.get(raw, "strategy")),
-      "backend" => normalize_image_generation_backend(Map.get(raw, "backend")),
-      "output_format" => normalize_image_generation_output_format(Map.get(raw, "output_format"))
+      "provider" => normalize_tool_provider(Map.get(raw, "provider"), ["codex", "nanobanana"], "codex"),
+      "providers" => %{
+        "codex" => normalize_image_generation_codex_provider(Map.get(providers, "codex")),
+        "nanobanana" => Map.get(providers, "nanobanana", %{})
+      }
     }
   end
 
-  def image_generation_capability(_config) do
+  def image_generation_provider_config(_config) do
     %{
-      "strategy" => "auto",
-      "backend" => "auto",
-      "output_format" => "png"
+      "provider" => "codex",
+      "providers" => default_image_generation_providers()
     }
   end
 
@@ -593,21 +599,6 @@ defmodule Nex.Agent.Config do
   defp provider_default_base_url("ollama"), do: "http://localhost:11434"
   defp provider_default_base_url(_), do: nil
 
-  defp normalize_web_search_strategy("provider_native"), do: "provider_native"
-  defp normalize_web_search_strategy("local"), do: "local"
-  defp normalize_web_search_strategy(_), do: "auto"
-
-  defp normalize_web_search_backend("duckduckgo"), do: "duckduckgo"
-  defp normalize_web_search_backend("openai_codex"), do: "openai_codex"
-  defp normalize_web_search_backend(_), do: "auto"
-
-  defp normalize_image_generation_strategy("provider_native"), do: "provider_native"
-  defp normalize_image_generation_strategy("disabled"), do: "disabled"
-  defp normalize_image_generation_strategy(_), do: "auto"
-
-  defp normalize_image_generation_backend("openai_codex"), do: "openai_codex"
-  defp normalize_image_generation_backend(_), do: "auto"
-
   defp normalize_web_search_mode("cached"), do: "cached"
   defp normalize_web_search_mode("disabled"), do: "disabled"
   defp normalize_web_search_mode(_), do: "live"
@@ -615,6 +606,85 @@ defmodule Nex.Agent.Config do
   defp normalize_image_generation_output_format("jpeg"), do: "jpeg"
   defp normalize_image_generation_output_format("webp"), do: "webp"
   defp normalize_image_generation_output_format(_), do: "png"
+
+  defp normalize_tool_provider(provider, allowed, default) when is_binary(provider) do
+    provider = String.trim(provider)
+    if provider in allowed, do: provider, else: default
+  end
+
+  defp normalize_tool_provider(provider, allowed, default) when is_atom(provider) do
+    provider |> Atom.to_string() |> normalize_tool_provider(allowed, default)
+  end
+
+  defp normalize_tool_provider(_provider, _allowed, default), do: default
+
+  defp default_web_search_providers do
+    %{
+      "duckduckgo" => %{},
+      "codex" => %{
+        "mode" => "live",
+        "allowed_domains" => [],
+        "user_location" => nil
+      }
+    }
+  end
+
+  defp default_image_generation_providers do
+    %{
+      "codex" => %{"output_format" => "png"},
+      "nanobanana" => %{}
+    }
+  end
+
+  defp normalize_web_search_codex_provider(%{} = provider) do
+    %{
+      "mode" => normalize_web_search_mode(Map.get(provider, "mode")),
+      "allowed_domains" => normalize_allowed_domains(Map.get(provider, "allowed_domains")),
+      "user_location" => normalize_user_location(Map.get(provider, "user_location"))
+    }
+  end
+
+  defp normalize_web_search_codex_provider(_provider),
+    do: default_web_search_providers()["codex"]
+
+  defp normalize_web_search_duckduckgo_provider(%{}), do: %{}
+  defp normalize_web_search_duckduckgo_provider(_provider), do: %{}
+
+  defp normalize_image_generation_codex_provider(%{} = provider) do
+    %{
+      "output_format" => normalize_image_generation_output_format(Map.get(provider, "output_format"))
+    }
+  end
+
+  defp normalize_image_generation_codex_provider(_provider),
+    do: default_image_generation_providers()["codex"]
+
+  defp deep_merge_provider_configs(base, nil), do: base
+
+  defp deep_merge_provider_configs(base, overrides) when is_map(base) and is_map(overrides) do
+    Map.merge(base, stringify_map_keys(overrides), fn _key, left, right ->
+      if is_map(left) and is_map(right) do
+        Map.merge(left, stringify_map_keys(right))
+      else
+        right
+      end
+    end)
+  end
+
+  defp deep_merge_provider_configs(base, _overrides), do: base
+
+  defp stringify_map_keys(map) when is_map(map) do
+    Map.new(map, fn {key, value} ->
+      value =
+        if is_map(value) do
+          stringify_map_keys(value)
+        else
+          value
+        end
+
+      {to_string(key), value}
+    end)
+  end
 
   defp normalize_allowed_domains(domains) when is_list(domains) do
     domains

@@ -17,7 +17,6 @@ defmodule Nex.Agent.Runner do
   alias Nex.Agent.ControlPlane.Redactor
   require ControlPlaneLog
   alias Nex.Agent.Runtime.Snapshot
-  alias Nex.Agent.Tool.CapabilityResolver
   alias Nex.Agent.Tool.Registry, as: ToolRegistry
   alias Nex.SkillRuntime
 
@@ -1442,10 +1441,7 @@ defmodule Nex.Agent.Runner do
 
   defp tool_definition_name(tool) when is_map(tool) do
     Map.get(tool, "name") ||
-      Map.get(tool, :name) ||
-      if CapabilityResolver.builtin_tool_definition?(tool),
-        do: Map.get(tool, "type") || Map.get(tool, :type),
-        else: nil
+      Map.get(tool, :name)
   end
 
   defp tool_definition_name(_tool), do: nil

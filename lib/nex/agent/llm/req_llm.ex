@@ -12,7 +12,6 @@ defmodule Nex.Agent.LLM.ReqLLM do
   alias ReqLLM.Tool
   alias ReqLLM.ToolCall
   alias Nex.Agent.LLM.ProviderProfile
-  alias Nex.Agent.Tool.CapabilityResolver
 
   @receive_timeout 180_000
 
@@ -201,62 +200,50 @@ defmodule Nex.Agent.LLM.ReqLLM do
     tools
     |> Enum.map(&normalize_tool_definition/1)
     |> Enum.filter(&is_map/1)
-    |> Enum.map(fn tool ->
-      if CapabilityResolver.builtin_tool_definition?(tool) do
-        tool
-        |> Map.delete("provider_native")
-        |> Map.delete(:provider_native)
-      else
-        %{name: name, description: description, parameter_schema: parameter_schema} = tool
-
-        Tool.new!(
-          name: name,
-          description: description,
-          parameter_schema: parameter_schema,
-          callback: fn _args -> {:ok, "Tool execution is handled by NexAgent"} end
-        )
-      end
+    |> Enum.map(fn %{name: name, description: description, parameter_schema: parameter_schema} ->
+      Tool.new!(
+        name: name,
+        description: description,
+        parameter_schema: parameter_schema,
+        callback: fn _args -> {:ok, "Tool execution is handled by NexAgent"} end
+      )
     end)
   end
 
   defp normalize_tool_definition(tool) when is_map(tool) do
-    if CapabilityResolver.builtin_tool_definition?(tool) do
-      Map.new(tool, fn {key, value} -> {to_string(key), value} end)
+    function = Map.get(tool, "function") || Map.get(tool, :function) || %{}
+
+    name =
+      Map.get(tool, "name") ||
+        Map.get(tool, :name) ||
+        Map.get(function, "name") ||
+        Map.get(function, :name)
+
+    description =
+      Map.get(tool, "description") ||
+        Map.get(tool, :description) ||
+        Map.get(function, "description") ||
+        Map.get(function, :description) || ""
+
+    parameter_schema =
+      Map.get(tool, "input_schema") ||
+        Map.get(tool, :input_schema) ||
+        Map.get(tool, "parameters") ||
+        Map.get(tool, :parameters) ||
+        Map.get(function, "input_schema") ||
+        Map.get(function, :input_schema) ||
+        Map.get(function, "parameters") ||
+        Map.get(function, :parameters) || %{}
+
+    if is_binary(name) and name != "" do
+      %{
+        name: name,
+        description: to_string(description),
+        parameter_schema: normalize_parameter_schema(parameter_schema)
+      }
     else
-      function = Map.get(tool, "function") || Map.get(tool, :function) || %{}
-
-      name =
-        Map.get(tool, "name") ||
-          Map.get(tool, :name) ||
-          Map.get(function, "name") ||
-          Map.get(function, :name)
-
-      description =
-        Map.get(tool, "description") ||
-          Map.get(tool, :description) ||
-          Map.get(function, "description") ||
-          Map.get(function, :description) || ""
-
-      parameter_schema =
-        Map.get(tool, "input_schema") ||
-          Map.get(tool, :input_schema) ||
-          Map.get(tool, "parameters") ||
-          Map.get(tool, :parameters) ||
-          Map.get(function, "input_schema") ||
-          Map.get(function, :input_schema) ||
-          Map.get(function, "parameters") ||
-          Map.get(function, :parameters) || %{}
-
-      if is_binary(name) and name != "" do
-        %{
-          name: name,
-          description: to_string(description),
-          parameter_schema: normalize_parameter_schema(parameter_schema)
-        }
-      else
-        Logger.warning("[ReqLLM] Dropping invalid tool definition (missing name): #{inspect(tool)}")
-        nil
-      end
+      Logger.warning("[ReqLLM] Dropping invalid tool definition (missing name): #{inspect(tool)}")
+      nil
     end
   end
 

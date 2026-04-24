@@ -202,7 +202,12 @@ defmodule Nex.Agent.ToolAlignmentTest do
       %Nex.Agent.Config{
         Nex.Agent.Config.default()
         | provider: "openai-codex",
-          tools: %{"web_search" => %{"strategy" => "auto", "mode" => "live"}}
+          tools: %{
+            "web_search" => %{
+              "provider" => "codex",
+              "providers" => %{"codex" => %{"mode" => "live"}}
+            }
+          }
       }
 
     definitions =
@@ -224,7 +229,12 @@ defmodule Nex.Agent.ToolAlignmentTest do
       %Nex.Agent.Config{
         Nex.Agent.Config.default()
         | provider: "openai-codex",
-          tools: %{"image_generation" => %{"strategy" => "auto", "output_format" => "png"}}
+          tools: %{
+            "image_generation" => %{
+              "provider" => "codex",
+              "providers" => %{"codex" => %{"output_format" => "png"}}
+            }
+          }
       }
 
     definitions =
@@ -241,14 +251,19 @@ defmodule Nex.Agent.ToolAlignmentTest do
            end)
   end
 
-  test "runner re-resolves provider-sensitive tool definitions for per-turn provider overrides", %{
+  test "runner keeps web_search as a function tool under provider overrides", %{
     workspace: workspace
   } do
     codex_config =
       %Nex.Agent.Config{
         Nex.Agent.Config.default()
         | provider: "openai-codex",
-          tools: %{"web_search" => %{"strategy" => "auto", "mode" => "live"}}
+          tools: %{
+            "web_search" => %{
+              "provider" => "codex",
+              "providers" => %{"codex" => %{"mode" => "live"}}
+            }
+          }
       }
 
     snapshot = %Snapshot{

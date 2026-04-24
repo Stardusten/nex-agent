@@ -1,9 +1,6 @@
 defmodule Nex.Agent.Tool.ImageGeneration do
   @moduledoc """
-  Image generation capability.
-
-  Local execution is intentionally unsupported for now; capability resolution
-  may expose a provider-native built-in tool on supported backends.
+  Image generation capability with pluggable local backends.
   """
 
   @behaviour Nex.Agent.Tool.Behaviour
@@ -33,49 +30,41 @@ defmodule Nex.Agent.Tool.ImageGeneration do
   end
 
   def execute(%{"prompt" => prompt}, ctx) when is_binary(prompt) and prompt != "" do
-    capability = capability_config(ctx)
+    provider_config = provider_config(ctx)
+    provider = Map.get(provider_config, "provider", "codex")
+    selected_config = selected_provider_config(provider_config)
 
-    case Map.get(capability, "backend", "auto") do
-      "openai_codex" ->
-        OpenAICodex.image_generation(prompt, normalize_ctx(ctx), capability)
+    case provider do
+      "codex" ->
+        OpenAICodex.image_generation(prompt, normalize_ctx(ctx), selected_config)
 
-      "auto" ->
-        if codex_backend_supported?(ctx) do
-          OpenAICodex.image_generation(prompt, normalize_ctx(ctx), capability)
-        else
-          {:error,
-           "image_generation has no configured backend for the current provider/runtime. [Analyze the error and try a different approach.]"}
-        end
+      "nanobanana" ->
+        {:error,
+         "image_generation provider \"nanobanana\" is not implemented yet. [Analyze the error and try a different approach.]"}
 
       _ ->
         {:error,
-         "image_generation has no configured backend for the current provider/runtime. [Analyze the error and try a different approach.]"}
+         "image_generation provider #{inspect(provider)} is not supported. [Analyze the error and try a different approach.]"}
     end
   end
 
   def execute(_args, _ctx),
     do: {:error, "image_generation requires a non-empty prompt. [Analyze the error and try a different approach.]"}
 
-  defp capability_config(ctx) when is_map(ctx) do
+  defp provider_config(ctx) when is_map(ctx) do
     case Map.get(ctx, :config) || Map.get(ctx, "config") do
-      %Config{} = config -> Config.image_generation_capability(config)
-      _ -> Config.image_generation_capability(nil)
+      %Config{} = config -> Config.image_generation_provider_config(config)
+      _ -> Config.image_generation_provider_config(nil)
     end
   end
 
-  defp capability_config(_ctx), do: Config.image_generation_capability(nil)
+  defp provider_config(_ctx), do: Config.image_generation_provider_config(nil)
 
-  defp codex_backend_supported?(ctx) when is_map(ctx) do
-    configured_backend = Map.get(capability_config(ctx), "backend", "auto")
-    provider = Map.get(ctx, :provider) || Map.get(ctx, "provider")
-    base_url = Map.get(ctx, :base_url) || Map.get(ctx, "base_url")
-
-    configured_backend == "openai_codex" or
-      (configured_backend == "auto" and provider in [:openai_codex, "openai_codex"] and
-         is_binary(base_url) and String.contains?(base_url, "chatgpt.com/backend-api/codex"))
+  defp selected_provider_config(provider_config) do
+    provider = Map.get(provider_config, "provider", "codex")
+    providers = Map.get(provider_config, "providers", %{})
+    Map.get(providers, provider, %{})
   end
-
-  defp codex_backend_supported?(_ctx), do: false
 
   defp normalize_ctx(ctx) when is_map(ctx), do: ctx
   defp normalize_ctx(_ctx), do: %{}

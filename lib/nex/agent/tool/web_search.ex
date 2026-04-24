@@ -67,21 +67,19 @@ defmodule Nex.Agent.Tool.WebSearch do
   end
 
   defp execute_with_backend(query, count, opts) do
-    capability = capability_config(opts)
+    provider_config = provider_config(opts)
+    provider = Map.get(provider_config, "provider", "duckduckgo")
+    selected_config = selected_provider_config(provider_config)
 
-    case Map.get(capability, "backend", "auto") do
-      "openai_codex" ->
-        OpenAICodex.web_search(query, count, normalize_ctx(opts), capability)
+    case provider do
+      "codex" ->
+        OpenAICodex.web_search(query, count, normalize_ctx(opts), selected_config)
 
-      "auto" ->
-        if codex_backend_supported?(opts) do
-          OpenAICodex.web_search(query, count, normalize_ctx(opts), capability)
-        else
-          do_search(query, count, request_fun(opts), cancel_ref(opts), observe_context(opts))
-        end
+      "duckduckgo" ->
+        do_search(query, count, request_fun(opts), cancel_ref(opts), observe_context(opts))
 
       _ ->
-        do_search(query, count, request_fun(opts), cancel_ref(opts), observe_context(opts))
+        {:error, invalid_provider_error(provider)}
     end
   end
 
@@ -238,43 +236,31 @@ defmodule Nex.Agent.Tool.WebSearch do
   defp maybe_put_observe_context(opts, context) when context == %{}, do: opts
   defp maybe_put_observe_context(opts, context), do: Keyword.put(opts, :observe_context, context)
 
-  defp capability_config(opts) when is_map(opts) do
+  defp provider_config(opts) when is_map(opts) do
     case Map.get(opts, :config) || Map.get(opts, "config") do
-      %Config{} = config -> Config.web_search_capability(config)
-      _ -> Config.web_search_capability(nil)
+      %Config{} = config -> Config.web_search_provider_config(config)
+      _ -> Config.web_search_provider_config(nil)
     end
   end
 
-  defp capability_config(opts) when is_list(opts) do
+  defp provider_config(opts) when is_list(opts) do
     case Keyword.get(opts, :config) do
-      %Config{} = config -> Config.web_search_capability(config)
-      _ -> Config.web_search_capability(nil)
+      %Config{} = config -> Config.web_search_provider_config(config)
+      _ -> Config.web_search_provider_config(nil)
     end
   end
 
-  defp capability_config(_opts), do: Config.web_search_capability(nil)
+  defp provider_config(_opts), do: Config.web_search_provider_config(nil)
 
-  defp codex_backend_supported?(opts) when is_map(opts) do
-    configured_backend = Map.get(capability_config(opts), "backend", "auto")
-    provider = Map.get(opts, :provider) || Map.get(opts, "provider")
-    base_url = Map.get(opts, :base_url) || Map.get(opts, "base_url")
-
-    configured_backend == "openai_codex" or
-      (configured_backend == "auto" and provider in [:openai_codex, "openai_codex"] and
-         is_binary(base_url) and String.contains?(base_url, "chatgpt.com/backend-api/codex"))
+  defp selected_provider_config(provider_config) do
+    provider = Map.get(provider_config, "provider", "duckduckgo")
+    providers = Map.get(provider_config, "providers", %{})
+    Map.get(providers, provider, %{})
   end
 
-  defp codex_backend_supported?(opts) when is_list(opts) do
-    configured_backend = Map.get(capability_config(opts), "backend", "auto")
-    provider = Keyword.get(opts, :provider)
-    base_url = Keyword.get(opts, :base_url)
-
-    configured_backend == "openai_codex" or
-      (configured_backend == "auto" and provider == :openai_codex and
-         is_binary(base_url) and String.contains?(base_url, "chatgpt.com/backend-api/codex"))
-  end
-
-  defp codex_backend_supported?(_opts), do: false
+  defp invalid_provider_error(provider),
+    do:
+      "web_search provider #{inspect(provider)} is not supported. [Analyze the error and try a different approach.]"
 
   defp normalize_ctx(opts) when is_map(opts), do: opts
   defp normalize_ctx(opts) when is_list(opts), do: Enum.into(opts, %{})

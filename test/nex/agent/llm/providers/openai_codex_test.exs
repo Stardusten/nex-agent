@@ -4,7 +4,7 @@ defmodule Nex.Agent.LLM.Providers.OpenAICodexTest do
   alias Nex.Agent.Config
   alias Nex.Agent.LLM.ProviderProfile
   alias Nex.Agent.LLM.Providers.OpenAICodex.Stream
-  alias Nex.Agent.Tool.{Capability, CapabilityResolver, ImageGeneration, WebSearch}
+  alias Nex.Agent.Tool.Registry
   alias ReqLLM.Message
 
   test "adapter selects Codex stream only for OAuth mode" do
@@ -118,7 +118,7 @@ defmodule Nex.Agent.LLM.Providers.OpenAICodexTest do
     assert body["tool_choice"] == %{"type" => "function", "name" => "save_memory"}
   end
 
-  test "OAuth request body keeps resolver-emitted web_search as function tool contract" do
+  test "OAuth request body keeps web_search as function tool contract" do
     model =
       ReqLLM.model!(%{
         id: "gpt-5.5",
@@ -128,17 +128,24 @@ defmodule Nex.Agent.LLM.Providers.OpenAICodexTest do
 
     context = ReqLLM.Context.new([ReqLLM.Context.user("find recent Elixir release notes")])
 
+    config = %Config{
+      Config.default()
+      | provider: "openai-codex",
+        tools: %{
+          "web_search" => %{
+            "provider" => "codex",
+            "providers" => %{"codex" => %{"mode" => "live"}}
+          }
+        }
+    }
+
     web_search_tool =
-      CapabilityResolver.resolve(WebSearch,
-        config: %Config{
-          Config.default()
-          | provider: "openai-codex",
-            tools: %{"web_search" => %{"strategy" => "auto", "mode" => "live"}}
-        },
+      Registry.definitions(:all,
+        config: config,
         provider: :openai_codex,
         base_url: "https://chatgpt.com/backend-api/codex"
       )
-      |> Capability.llm_definition()
+      |> Enum.find(&(&1["name"] == "web_search"))
 
     assert {:ok, request} =
              Stream.attach_stream(
@@ -163,7 +170,7 @@ defmodule Nex.Agent.LLM.Providers.OpenAICodexTest do
            end)
   end
 
-  test "OAuth request body keeps resolver-emitted image_generation as function tool contract" do
+  test "OAuth request body keeps image_generation as function tool contract" do
     model =
       ReqLLM.model!(%{
         id: "gpt-5.5",
@@ -173,17 +180,24 @@ defmodule Nex.Agent.LLM.Providers.OpenAICodexTest do
 
     context = ReqLLM.Context.new([ReqLLM.Context.user("generate a lighthouse watercolor")])
 
+    config = %Config{
+      Config.default()
+      | provider: "openai-codex",
+        tools: %{
+          "image_generation" => %{
+            "provider" => "codex",
+            "providers" => %{"codex" => %{"output_format" => "webp"}}
+          }
+        }
+    }
+
     image_generation_tool =
-      CapabilityResolver.resolve(ImageGeneration,
-        config: %Config{
-          Config.default()
-          | provider: "openai-codex",
-            tools: %{"image_generation" => %{"strategy" => "auto", "output_format" => "webp"}}
-        },
+      Registry.definitions(:all,
+        config: config,
         provider: :openai_codex,
         base_url: "https://chatgpt.com/backend-api/codex"
       )
-      |> Capability.llm_definition()
+      |> Enum.find(&(&1["name"] == "image_generation"))
 
     assert {:ok, request} =
              Stream.attach_stream(

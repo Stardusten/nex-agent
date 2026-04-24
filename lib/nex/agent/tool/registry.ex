@@ -9,7 +9,6 @@ defmodule Nex.Agent.Tool.Registry do
 
   alias Nex.Agent.ControlPlane.{Log, Redactor}
   alias Nex.Agent.FollowUp
-  alias Nex.Agent.Tool.{Capability, CapabilityResolver}
   require Log
 
   @default_tools [
@@ -182,20 +181,13 @@ defmodule Nex.Agent.Tool.Registry do
   end
 
   @impl true
-  def handle_call({:definitions, filter, opts}, _from, %{tools: tools} = state) do
+  def handle_call({:definitions, filter, _opts}, _from, %{tools: tools} = state) do
     defs =
       tools
       |> filter_tools(filter)
       |> Enum.sort_by(fn {name, _module} -> {definition_priority(name), name} end)
       |> Enum.map(fn {name, module} ->
-        resolution =
-          CapabilityResolver.resolve(
-            module,
-            definition_resolution_opts(opts, filter)
-          )
-
-        resolution
-        |> Capability.llm_definition()
+        module.definition()
         |> normalize_tool_definition(name)
       end)
       |> Enum.reject(&is_nil/1)
@@ -223,85 +215,51 @@ defmodule Nex.Agent.Tool.Registry do
          state}
 
       module ->
-        resolution = CapabilityResolver.resolve(module, execute_resolution_opts(ctx))
         run_id = run_id_from_ctx(ctx)
         server = self()
         emit_observation(:info, "tool.registry.execute.started", attrs, observe_opts)
 
-        case Capability.execution_strategy(resolution) do
-          :disabled ->
-            emit_observation(
-              :error,
-              "tool.registry.execute.failed",
-              attrs
-              |> Map.put("result_status", "error")
-              |> Map.put("reason_type", "disabled"),
-              observe_opts
-            )
+        {:ok, pid} =
+          Task.Supervisor.start_child(Nex.Agent.TaskSupervisor, fn ->
+            result =
+              try do
+                module.execute(args, ctx)
+              rescue
+                e ->
+                  {:error,
+                   "Tool #{name} crashed: #{Exception.message(e)}. [Analyze the error and try a different approach.]"}
+              catch
+                :exit, {:timeout, _} ->
+                  {:error,
+                   "Tool #{name} timed out. [Analyze the error and try a different approach.]"}
 
-            {:reply,
-             {:error,
-              "Tool #{name} is disabled for the current provider/runtime. [Analyze the error and try a different approach.]"},
-             state}
+                kind, reason ->
+                  {:error,
+                   "Tool #{name} failed: #{kind} #{inspect(reason)}. [Analyze the error and try a different approach.]"}
+              end
 
-          :provider_native ->
-            emit_observation(
-              :error,
-              "tool.registry.execute.failed",
-              attrs
-              |> Map.put("result_status", "error")
-              |> Map.put("reason_type", "provider_native"),
-              observe_opts
-            )
+            send(server, {:tool_finished, run_id, self(), from, result})
+          end)
 
-            {:reply,
-             {:error,
-              "Tool #{name} is provider-native for the current provider/runtime and cannot run through the local registry. [Analyze the error and try a different approach.]"},
-             state}
+        monitor_ref = Process.monitor(pid)
+        timer_ref = Process.send_after(self(), {:tool_timeout, pid}, timeout)
 
-          :local ->
-            {:ok, pid} =
-              Task.Supervisor.start_child(Nex.Agent.TaskSupervisor, fn ->
-                result =
-                  try do
-                    module.execute(args, ctx)
-                  rescue
-                    e ->
-                      {:error,
-                       "Tool #{name} crashed: #{Exception.message(e)}. [Analyze the error and try a different approach.]"}
-                  catch
-                    :exit, {:timeout, _} ->
-                      {:error,
-                       "Tool #{name} timed out. [Analyze the error and try a different approach.]"}
+        task_meta = %{
+          from: from,
+          run_id: run_id,
+          attrs: attrs,
+          opts: observe_opts,
+          started_at: started_at,
+          monitor_ref: monitor_ref,
+          timer_ref: timer_ref
+        }
 
-                    kind, reason ->
-                      {:error,
-                       "Tool #{name} failed: #{kind} #{inspect(reason)}. [Analyze the error and try a different approach.]"}
-                  end
+        state =
+          state
+          |> put_active_run(run_id, pid)
+          |> put_in([:active_tasks, pid], task_meta)
 
-                send(server, {:tool_finished, run_id, self(), from, result})
-              end)
-
-            monitor_ref = Process.monitor(pid)
-            timer_ref = Process.send_after(self(), {:tool_timeout, pid}, timeout)
-
-            task_meta = %{
-              from: from,
-              run_id: run_id,
-              attrs: attrs,
-              opts: observe_opts,
-              started_at: started_at,
-              monitor_ref: monitor_ref,
-              timer_ref: timer_ref
-            }
-
-            state =
-              state
-              |> put_active_run(run_id, pid)
-              |> put_in([:active_tasks, pid], task_meta)
-
-            {:noreply, state}
-        end
+        {:noreply, state}
     end
   end
 
@@ -484,51 +442,16 @@ defmodule Nex.Agent.Tool.Registry do
     end
   end
 
-  defp definition_resolution_opts(opts, filter) do
-    opts
-    |> List.wrap()
-    |> Keyword.put(:surface, filter)
-  end
-
-  defp execute_resolution_opts(ctx) when is_map(ctx) do
-    []
-    |> maybe_put_ctx_opt(:provider, ctx)
-    |> maybe_put_ctx_opt(:base_url, ctx)
-    |> maybe_put_ctx_opt(:config, ctx)
-    |> maybe_put_ctx_opt(:surface, ctx, :tools_filter)
-  end
-
-  defp execute_resolution_opts(_ctx), do: []
-
-  defp maybe_put_ctx_opt(opts, key, ctx), do: maybe_put_ctx_opt(opts, key, ctx, key)
-
-  defp maybe_put_ctx_opt(opts, key, ctx, ctx_key) do
-    case Map.get(ctx, ctx_key) || Map.get(ctx, Atom.to_string(ctx_key)) do
-      nil -> opts
-      value -> Keyword.put(opts, key, value)
-    end
-  end
-
   defp normalize_tool_definition(nil, _fallback_name), do: nil
 
   defp normalize_tool_definition(definition, fallback_name) when is_map(definition) do
-    if CapabilityResolver.builtin_tool_definition?(definition) do
-      definition
-      |> stringify_keys()
-      |> Map.put_new("name", fallback_name)
-    else
-      def_map = normalize_definition(definition)
+    def_map = normalize_definition(definition)
 
-      %{
-        "name" => get_def_name(def_map) || fallback_name,
-        "description" => get_def_description(def_map),
-        "input_schema" => get_def_params(def_map)
-      }
-    end
-  end
-
-  defp stringify_keys(map) when is_map(map) do
-    Map.new(map, fn {key, value} -> {to_string(key), value} end)
+    %{
+      "name" => get_def_name(def_map) || fallback_name,
+      "description" => get_def_description(def_map),
+      "input_schema" => get_def_params(def_map)
+    }
   end
 
   # Scan repo tool directory for modules not in @default_tools.

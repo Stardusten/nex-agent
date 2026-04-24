@@ -151,53 +151,66 @@ defmodule Nex.Agent.ConfigTest do
     assert Config.valid?(config)
   end
 
-  test "web_search capability config is normalized through unified accessor" do
+  test "web_search provider config is normalized through unified accessor" do
     config =
       %Config{
         Config.default()
         | tools: %{
             "web_search" => %{
-              "strategy" => "provider_native",
-              "mode" => "cached",
-              "allowed_domains" => [" example.com ", "example.com", ""],
-              "user_location" => %{
-                "country" => "US",
-                "timezone" => "America/Los_Angeles",
-                "ignored" => "value"
+              "provider" => "codex",
+              "providers" => %{
+                "codex" => %{
+                  "mode" => "cached",
+                  "allowed_domains" => [" example.com ", "example.com", ""],
+                  "user_location" => %{
+                    "country" => "US",
+                    "timezone" => "America/Los_Angeles",
+                    "ignored" => "value"
+                  }
+                },
+                "duckduckgo" => %{"ignored" => true}
               }
             }
           }
       }
 
-    assert Config.web_search_capability(config) == %{
-             "strategy" => "provider_native",
-             "backend" => "auto",
-             "mode" => "cached",
-             "allowed_domains" => ["example.com"],
-             "user_location" => %{
-               "country" => "US",
-               "timezone" => "America/Los_Angeles"
+    assert Config.web_search_provider_config(config) == %{
+             "provider" => "codex",
+             "providers" => %{
+               "duckduckgo" => %{},
+               "codex" => %{
+                 "mode" => "cached",
+                 "allowed_domains" => ["example.com"],
+                 "user_location" => %{
+                   "country" => "US",
+                   "timezone" => "America/Los_Angeles"
+                 }
+               }
              }
            }
   end
 
-  test "image_generation capability config is normalized through unified accessor" do
+  test "image_generation provider config is normalized through unified accessor" do
     config =
       %Config{
         Config.default()
         | tools: %{
             "image_generation" => %{
-              "strategy" => "provider_native",
-              "backend" => "openai_codex",
-              "output_format" => "webp"
+              "provider" => "codex",
+              "providers" => %{
+                "codex" => %{"output_format" => "webp"},
+                "nanobanana" => %{"model" => "banana-v1"}
+              }
             }
           }
       }
 
-    assert Config.image_generation_capability(config) == %{
-             "strategy" => "provider_native",
-             "backend" => "openai_codex",
-             "output_format" => "webp"
+    assert Config.image_generation_provider_config(config) == %{
+             "provider" => "codex",
+             "providers" => %{
+               "codex" => %{"output_format" => "webp"},
+               "nanobanana" => %{"model" => "banana-v1"}
+             }
            }
   end
 
