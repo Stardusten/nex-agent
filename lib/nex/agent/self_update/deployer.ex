@@ -1,9 +1,10 @@
 defmodule Nex.Agent.SelfUpdate.Deployer do
   @moduledoc false
 
+  alias Nex.Agent.ControlPlane.Log, as: ControlPlaneLog
   alias Nex.Agent.{CodeUpgrade, HotReload}
   alias Nex.Agent.SelfUpdate.{Planner, ReleaseStore}
-  alias Nex.Agent.SelfHealing.Router, as: SelfHealingRouter
+  require ControlPlaneLog
 
   @rollback_baseline "__baseline__"
   @test_timeout_ms 20_000
@@ -54,8 +55,13 @@ defmodule Nex.Agent.SelfUpdate.Deployer do
 
   @spec deploy(String.t(), nil | [String.t()], keyword()) :: map()
   def deploy(reason, files \\ nil, opts \\ []) when is_binary(reason) do
+    started_at = System.monotonic_time(:millisecond)
+    workspace = deploy_workspace(opts)
+    started_attrs = deploy_attrs(%{status: :started}, files, 0)
+    emit_deploy_observation(:info, "self_update.deploy.started", started_attrs, workspace)
+
     result = do_deploy(reason, files)
-    emit_deploy_failure_event(result, reason, files, opts)
+    emit_deploy_result_observation(result, reason, files, workspace, started_at)
     result
   end
 
@@ -338,17 +344,33 @@ defmodule Nex.Agent.SelfUpdate.Deployer do
     }
   end
 
-  defp emit_deploy_failure_event(%{status: :failed} = result, deploy_reason, files, opts) do
-    workspace =
-      Keyword.get(opts, :workspace) ||
-        Application.get_env(:nex_agent, :workspace_path) ||
-        CodeUpgrade.repo_root()
+  defp emit_deploy_result_observation(
+         %{status: :deployed} = result,
+         _deploy_reason,
+         files,
+         workspace,
+         started_at
+       ) do
+    attrs = deploy_attrs(result, files, duration_since(started_at))
+    emit_deploy_observation(:info, "self_update.deploy.finished", attrs, workspace)
+  end
 
-    event = %{
-      "name" => "self_update.deploy.failed",
+  defp emit_deploy_result_observation(
+         %{status: :failed} = result,
+         deploy_reason,
+         files,
+         workspace,
+         started_at
+       ) do
+    attrs = %{
       "phase" => "self_update.deploy",
-      "severity" => "error",
-      "workspace" => workspace,
+      "duration_ms" => duration_since(started_at),
+      "result_status" => "failed",
+      "runtime_restored" => result.runtime_restored |> to_string(),
+      "rolled_back" => result.rolled_back,
+      "changed_files" => changed_files(result, files),
+      "reason_type" => result.phase |> to_string(),
+      "error_summary" => result.error,
       "actor" => %{
         "component" => "self_update",
         "module" => "Nex.Agent.SelfUpdate.Deployer"
@@ -370,15 +392,38 @@ defmodule Nex.Agent.SelfUpdate.Deployer do
       }
     }
 
-    case SelfHealingRouter.record_event(event, workspace: workspace) do
-      {:ok, _event} ->
+    emit_deploy_observation(:error, "self_update.deploy.failed", attrs, workspace)
+  end
+
+  defp emit_deploy_result_observation(_result, _deploy_reason, _files, _workspace, _started_at),
+    do: :ok
+
+  defp emit_deploy_observation(level, tag, attrs, workspace) do
+    result =
+      case level do
+        :info -> ControlPlaneLog.info(tag, attrs, workspace: workspace)
+        :error -> ControlPlaneLog.error(tag, attrs, workspace: workspace)
+      end
+
+    case result do
+      {:ok, _observation} ->
+        :ok
+
+      :ok ->
         :ok
 
       {:error, reason} ->
         require Logger
 
         Logger.warning(
-          "[SelfUpdate.Deployer] self-healing deploy event failed: #{inspect(reason)}"
+          "[SelfUpdate.Deployer] control-plane deploy log failed: #{inspect(reason)}"
+        )
+
+      other ->
+        require Logger
+
+        Logger.warning(
+          "[SelfUpdate.Deployer] control-plane deploy log #{tag} returned: #{inspect(other)}"
         )
     end
   rescue
@@ -386,13 +431,47 @@ defmodule Nex.Agent.SelfUpdate.Deployer do
       require Logger
 
       Logger.warning(
-        "[SelfUpdate.Deployer] self-healing deploy event crashed: #{Exception.message(e)}"
+        "[SelfUpdate.Deployer] control-plane deploy log crashed: #{Exception.message(e)}"
       )
 
       :ok
   end
 
-  defp emit_deploy_failure_event(_result, _deploy_reason, _files, _opts), do: :ok
+  defp deploy_attrs(%{status: :started}, files, duration_ms) do
+    %{
+      "phase" => "self_update.deploy",
+      "duration_ms" => duration_ms,
+      "changed_files" => changed_files(%{}, files)
+    }
+  end
+
+  defp deploy_attrs(%{status: :deployed} = result, files, duration_ms) do
+    %{
+      "phase" => "self_update.deploy",
+      "release_id" => result.release_id,
+      "duration_ms" => duration_ms,
+      "result_status" => "ok",
+      "rolled_back" => false,
+      "changed_files" => changed_files(result, files)
+    }
+  end
+
+  defp deploy_workspace(opts) do
+    Keyword.get(opts, :workspace) ||
+      Application.get_env(:nex_agent, :workspace_path) ||
+      CodeUpgrade.repo_root()
+  end
+
+  defp changed_files(%{files: files}, _requested) when is_list(files), do: files
+  defp changed_files(%{restored_files: files}, _requested) when is_list(files), do: files
+
+  defp changed_files(_result, files) when is_list(files) do
+    Enum.map(files, &Path.relative_to(&1, CodeUpgrade.repo_root()))
+  end
+
+  defp changed_files(_result, _files), do: []
+
+  defp duration_since(started_at), do: System.monotonic_time(:millisecond) - started_at
 
   defp rollback_plan(%{restore_source: {:snapshot, release}}) do
     rollback_plan_from_release(release, &ReleaseStore.read_snapshot/2)

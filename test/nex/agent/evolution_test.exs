@@ -1,7 +1,11 @@
 defmodule Nex.Agent.EvolutionTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{Evolution, Memory, Skills, Workspace}
+  alias Nex.Agent.{Evolution, Skills, Workspace}
+  alias Nex.Agent.ControlPlane.{Gauge, Log, Query, Store}
+  alias Nex.Agent.Tool.EvolutionCandidate
+  require Log
+  require Gauge
 
   setup do
     workspace =
@@ -9,18 +13,10 @@ defmodule Nex.Agent.EvolutionTest do
 
     File.mkdir_p!(Path.join(workspace, "memory"))
     File.mkdir_p!(Path.join(workspace, "skills"))
-    File.mkdir_p!(Path.join(workspace, "audit"))
     File.write!(Path.join(workspace, "SOUL.md"), "# Soul\n\n## Values\n- Be helpful\n")
-
-    File.write!(
-      Path.join(workspace, "memory/MEMORY.md"),
-      "# Memory\nUser prefers concise replies.\n"
-    )
-
-    File.write!(
-      Path.join(workspace, "memory/HISTORY.md"),
-      "[2026-03-20 10:00] Helped user debug a deployment issue.\n\n[2026-03-20 14:00] User corrected output format twice.\n\n"
-    )
+    File.write!(Path.join(workspace, "USER.md"), "# USER\n- likes concise replies\n")
+    File.write!(Path.join(workspace, "memory/MEMORY.md"), "# Memory\nStable facts live here.\n")
+    File.write!(Path.join(workspace, "memory/HISTORY.md"), "[2026-03-20 10:00] historical note.\n")
 
     Application.put_env(:nex_agent, :workspace_path, workspace)
 
@@ -34,83 +30,276 @@ defmodule Nex.Agent.EvolutionTest do
 
     on_exit(fn ->
       Application.delete_env(:nex_agent, :workspace_path)
-      File.rm_rf!(workspace)
+      File.rm_rf(workspace)
     end)
 
     {:ok, workspace: workspace}
   end
 
   describe "record_signal/2" do
-    test "writes signal to patterns.jsonl", %{workspace: workspace} do
+    test "writes evolution.signal.recorded to ControlPlane only", %{workspace: workspace} do
       assert :ok =
                Evolution.record_signal(
                  %{
                    source: "runner",
-                   signal: "User correction: fix format",
-                   context: %{tool_errors: 0}
+                   signal: "User correction: fix output",
+                   context: %{tool_errors: 1}
                  },
                  workspace: workspace
                )
 
-      signals = Evolution.read_signals(workspace: workspace)
-      assert length(signals) == 1
-      assert hd(signals)["source"] == "runner"
-      assert hd(signals)["signal"] == "User correction: fix format"
-    end
+      [signal] = Evolution.recent_signals(workspace: workspace)
+      assert signal["tag"] == "evolution.signal.recorded"
+      assert signal["attrs_summary"]["source"] == "runner"
+      assert signal["attrs_summary"]["signal"] == "User correction: fix output"
 
-    test "appends multiple signals", %{workspace: workspace} do
-      Evolution.record_signal(%{source: "runner", signal: "correction 1"}, workspace: workspace)
-
-      Evolution.record_signal(%{source: "consolidation", signal: "pattern detected"},
-        workspace: workspace
-      )
-
-      signals = Evolution.read_signals(workspace: workspace)
-      assert length(signals) == 2
+      refute File.exists?(Path.join(Workspace.memory_dir(workspace: workspace), "patterns.jsonl"))
     end
   end
 
-  describe "clear_signals/1" do
-    test "clears all accumulated signals", %{workspace: workspace} do
-      Evolution.record_signal(%{source: "test", signal: "s1"}, workspace: workspace)
-      Evolution.record_signal(%{source: "test", signal: "s2"}, workspace: workspace)
+  describe "candidate lifecycle reduction" do
+    test "derives candidate status from evolution.candidate.* observations", %{workspace: workspace} do
+      assert {:ok, _} =
+               Log.info(
+                 "evolution.candidate.proposed",
+                 %{
+                   "id" => "cand_memory",
+                   "kind" => "memory_candidate",
+                   "summary" => "Persist JSON preference",
+                   "rationale" => "Repeated corrections asked for JSON output",
+                   "evidence_ids" => ["obs_1", "obs_2"],
+                   "risk" => "low",
+                   "requires_owner_approval" => true,
+                   "created_at" => Store.timestamp(),
+                   "trigger" => "manual",
+                   "profile" => "routine",
+                   "budget_mode" => "normal"
+                 },
+                 workspace: workspace
+               )
 
-      assert length(Evolution.read_signals(workspace: workspace)) == 2
+      assert {:ok, _} =
+               Log.info(
+                 "evolution.candidate.approved",
+                 %{
+                   "candidate_id" => "cand_memory",
+                   "mode" => "apply",
+                   "decision_reason" => "Looks good"
+                 },
+                 workspace: workspace
+               )
 
-      Evolution.clear_signals(workspace: workspace)
-      assert Evolution.read_signals(workspace: workspace) == []
+      assert {:ok, _} =
+               Log.info(
+                 "evolution.candidate.apply.failed",
+                 %{
+                   "candidate_id" => "cand_memory",
+                   "error_summary" => "memory write failed"
+                 },
+                 workspace: workspace
+               )
+
+      assert {:ok, candidate} = Evolution.candidate("cand_memory", workspace: workspace)
+      assert candidate["status"] == "failed"
+      assert candidate["kind"] == "memory_candidate"
+      assert candidate["latest_error"] == "memory write failed"
+      assert length(candidate["lifecycle_observation_ids"]) == 3
+
+      assert [%{"candidate_id" => "cand_memory", "status" => "failed"}] =
+               Evolution.recent_candidates(workspace: workspace)
+    end
+
+    test "superseded lifecycle is derived from observations", %{workspace: workspace} do
+      assert {:ok, _} =
+               Log.info(
+                 "evolution.candidate.proposed",
+                 %{
+                   "id" => "cand_old",
+                   "kind" => "memory_candidate",
+                   "summary" => "Persist JSON preference",
+                   "rationale" => "old rationale",
+                   "evidence_ids" => ["obs_1"],
+                   "risk" => "low",
+                   "requires_owner_approval" => true,
+                   "created_at" => Store.timestamp()
+                 },
+                 workspace: workspace
+               )
+
+      assert {:ok, _} =
+               Log.info(
+                 "evolution.candidate.superseded",
+                 %{
+                   "candidate_id" => "cand_old",
+                   "superseded_by" => "cand_new",
+                   "kind" => "memory_candidate",
+                   "summary" => "Persist JSON preference"
+                 },
+                 workspace: workspace
+               )
+
+      assert {:ok, candidate} = Evolution.candidate("cand_old", workspace: workspace)
+      assert candidate["status"] == "superseded"
+    end
+  end
+
+  describe "evolution_candidate tool" do
+    test "lists, shows, approves, and rejects candidates through observations", %{
+      workspace: workspace
+    } do
+      assert {:ok, _} =
+               Log.info(
+                 "evolution.candidate.proposed",
+                 %{
+                   "id" => "cand_code",
+                   "kind" => "code_hint",
+                   "summary" => "Tighten retry path",
+                   "rationale" => "Repeated tool failures need a bounded plan",
+                   "evidence_ids" => ["obs_1"],
+                   "risk" => "medium",
+                   "requires_owner_approval" => true,
+                   "created_at" => Store.timestamp()
+                 },
+                 workspace: workspace,
+                 run_id: "run-1"
+               )
+
+      ctx = %{workspace: workspace, run_id: "run-1", session_key: "s1"}
+
+      assert {:ok, %{"candidates" => [%{"candidate_id" => "cand_code", "status" => "pending"}]}} =
+               EvolutionCandidate.execute(%{"action" => "list"}, ctx)
+
+      assert {:ok, %{"candidate_id" => "cand_code", "status" => "pending"}} =
+               EvolutionCandidate.execute(%{"action" => "show", "candidate_id" => "cand_code"}, ctx)
+
+      assert {:ok, %{"decision" => "approved", "mode" => "plan"}} =
+               EvolutionCandidate.execute(
+                 %{"action" => "approve", "candidate_id" => "cand_code"},
+                 ctx
+               )
+
+      assert {:ok, approved} = Evolution.candidate("cand_code", workspace: workspace)
+      assert approved["status"] == "realized"
+      assert approved["decided_at"]
+
+      assert {:error, "Candidate already realized; cannot reject"} =
+               EvolutionCandidate.execute(
+                 %{"action" => "reject", "candidate_id" => "cand_code"},
+                 ctx
+               )
+
+      assert {:error, "Candidate not found: missing"} =
+               EvolutionCandidate.execute(%{"action" => "approve", "candidate_id" => "missing"}, ctx)
+    end
+
+    test "reject writes rejected lifecycle observation for pending candidate", %{workspace: workspace} do
+      assert {:ok, _} =
+               Log.info(
+                 "evolution.candidate.proposed",
+                 %{
+                   "id" => "cand_skill",
+                   "kind" => "skill_candidate",
+                   "summary" => "Capture triage workflow",
+                   "rationale" => "The same workflow recurs",
+                   "evidence_ids" => ["obs_2"],
+                   "risk" => "low",
+                   "requires_owner_approval" => true,
+                   "created_at" => Store.timestamp()
+                 },
+                 workspace: workspace
+               )
+
+      assert {:ok, %{"decision" => "rejected"}} =
+               EvolutionCandidate.execute(
+                 %{
+                   "action" => "reject",
+                   "candidate_id" => "cand_skill",
+                   "decision_reason" => "not enough evidence"
+                 },
+                 %{workspace: workspace}
+               )
+
+      assert {:ok, rejected} = Evolution.candidate("cand_skill", workspace: workspace)
+      assert rejected["status"] == "rejected"
+    end
+
+    test "code_hint apply reuses apply_patch and self_update lanes", %{workspace: workspace} do
+      assert {:ok, _} =
+               Log.info(
+                 "evolution.candidate.proposed",
+                 %{
+                   "id" => "cand_code_apply",
+                   "kind" => "code_hint",
+                   "summary" => "Patch lib/nex/agent/example.ex for retry handling",
+                   "rationale" => "Update lib/nex/agent/example.ex to guard retries and redeploy.",
+                   "evidence_ids" => ["obs_1"],
+                   "risk" => "medium",
+                   "requires_owner_approval" => true,
+                   "created_at" => Store.timestamp()
+                 },
+                 workspace: workspace
+               )
+
+      parent = self()
+
+      llm_call_fun = fn _messages, _opts ->
+        send(parent, :realization_llm_called)
+
+        {:ok,
+         %{
+           "summary" => "Apply retry guard patch",
+           "files" => ["lib/nex/agent/example.ex"],
+           "patch" =>
+             """
+             *** Begin Patch
+             *** Update File: lib/nex/agent/example.ex
+             @@
+             -old
+             +new
+             *** End Patch
+             """,
+           "deploy_reason" => "owner approved code hint"
+         }}
+      end
+
+      apply_patch_fun = fn %{"patch" => patch}, _ctx ->
+        send(parent, {:apply_patch_called, patch})
+        {:ok, %{"status" => "ok", "updated_files" => ["lib/nex/agent/example.ex"]}}
+      end
+
+      self_update_fun = fn %{"action" => "deploy", "files" => files, "reason" => reason}, _ctx ->
+        send(parent, {:self_update_called, files, reason})
+        {:ok, %{status: :deployed, files: files, release_id: "rel_code"}}
+      end
+
+      ctx = %{
+        workspace: workspace,
+        llm_call_fun: llm_call_fun,
+        apply_patch_fun: apply_patch_fun,
+        self_update_fun: self_update_fun,
+        read_fun: fn %{"path" => path}, _ctx -> {:ok, %{"content" => "defmodule Example do\nend\n", "path" => path}} end
+      }
+
+      assert {:ok, %{"decision" => "approved", "mode" => "apply", "apply" => %{"status" => "applied"}}} =
+               EvolutionCandidate.execute(
+                 %{"action" => "approve", "candidate_id" => "cand_code_apply", "mode" => "apply"},
+                 ctx
+               )
+
+      assert_receive :realization_llm_called
+      assert_receive {:apply_patch_called, patch}
+      assert patch =~ "*** Begin Patch"
+      assert_receive {:self_update_called, ["lib/nex/agent/example.ex"], "owner approved code hint"}
+
+      assert {:ok, applied} = Evolution.candidate("cand_code_apply", workspace: workspace)
+      assert applied["status"] == "applied"
     end
   end
 
   describe "maybe_trigger_after_consolidation/1" do
-    test "does not trigger before threshold", %{workspace: workspace} do
-      refute Evolution.maybe_trigger_after_consolidation(workspace: workspace)
-      refute Evolution.maybe_trigger_after_consolidation(workspace: workspace)
-      refute Evolution.maybe_trigger_after_consolidation(workspace: workspace)
-      refute Evolution.maybe_trigger_after_consolidation(workspace: workspace)
-    end
-
-    test "triggers at threshold (every 5 consolidations)", %{workspace: workspace} do
-      Enum.each(1..4, fn _ ->
-        refute Evolution.maybe_trigger_after_consolidation(workspace: workspace)
-      end)
-
-      # 5th consolidation should trigger
-      assert Evolution.maybe_trigger_after_consolidation(workspace: workspace)
-    end
-
-    test "counter persists across calls", %{workspace: workspace} do
-      counter_path = Path.join(Workspace.memory_dir(workspace: workspace), ".evolution_counter")
-
-      Enum.each(1..3, fn _ ->
-        Evolution.maybe_trigger_after_consolidation(workspace: workspace)
-      end)
-
-      assert File.read!(counter_path) |> String.trim() == "3"
-    end
-
-    test "triggered consolidation evolution preserves runtime llm opts", %{workspace: workspace} do
-      parent = self()
+    test "counter persists and triggers async evolution at threshold", %{workspace: workspace} do
+      write_budget(workspace, 60)
+      seed_observations(workspace)
 
       Enum.each(1..4, fn _ ->
         refute Evolution.maybe_trigger_after_consolidation(workspace: workspace)
@@ -118,279 +307,290 @@ defmodule Nex.Agent.EvolutionTest do
 
       assert Evolution.maybe_trigger_after_consolidation(
                workspace: workspace,
-               provider: :anthropic,
-               model: "kimi-k2.5",
-               api_key: "test-api-key",
-               base_url: "https://moonshot.example.test/anthropic",
-               llm_call_fun: fn _messages, llm_opts ->
-                 send(parent, {:evolution_llm_opts, llm_opts})
-                 {:ok, %{"observations" => "ok"}}
+               llm_call_fun: fn _messages, _opts ->
+                 {:ok,
+                  %{
+                    "observations" => "Routine reflection.",
+                    "candidates" => [
+                      %{
+                        "kind" => "code_hint",
+                        "summary" => "Add targeted retry guidance",
+                        "rationale" => "Repeated runner/tool failures were observed.",
+                        "evidence_ids" =>
+                          Evolution.recent_signals(workspace: workspace)
+                          |> Enum.map(& &1["id"]),
+                        "risk" => "medium"
+                      }
+                    ]
+                  }}
                end
              )
 
-      assert_receive {:evolution_llm_opts, llm_opts}, 500
-      assert llm_opts[:provider] == :anthropic
-      assert llm_opts[:model] == "kimi-k2.5"
-      assert llm_opts[:api_key] == "test-api-key"
-      assert llm_opts[:base_url] == "https://moonshot.example.test/anthropic"
+      counter_path = Path.join(Workspace.memory_dir(workspace: workspace), ".evolution_counter")
+      assert File.read!(counter_path) |> String.trim() == "5"
 
       assert wait_until(fn ->
                Enum.any?(Evolution.recent_events(workspace: workspace), fn event ->
-                 event["event"] == "evolution.cycle_completed"
+                 event["tag"] == "evolution.cycle.completed"
                end)
              end)
     end
   end
 
   describe "run_evolution_cycle/1" do
-    test "completes with mock LLM returning empty report", %{workspace: workspace} do
-      llm_call_fun = fn _messages, _opts ->
-        {:ok,
-         %{
-           "observations" => "No significant patterns found.",
-           "soul_updates" => [],
-           "memory_updates" => [],
-           "skill_candidates" => [],
-           "code_upgrade_hints" => []
-         }}
-      end
+    test "sleep budget skips without invoking the LLM", %{workspace: workspace} do
+      write_budget(workspace, 0)
+      seed_observations(workspace)
+      parent = self()
 
       assert {:ok, result} =
                Evolution.run_evolution_cycle(
                  workspace: workspace,
-                 trigger: :manual,
-                 llm_call_fun: llm_call_fun
+                 llm_call_fun: fn _messages, _opts ->
+                   send(parent, :llm_called)
+                   {:ok, %{"observations" => "should not happen", "candidates" => []}}
+                 end
                )
 
-      assert result.soul_updates == 0
-      assert result.memory_updates == 0
-      assert result.skill_candidates == 0
+      assert result.status == :skipped
+      assert result.budget_mode == :sleep
+      refute_receive :llm_called
+
+      assert Enum.any?(Evolution.recent_events(workspace: workspace), fn event ->
+               event["tag"] == "evolution.cycle.skipped"
+             end)
     end
 
-    test "applies soul updates from LLM report", %{workspace: workspace} do
-      llm_call_fun = fn _messages, _opts ->
-        {:ok,
-         %{
-           "observations" => "User frequently corrects output format.",
-           "soul_updates" => ["Always format code blocks with language tags"],
-           "memory_updates" => [],
-           "skill_candidates" => [],
-           "code_upgrade_hints" => []
-         }}
-      end
-
-      assert {:ok, result} =
-               Evolution.run_evolution_cycle(
-                 workspace: workspace,
-                 trigger: :manual,
-                 llm_call_fun: llm_call_fun
-               )
-
-      assert result.soul_updates == 1
-
-      soul = File.read!(Path.join(workspace, "SOUL.md"))
-      assert soul =~ "Evolved Principles"
-      assert soul =~ "Always format code blocks with language tags"
-    end
-
-    test "applies memory updates from LLM report", %{workspace: workspace} do
-      llm_call_fun = fn _messages, _opts ->
-        {:ok,
-         %{
-           "observations" => "Learned new fact.",
-           "soul_updates" => [],
-           "memory_updates" => ["Project uses PostgreSQL 16."],
-           "skill_candidates" => [],
-           "code_upgrade_hints" => []
-         }}
-      end
-
-      assert {:ok, result} =
-               Evolution.run_evolution_cycle(
-                 workspace: workspace,
-                 trigger: :manual,
-                 llm_call_fun: llm_call_fun
-               )
-
-      assert result.memory_updates == 1
-
-      memory = Memory.read_long_term(workspace: workspace)
-      assert memory =~ "PostgreSQL 16"
-    end
-
-    test "creates draft skills from LLM report", %{workspace: workspace} do
-      llm_call_fun = fn _messages, _opts ->
-        {:ok,
-         %{
-           "observations" => "Deployment debugging pattern detected.",
-           "soul_updates" => [],
-           "memory_updates" => [],
-           "skill_candidates" => [
-             %{
-               "name" => "debug_deploy",
-               "description" => "Debug deployment issues",
-               "content" => "1. Check logs\n2. Verify config\n3. Test connectivity"
-             }
-           ],
-           "code_upgrade_hints" => []
-         }}
-      end
-
-      assert {:ok, result} =
-               Evolution.run_evolution_cycle(
-                 workspace: workspace,
-                 trigger: :scheduled_weekly,
-                 llm_call_fun: llm_call_fun
-               )
-
-      assert result.skill_candidates == 1
-
-      # Verify skill was created
-      skill_file = Path.join(workspace, "skills/debug_deploy/SKILL.md")
-      assert File.exists?(skill_file)
-      content = File.read!(skill_file)
-      assert content =~ "status: draft"
-      assert content =~ "user-invocable: false"
-      assert content =~ "Check logs"
-    end
-
-    test "does not duplicate existing soul principles", %{workspace: workspace} do
-      llm_call_fun = fn _messages, _opts ->
-        {:ok,
-         %{
-           "observations" => "Repeated principle.",
-           "soul_updates" => ["Be helpful"],
-           "memory_updates" => [],
-           "skill_candidates" => [],
-           "code_upgrade_hints" => []
-         }}
-      end
-
-      assert {:ok, result} =
-               Evolution.run_evolution_cycle(
-                 workspace: workspace,
-                 trigger: :manual,
-                 llm_call_fun: llm_call_fun
-               )
-
-      # Should be 0 because "Be helpful" already exists in SOUL.md
-      assert result.soul_updates == 0
-    end
-
-    test "clears signals after successful cycle", %{workspace: workspace} do
-      Evolution.record_signal(%{source: "test", signal: "test signal"}, workspace: workspace)
-      assert length(Evolution.read_signals(workspace: workspace)) == 1
-
-      llm_call_fun = fn _messages, _opts ->
-        {:ok, %{"observations" => "ok"}}
-      end
-
-      assert {:ok, _} =
-               Evolution.run_evolution_cycle(
-                 workspace: workspace,
-                 trigger: :manual,
-                 llm_call_fun: llm_call_fun
-               )
-
-      assert Evolution.read_signals(workspace: workspace) == []
-    end
-
-    test "handles LLM failure gracefully", %{workspace: workspace} do
-      llm_call_fun = fn _messages, _opts ->
-        {:error, "API unavailable"}
-      end
-
-      assert {:error, {:llm_failed, "API unavailable"}} =
-               Evolution.run_evolution_cycle(
-                 workspace: workspace,
-                 trigger: :manual,
-                 llm_call_fun: llm_call_fun
-               )
-    end
-
-    test "trigger profiles select expected instructions and history windows", %{
+    test "low budget returns cheap reflection candidates without writing files", %{
       workspace: workspace
     } do
-      history =
-        1..12
-        |> Enum.map_join("\n\n", fn n ->
-          "[2026-03-20 #{String.pad_leading(Integer.to_string(n), 2, "0")}:00] Paragraph #{n}."
-        end)
+      write_budget(workspace, 10)
+      seed_observations(workspace)
 
-      File.write!(Path.join(workspace, "memory/HISTORY.md"), history)
+      soul_before = File.read!(Path.join(workspace, "SOUL.md"))
+      memory_before = File.read!(Path.join(workspace, "memory/MEMORY.md"))
 
-      manual_prompt = capture_prompt(workspace, :manual)
-      scheduled_daily_prompt = capture_prompt(workspace, :scheduled_daily)
-      post_consolidation_prompt = capture_prompt(workspace, :post_consolidation)
-      scheduled_weekly_prompt = capture_prompt(workspace, :scheduled_weekly)
+      assert {:ok, result} = Evolution.run_evolution_cycle(workspace: workspace)
 
-      assert manual_prompt =~ "Analyze the last day of activity"
-      assert manual_prompt =~ "Paragraph 3."
-      assert manual_prompt =~ "Paragraph 12."
-      refute manual_prompt =~ "Paragraph 1."
-      refute manual_prompt =~ "Paragraph 2."
+      assert result.status == :completed
+      assert result.budget_mode == :low
+      assert result.candidate_count == 1
+      assert [%{"kind" => "reflection_candidate"}] = result.candidates
+      assert File.read!(Path.join(workspace, "SOUL.md")) == soul_before
+      assert File.read!(Path.join(workspace, "memory/MEMORY.md")) == memory_before
+    end
 
-      assert scheduled_daily_prompt =~ "Analyze the last day of activity"
-      assert scheduled_daily_prompt =~ "Paragraph 3."
-      assert scheduled_daily_prompt =~ "Paragraph 12."
-      refute scheduled_daily_prompt =~ "Paragraph 1."
-      refute scheduled_daily_prompt =~ "Paragraph 2."
+    test "normal budget builds evidence pack and returns candidate actions only", %{
+      workspace: workspace
+    } do
+      write_budget(workspace, 60)
+      seed_observations(workspace)
 
-      assert post_consolidation_prompt =~ "Focus on the most recent conversation segment only"
-      assert post_consolidation_prompt =~ "Paragraph 10."
-      assert post_consolidation_prompt =~ "Paragraph 12."
-      refute post_consolidation_prompt =~ "Paragraph 9."
+      assert {:ok, _} =
+               Gauge.set(
+                 "run.owner.current",
+                 %{"owners" => [%{"run_id" => "run-1", "status" => "running"}]},
+                 %{"source" => "test"},
+                 workspace: workspace
+               )
 
-      assert scheduled_weekly_prompt =~
-               "Deep analysis of all history. Look for recurring patterns"
+      assert {:ok, _} =
+               Log.info(
+                 "evolution.candidate.proposed",
+                 %{
+                   "id" => "cand_prev",
+                   "kind" => "record_only",
+                   "summary" => "Older candidate",
+                   "rationale" => "Older rationale",
+                   "evidence_ids" => ["obs_prev"],
+                   "risk" => "low",
+                   "requires_owner_approval" => true,
+                   "created_at" => Store.timestamp()
+                 },
+                 workspace: workspace
+               )
 
-      assert scheduled_weekly_prompt =~ "Paragraph 1."
-      assert scheduled_weekly_prompt =~ "Paragraph 12."
+      soul_before = File.read!(Path.join(workspace, "SOUL.md"))
+      memory_before = File.read!(Path.join(workspace, "memory/MEMORY.md"))
+      parent = self()
+
+      llm_call_fun = fn messages, _opts ->
+        user_message = Enum.find(messages, &(&1["role"] == "user"))
+        prompt = user_message["content"]
+        send(parent, {:prompt, prompt})
+
+        evidence_ids =
+          Query.query(%{"limit" => 20}, workspace: workspace)
+          |> Enum.map(& &1["id"])
+          |> Enum.take(2)
+
+        {:ok,
+         %{
+           "observations" => "Repeated tool and HTTP failures.",
+           "candidates" => [
+             %{
+               "kind" => "code_hint",
+               "summary" => "Tighten tool failure recovery path",
+               "rationale" => "The same failures repeated across recent observations.",
+               "evidence_ids" => evidence_ids,
+               "risk" => "medium"
+             }
+           ]
+         }}
+      end
+
+      assert {:ok, result} =
+               Evolution.run_evolution_cycle(
+                 workspace: workspace,
+                 trigger: :manual,
+                 llm_call_fun: llm_call_fun
+               )
+
+      assert result == %{
+               status: :completed,
+               trigger: :manual,
+               profile: :routine,
+               budget_mode: :normal,
+               evidence_count: result.evidence_count,
+               pattern_count: result.pattern_count,
+               candidate_count: 1,
+               candidates: result.candidates
+             }
+
+      assert [%{"kind" => "code_hint", "requires_owner_approval" => true} = candidate] =
+               result.candidates
+
+      assert result.evidence_count == 4
+      assert length(candidate["evidence_ids"]) >= 1
+      assert File.read!(Path.join(workspace, "SOUL.md")) == soul_before
+      assert File.read!(Path.join(workspace, "memory/MEMORY.md")) == memory_before
+
+      assert_receive {:prompt, prompt}, 500
+      assert prompt =~ "\"evolution.signal.recorded\""
+      assert prompt =~ "\"budget\""
+      assert prompt =~ "\"observations\""
+      assert prompt =~ "\"candidate_history\""
+      assert prompt =~ "\"current_runs\""
+
+      events = Evolution.recent_events(workspace: workspace)
+      tags = Enum.map(events, & &1["tag"])
+      assert "evolution.cycle.started" in tags
+      assert "evolution.cycle.completed" in tags
+      assert "evolution.pattern.detected" in tags
+      assert "evolution.candidate.proposed" in tags
+    end
+
+    test "budget-gated deep profile records spend failure and skips deeper work", %{
+      workspace: workspace
+    } do
+      write_budget(workspace, 60)
+      seed_observations(workspace)
+
+      assert {:ok, result} =
+               Evolution.run_evolution_cycle(
+                 workspace: workspace,
+                 trigger: :scheduled_weekly
+               )
+
+      assert result.status == :skipped
+
+      assert Enum.any?(Evolution.recent_events(workspace: workspace), fn event ->
+               event["tag"] == "evolution.budget.spend.failed"
+             end)
+    end
+
+    test "failed evolution cycle is visible in incident queries", %{workspace: workspace} do
+      write_budget(workspace, 60)
+      seed_observations(workspace)
+
+      assert {:error, {:llm_failed, "boom"}} =
+               Evolution.run_evolution_cycle(
+                 workspace: workspace,
+                 llm_call_fun: fn _messages, _opts -> {:error, "boom"} end
+               )
+
+      incident =
+        Query.incident(%{"tag" => "evolution.cycle.failed", "limit" => 10}, workspace: workspace)
+
+      assert [%{"tag" => "evolution.cycle.failed", "level" => "error"}] = incident["errors"]
     end
   end
 
   describe "recent_events/1" do
-    test "returns only evolution events", %{workspace: workspace} do
-      Nex.Agent.Audit.append(
-        "evolution.cycle_started",
-        %{trigger: "manual", profile: "routine"},
-        workspace: workspace
-      )
+    test "returns only evolution-tagged observations", %{workspace: workspace} do
+      assert {:ok, _} =
+               Log.info("evolution.cycle.started", %{"trigger" => "manual"}, workspace: workspace)
 
-      Nex.Agent.Audit.append("other.event", %{data: "test"}, workspace: workspace)
+      assert {:ok, _} = Log.info("other.event", %{"data" => "test"}, workspace: workspace)
 
-      Nex.Agent.Audit.append("evolution.cycle_completed", %{soul_updates: 1},
-        workspace: workspace
-      )
+      assert {:ok, _} =
+               Log.info(
+                 "evolution.candidate.proposed",
+                 %{"summary" => "candidate", "evidence_ids" => ["obs_1"]},
+                 workspace: workspace
+               )
 
       events = Evolution.recent_events(workspace: workspace)
       assert length(events) == 2
-      assert Enum.all?(events, fn e -> String.starts_with?(e["event"], "evolution.") end)
+      assert Enum.all?(events, fn event -> String.starts_with?(event["tag"], "evolution.") end)
     end
   end
 
-  defp capture_prompt(workspace, trigger) do
-    parent = self()
+  defp seed_observations(workspace) do
+    Evolution.record_signal(
+      %{source: "runner", signal: "Repeated correction", context: %{"tool_name" => "bash"}},
+      workspace: workspace
+    )
 
-    llm_call_fun = fn messages, _opts ->
-      user_message = Enum.find(messages, &(&1["role"] == "user"))
-      send(parent, {:evolution_prompt, trigger, user_message["content"]})
-      {:ok, %{"observations" => "ok"}}
-    end
-
-    assert {:ok, _result} =
-             Evolution.run_evolution_cycle(
+    assert {:ok, _} =
+             Log.error(
+               "runner.tool.call.failed",
+               %{"tool_name" => "bash", "reason_type" => "exit_status"},
                workspace: workspace,
-               trigger: trigger,
-               llm_call_fun: llm_call_fun
+               run_id: "run-1"
              )
 
-    assert_receive {:evolution_prompt, ^trigger, prompt}, 500
-    prompt
+    assert {:ok, _} =
+             Log.error(
+               "runner.tool.call.failed",
+               %{"tool_name" => "bash", "reason_type" => "exit_status"},
+               workspace: workspace,
+               run_id: "run-1"
+             )
+
+    assert {:ok, _} =
+             Log.warning(
+               "http.request.failed",
+               %{"reason_type" => "timeout"},
+               workspace: workspace,
+               run_id: "run-1"
+             )
   end
 
-  defp wait_until(fun, attempts \\ 40)
+  defp write_budget(workspace, current) do
+    path = Store.budget_path(workspace: workspace)
+    File.mkdir_p!(Path.dirname(path))
 
+    File.write!(
+      path,
+      Jason.encode!(%{
+        "capacity" => 100,
+        "current" => current,
+        "mode" => Atom.to_string(mode_for_current(current)),
+        "refill_rate" => 10,
+        "last_refilled_at" =>
+          DateTime.utc_now() |> DateTime.add(1, :hour) |> DateTime.to_iso8601(),
+        "spent_today" => 0
+      })
+    )
+  end
+
+  defp mode_for_current(0), do: :sleep
+  defp mode_for_current(current) when current < 20, do: :low
+  defp mode_for_current(current) when current < 80, do: :normal
+  defp mode_for_current(_current), do: :deep
+
+  defp wait_until(fun, attempts \\ 40)
   defp wait_until(fun, 0), do: fun.()
 
   defp wait_until(fun, attempts) do

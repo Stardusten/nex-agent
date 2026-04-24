@@ -1,7 +1,9 @@
 defmodule Nex.Agent.Executor do
   @moduledoc false
 
-  alias Nex.Agent.{Audit, ProjectMemory, Workspace}
+  alias Nex.Agent.{ProjectMemory, Workspace}
+  alias Nex.Agent.ControlPlane.Log
+  require Log
 
   @executor_names ~w(codex_cli claude_code_cli nex_local)
   @runs_file "runs.jsonl"
@@ -193,7 +195,7 @@ defmodule Nex.Agent.Executor do
 
   defp persist_run(record, opts) do
     File.write!(runs_file(opts), Jason.encode!(record) <> "\n", [:append])
-    Audit.append("executor.dispatch", record, opts)
+    Log.info("executor.dispatch.recorded", record, opts)
 
     if is_binary(record["project"]) and record["project"] != "" do
       ProjectMemory.append_run(record["project"], record, opts)

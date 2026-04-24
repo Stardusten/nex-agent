@@ -1,7 +1,9 @@
 defmodule Nex.Agent.Tasks do
   @moduledoc false
 
-  alias Nex.Agent.{Audit, Cron, Workspace}
+  alias Nex.Agent.{Cron, Workspace}
+  alias Nex.Agent.ControlPlane.Log
+  require Log
 
   @tasks_file "tasks.json"
 
@@ -33,7 +35,7 @@ defmodule Nex.Agent.Tasks do
         |> sync_jobs(opts)
 
       save_tasks([task | load_tasks(tasks_file(opts))], opts)
-      Audit.append("task.add", task, opts)
+      Log.info("task.add", task, opts)
       {:ok, task}
     else
       {:error, "title is required"}
@@ -80,7 +82,7 @@ defmodule Nex.Agent.Tasks do
         |> sync_jobs(opts)
 
       replace_task(updated, opts)
-      Audit.append("task.update", updated, opts)
+      Log.info("task.update", updated, opts)
       {:ok, updated}
     else
       nil -> {:error, "Task not found: #{task_id}"}

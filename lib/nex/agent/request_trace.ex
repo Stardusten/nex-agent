@@ -1,31 +1,17 @@
 defmodule Nex.Agent.RequestTrace do
   @moduledoc false
 
-  alias Nex.Agent.{Config, Workspace}
+  alias Nex.Agent.ControlPlane.{Log, Query}
+  require Log
 
   @spec default_config() :: map()
   def default_config do
-    %{
-      "enabled" => false,
-      "dir" => "audit/request_traces"
-    }
+    %{"enabled" => false}
   end
 
   @spec config(keyword()) :: map()
   def config(opts \\ []) do
-    config =
-      Keyword.get_lazy(opts, :config, fn ->
-        Config.load(config_path: Keyword.get(opts, :config_path))
-      end)
-
-    base =
-      if function_exported?(Config, :request_trace, 1) do
-        apply(Config, :request_trace, [config])
-      else
-        default_config()
-      end
-
-    Map.merge(base, Keyword.get(opts, :request_trace, %{}))
+    Map.merge(default_config(), Keyword.get(opts, :request_trace, %{}))
   end
 
   @spec enabled?(keyword()) :: boolean()
@@ -33,50 +19,24 @@ defmodule Nex.Agent.RequestTrace do
     config(opts)["enabled"] == true
   end
 
-  @spec traces_dir(keyword()) :: String.t()
-  def traces_dir(opts \\ []) do
-    workspace = Keyword.get(opts, :workspace) || Workspace.root(opts)
-    custom = config(opts)["dir"]
-
-    cond do
-      is_binary(custom) and Path.type(custom) == :absolute ->
-        custom
-
-      is_binary(custom) and custom != "" ->
-        Path.join(workspace, custom)
-
-      true ->
-        Path.join(workspace, "audit/request_traces")
-    end
-  end
-
-  @spec trace_path(String.t(), keyword()) :: String.t()
-  def trace_path(run_id, opts \\ []) when is_binary(run_id) do
-    Path.join(traces_dir(opts), "#{run_id}.jsonl")
-  end
-
   @spec append_event(map(), keyword()) :: {:ok, String.t()} | :ok | {:error, String.t()}
   def append_event(event, opts \\ []) when is_map(event) do
-    if enabled?(opts) do
-      run_id = event[:run_id] || event["run_id"]
+    run_id = event[:run_id] || event["run_id"]
 
-      if is_binary(run_id) and run_id != "" do
-        path = trace_path(run_id, opts)
-        File.mkdir_p!(Path.dirname(path))
+    if is_binary(run_id) and run_id != "" do
+      type = event[:type] || event["type"] || "event"
 
-        line =
-          event
-          |> Map.put_new(:inserted_at, DateTime.utc_now() |> DateTime.to_iso8601())
-          |> sanitize_value()
-          |> Jason.encode!()
+      attrs =
+        event_summary(type, event)
+        |> Map.put_new(:inserted_at, DateTime.utc_now() |> DateTime.to_iso8601())
+        |> sanitize_value()
 
-        File.write!(path, line <> "\n", [:append])
-        {:ok, path}
-      else
-        {:error, "request trace event missing run_id"}
+      case Log.info("request_trace.event.recorded", attrs, Keyword.put(opts, :run_id, run_id)) do
+        {:ok, _observation} -> {:ok, run_id}
+        {:error, reason} -> {:error, inspect(reason)}
       end
     else
-      :ok
+      {:error, "request trace event missing run_id"}
     end
   rescue
     error -> {:error, Exception.message(error)}
@@ -84,51 +44,57 @@ defmodule Nex.Agent.RequestTrace do
 
   @spec list_paths(keyword()) :: [String.t()]
   def list_paths(opts \\ []) do
-    dir = traces_dir(opts)
-
-    if File.dir?(dir) do
-      dir
-      |> Path.join("*.jsonl")
-      |> Path.wildcard()
-      |> Enum.sort_by(&file_timestamp/1, {:desc, DateTime})
-    else
-      []
-    end
+    opts
+    |> Keyword.put_new(:limit, Keyword.get(opts, :limit, 100))
+    |> Query.recent_run_traces()
+    |> Enum.map(& &1["run_id"])
   end
 
   @spec read_trace(String.t(), keyword()) :: [map()]
   def read_trace(identifier, opts \\ []) when is_binary(identifier) do
-    path =
-      cond do
-        String.ends_with?(identifier, ".jsonl") -> identifier
-        true -> trace_path(identifier, opts)
-      end
+    run_id = identifier |> Path.basename() |> String.replace_suffix(".jsonl", "")
 
-    case File.read(path) do
-      {:ok, content} ->
-        content
-        |> String.split("\n", trim: true)
-        |> Enum.reduce([], fn line, acc ->
-          case Jason.decode(line) do
-            {:ok, decoded} when is_map(decoded) -> [decoded | acc]
-            _ -> acc
-          end
-        end)
-        |> Enum.reverse()
+    %{"observations" => observations} = Query.run_trace(run_id, opts)
 
-      {:error, _} ->
-        []
-    end
+    observations
+    |> Enum.map(&trace_event_from_observation(&1, run_id))
   end
 
-  defp file_timestamp(path) do
-    with {:ok, stat} <- File.stat(path),
-         {:ok, naive} <- NaiveDateTime.from_erl(stat.mtime),
-         {:ok, datetime} <- DateTime.from_naive(naive, "Etc/UTC") do
-      datetime
-    else
-      _ -> DateTime.from_unix!(0)
-    end
+  defp trace_event_from_observation(%{"tag" => "request_trace.event.recorded"} = observation, run_id) do
+    observation
+    |> Map.get("attrs_summary", %{})
+    |> Map.put_new("run_id", run_id)
+    |> Map.put_new("inserted_at", observation["timestamp"])
+  end
+
+  defp trace_event_from_observation(observation, run_id) do
+    attrs = Map.get(observation, "attrs_summary", %{})
+
+    %{
+      "type" => Map.get(observation, "tag"),
+      "run_id" => run_id,
+      "inserted_at" => Map.get(observation, "timestamp"),
+      "level" => Map.get(observation, "level"),
+      "tag" => Map.get(observation, "tag"),
+      "context" => Map.get(observation, "context", %{}),
+      "attrs_summary" => attrs
+    }
+    |> Map.merge(legacy_trace_fields(attrs))
+  end
+
+  defp legacy_trace_fields(attrs) do
+    attrs
+    |> Map.take([
+      "content_summary",
+      "duration_ms",
+      "finish_reason",
+      "iteration",
+      "prompt_summary",
+      "result_summary",
+      "status",
+      "tool",
+      "tool_call_id"
+    ])
   end
 
   defp sanitize_value(%_{} = struct), do: struct |> Map.from_struct() |> sanitize_value()
@@ -145,4 +111,30 @@ defmodule Nex.Agent.RequestTrace do
 
   defp sanitize_value(value),
     do: inspect(value, pretty: false, limit: :infinity, printable_limit: 100_000)
+
+  defp event_summary(type, event) do
+    %{
+      "type" => to_string(type),
+      "run_id" => event[:run_id] || event["run_id"],
+      "prompt_summary" => text_summary(event[:prompt] || event["prompt"]),
+      "content_summary" => text_summary(event[:content] || event["content"]),
+      "result_summary" => text_summary(event[:result] || event["result"]),
+      "status" => event[:status] || event["status"],
+      "iteration" => event[:iteration] || event["iteration"],
+      "tool" => event[:tool] || event["tool"],
+      "tool_call_id" => event[:tool_call_id] || event["tool_call_id"],
+      "duration_ms" => event[:duration_ms] || event["duration_ms"],
+      "finish_reason" => event[:finish_reason] || event["finish_reason"]
+    }
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    |> Map.new()
+  end
+
+  defp text_summary(nil), do: nil
+
+  defp text_summary(value) do
+    value
+    |> to_string()
+    |> String.slice(0, 1000)
+  end
 end

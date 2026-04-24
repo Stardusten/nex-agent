@@ -10,14 +10,14 @@ defmodule Nex.Agent.SelfHealingAggregatorTest do
     assert %{
              status: :ok,
              window_size: 2,
-             same_name_count: 2,
+             same_tag_count: 2,
              same_actor_count: 2,
              consecutive_count: 2,
              repeated?: true,
              summary: summary
            } = Aggregator.summarize(%{event: current, recent_events: [old_event]})
 
-    assert summary =~ "event=tool.call.failed"
+    assert summary =~ "tag=tool.call.failed"
     assert summary =~ "actor=tool:bash"
   end
 
@@ -26,7 +26,7 @@ defmodule Nex.Agent.SelfHealingAggregatorTest do
 
     assert %{
              repeated?: false,
-             same_name_count: 1,
+             same_tag_count: 1,
              same_actor_count: 1,
              consecutive_count: 1
            } = Aggregator.summarize(%{event: current, recent_events: []})

@@ -2,13 +2,15 @@ defmodule Nex.Agent.Knowledge do
   @moduledoc false
 
   alias Nex.Agent.{
-    Audit,
     ContextDiagnostics,
     Memory,
     ProjectMemory,
     Skills,
     Workspace
   }
+
+  alias Nex.Agent.ControlPlane.Log
+  require Log
 
   @capture_file "captures.jsonl"
   @valid_sources ~w(chat_message web_page workspace_note)
@@ -34,7 +36,7 @@ defmodule Nex.Agent.Knowledge do
 
       Workspace.ensure!(opts)
       File.write!(capture_file(opts), Jason.encode!(capture) <> "\n", [:append])
-      Audit.append("knowledge.capture", capture, opts)
+      Log.info("knowledge.capture.recorded", capture, opts)
       {:ok, capture}
     end
   end
@@ -62,7 +64,12 @@ defmodule Nex.Agent.Knowledge do
   def promote(capture_id, target, opts \\ []) when is_binary(capture_id) and is_binary(target) do
     with %{} = capture <- get(capture_id, opts),
          {:ok, result} <- do_promote(capture, target, opts) do
-      Audit.append("knowledge.promote", %{"capture_id" => capture_id, "target" => target}, opts)
+      Log.info(
+        "knowledge.promote.recorded",
+        %{"capture_id" => capture_id, "target" => target},
+        opts
+      )
+
       {:ok, result}
     else
       nil -> {:error, "Capture not found: #{capture_id}"}

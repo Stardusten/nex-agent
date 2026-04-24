@@ -2,9 +2,10 @@ defmodule Nex.Agent.MemoryUpdater do
   @moduledoc false
 
   use GenServer
-  require Logger
 
   alias Nex.Agent.{Memory, Session, SessionManager, Workspace}
+  alias Nex.Agent.ControlPlane.Log
+  require Log
 
   defstruct current: nil, order: :queue.new(), pending: %{}
 
@@ -151,15 +152,49 @@ defmodule Nex.Agent.MemoryUpdater do
   end
 
   defp log_job_result({workspace, session_key}, {:ok, status}) do
-    Logger.info(
-      "[MemoryUpdater] workspace=#{workspace} session=#{session_key} completed status=#{status}"
+    emit_job_observation(
+      :info,
+      "memory.refresh.job.finished",
+      workspace,
+      session_key,
+      %{"status" => to_string(status), "result_status" => "ok"}
     )
   end
 
   defp log_job_result({workspace, session_key}, {:error, reason}) do
-    Logger.warning(
-      "[MemoryUpdater] workspace=#{workspace} session=#{session_key} failed reason=#{inspect(reason)}"
+    emit_job_observation(
+      :warning,
+      "memory.refresh.job.failed",
+      workspace,
+      session_key,
+      %{
+        "result_status" => "error",
+        "reason_type" => reason_type(reason),
+        "error_summary" => error_summary(reason)
+      }
     )
+  end
+
+  defp emit_job_observation(level, tag, workspace, session_key, attrs) do
+    opts = [workspace: workspace, session_key: session_key]
+
+    case level do
+      :warning -> Log.warning(tag, attrs, opts)
+      _ -> Log.info(tag, attrs, opts)
+    end
+
+    :ok
+  end
+
+  defp reason_type(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp reason_type(reason) when is_binary(reason), do: String.slice(reason, 0, 120)
+  defp reason_type({reason, _detail}), do: reason_type(reason)
+  defp reason_type(reason), do: inspect(reason, limit: 20, printable_limit: 120)
+
+  defp error_summary(reason) do
+    reason
+    |> inspect(limit: 20, printable_limit: 300)
+    |> String.slice(0, 300)
   end
 
   defp build_job(%Session{} = session, opts) do

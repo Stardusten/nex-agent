@@ -64,8 +64,7 @@ defmodule Nex.Agent.Tool.Message do
           },
           channel: %{
             type: "string",
-            description:
-              "Target channel (feishu, discord). Defaults to current channel."
+            description: "Target channel (feishu, discord). Defaults to current channel."
           },
           chat_id: %{
             type: "string",
@@ -81,7 +80,10 @@ defmodule Nex.Agent.Tool.Message do
 
   def execute(args, ctx) do
     require Logger
-    Logger.info("Message Tool Execute - Args: #{inspect(args)}, Ctx: #{inspect(ctx)}")
+
+    Logger.info(
+      "Message Tool Execute - Args: #{inspect(Nex.Agent.ControlPlane.Redactor.redact(args), printable_limit: 500, limit: 20)}, Ctx: #{inspect(Nex.Agent.ControlPlane.Redactor.redact(ctx), printable_limit: 500, limit: 20)}"
+    )
 
     with {:ok, outbound} <- from_tool_args(args, ctx) do
       case outbound.channel do
@@ -177,7 +179,7 @@ defmodule Nex.Agent.Tool.Message do
 
       is_list(paths) and paths != [] ->
         with true <-
-               is_list(kinds) and length(paths) == length(kinds) or
+               (is_list(kinds) and length(paths) == length(kinds)) or
                  {:error, :attachment_kinds_must_align},
              {:ok, attachments} <- build_attachment_list(paths, kinds, channel, ctx) do
           {:ok, attachments}

@@ -90,7 +90,7 @@ defmodule Nex.Agent.ContextBuilder do
     - Personal task state: #{workspace_path}/tasks/tasks.json
     - Project memory: #{workspace_path}/projects/{project}/PROJECT.md
     - Executor configs and run logs: #{workspace_path}/executors/
-    - Audit trail: #{workspace_path}/audit/events.jsonl
+    - Runtime observations: query with the `observe` tool; machine facts live under #{workspace_path}/control_plane/
 
     ## Guidelines
     - State the next action before tool calls, but NEVER predict or claim results before receiving them.
@@ -107,8 +107,15 @@ defmodule Nex.Agent.ContextBuilder do
     - `self_update deploy` is the quick deploy verification path: syntax, compile, reload, and related tests.
     - Strict ship checks such as `format`, `credo`, or `dialyzer` are for explicit ship confidence, not mandatory on every quick deploy iteration.
     - In owner/subagent workflows, subagents may inspect and patch code, but only the owner run may use `self_update status`, `self_update deploy`, or `self_update rollback`.
-    - The minimal self-healing loop records structured failure signals for LLM calls, tool calls, and self_update deploy attempts.
-    - Self-healing signals may surface hint or reflection candidates, but they do not auto-repair code, write memory/skills, or bypass owner-only deploy.
+    - Use `observe` to answer questions like "did anything fail?", "is it stuck?", or "what did the background runtime see?".
+    - `observe summary` includes the workspace `run.owner.current` gauge for active owner runs; `observe incident` and `observe query` can narrow by run_id or session_key.
+    - `/status` is a deterministic quick view for the current owner run plus recent ControlPlane warning/error evidence.
+    - `observe` can inspect run, inbound, follow-up, LLM, tool, HTTP, and self_update lifecycle observations by tag, run_id, session_key, or incident query.
+    - ControlPlane observations are the self-observation source of truth; human text logs are only projections.
+    - Budget only controls review/candidate signals. It never authorizes automatic deploy, code repair, memory writes, or skill writes.
+    - Evolution proposes candidates first. Owner-approved execution goes through the single `evolution_candidate` lane.
+    - Use `evolution_candidate list` / `show` to inspect derived candidate lifecycle.
+    - Use `evolution_candidate approve` / `reject` only as the owner run. Non-code candidates reuse existing deterministic write tools; code candidates must still go through `apply_patch` and `self_update deploy`.
     - Skills are discoverable runtime packages, not preloaded instructions. Use `skill_discover` to search, `skill_get` to inspect a package with progressive disclosure, and `skill_capture` to save a reusable local knowledge package.
 
     Reply directly with text for normal conversations.

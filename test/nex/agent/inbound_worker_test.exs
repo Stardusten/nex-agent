@@ -3,6 +3,7 @@ defmodule Nex.Agent.InboundWorkerTest do
 
   alias Nex.Agent.{Bus, InboundWorker, Memory, RunControl, Runner, Runtime, Session, Skills}
   alias Nex.Agent.Channel.{Discord, Feishu}
+  alias Nex.Agent.ControlPlane.Query, as: ControlPlaneQuery
   alias Nex.Agent.Inbound.Envelope
   alias Nex.Agent.Media.Attachment
   alias Nex.Agent.Stream.Result
@@ -49,6 +50,7 @@ defmodule Nex.Agent.InboundWorkerTest do
 
     worker_name = String.to_atom("inbound_worker_test_#{System.unique_integer([:positive])}")
     parent = self()
+
     config = %Nex.Agent.Config{
       Nex.Agent.Config.default()
       | feishu: %{"enabled" => true, "streaming" => true},
@@ -102,7 +104,8 @@ defmodule Nex.Agent.InboundWorkerTest do
     start_supervised!(%{
       id: worker_name,
       start:
-        {InboundWorker, :start_link, [[name: worker_name, config: config, agent_prompt_fun: prompt_fun]]}
+        {InboundWorker, :start_link,
+         [[name: worker_name, config: config, agent_prompt_fun: prompt_fun]]}
     })
 
     Bus.subscribe(:feishu_outbound)
@@ -110,7 +113,7 @@ defmodule Nex.Agent.InboundWorkerTest do
 
     on_exit(fn ->
       Application.delete_env(:nex_agent, :workspace_path)
-      File.rm_rf!(workspace)
+      File.rm_rf(workspace)
     end)
 
     {:ok, workspace: workspace, worker_name: worker_name}
@@ -142,13 +145,18 @@ defmodule Nex.Agent.InboundWorkerTest do
     assert payload.content =~ "/commands - list supported slash commands for this chat"
     assert payload.content =~ "/status - show current owner run status immediately"
     assert payload.content =~ "/queue <message> - queue a message for the next owner turn"
-    assert payload.content =~ "/btw <message> - ask a side question without interrupting the owner run"
+
+    assert payload.content =~
+             "/btw <message> - ask a side question without interrupting the owner run"
+
     refute_received :llm_finished
   end
 
   test "unknown slash-prefixed text still goes through the llm path", %{workspace: workspace} do
     parent = self()
-    worker_name = String.to_atom("inbound_worker_unknown_slash_#{System.unique_integer([:positive])}")
+
+    worker_name =
+      String.to_atom("inbound_worker_unknown_slash_#{System.unique_integer([:positive])}")
 
     prompt_fun = fn agent, prompt, _opts ->
       send(parent, {:prompt_received, prompt})
@@ -178,7 +186,9 @@ defmodule Nex.Agent.InboundWorkerTest do
 
   test "built-in slash new command bypasses llm execution", %{workspace: workspace} do
     parent = self()
-    worker_name = String.to_atom("inbound_worker_new_command_#{System.unique_integer([:positive])}")
+
+    worker_name =
+      String.to_atom("inbound_worker_new_command_#{System.unique_integer([:positive])}")
 
     prompt_fun = fn _agent, _prompt, _opts ->
       send(parent, :prompt_called)
@@ -246,8 +256,12 @@ defmodule Nex.Agent.InboundWorkerTest do
   test "inbound worker forwards attachments into agent prompt opts", %{} do
     parent = self()
     worker_name = String.to_atom("inbound_worker_media_#{System.unique_integer([:positive])}")
+
     image_path =
-      Path.join(System.tmp_dir!(), "inbound_worker_media_#{System.unique_integer([:positive])}.png")
+      Path.join(
+        System.tmp_dir!(),
+        "inbound_worker_media_#{System.unique_integer([:positive])}.png"
+      )
 
     File.write!(image_path, <<137, 80, 78, 71, 13, 10, 26, 10>>)
     on_exit(fn -> File.rm(image_path) end)
@@ -416,26 +430,34 @@ defmodule Nex.Agent.InboundWorkerTest do
     assert_receive {:bus_message, :feishu_outbound, stop_payload}, 1_000
     assert stop_payload.content =~ "Stopped 1 task(s)"
 
-    send(worker, {:async_result, {Path.expand(workspace), "feishu:chat-stale"}, owner_run_id, {:ok, "late final", %Nex.Agent{workspace: workspace}}, %Envelope{
-      channel: "feishu",
-      chat_id: "chat-stale",
-      sender_id: "tester",
-      text: "long",
-      message_type: :text,
-      raw: %{},
-      metadata: %{"workspace" => workspace},
-      media_refs: [],
-      attachments: []
-    }})
+    send(
+      worker,
+      {:async_result, {Path.expand(workspace), "feishu:chat-stale"}, owner_run_id,
+       {:ok, "late final", %Nex.Agent{workspace: workspace}},
+       %Envelope{
+         channel: "feishu",
+         chat_id: "chat-stale",
+         sender_id: "tester",
+         text: "long",
+         message_type: :text,
+         raw: %{},
+         metadata: %{"workspace" => workspace},
+         media_refs: [],
+         attachments: []
+       }}
+    )
 
     refute_receive {:bus_message, :feishu_outbound, _payload}, 300
   end
 
-  test "busy ordinary message becomes a real follow-up llm turn and does not queue into owner run", %{
-    workspace: workspace
-  } do
+  test "busy ordinary message becomes a real follow-up llm turn and does not queue into owner run",
+       %{
+         workspace: workspace
+       } do
     parent = self()
-    worker_name = String.to_atom("inbound_worker_follow_up_busy_#{System.unique_integer([:positive])}")
+
+    worker_name =
+      String.to_atom("inbound_worker_follow_up_busy_#{System.unique_integer([:positive])}")
 
     prompt_fun = fn agent, prompt, opts ->
       case Keyword.get(opts, :tools_filter) do
@@ -491,6 +513,9 @@ defmodule Nex.Agent.InboundWorkerTest do
     assert follow_up_prompt =~ "You are handling a short follow-up turn for a busy chat session."
     assert follow_up_prompt =~ "User follow-up question:\n下载多少了？"
     assert follow_up_prompt =~ "Owner snapshot:"
+    assert follow_up_prompt =~ "use `observe` before answering"
+    assert follow_up_prompt =~ "Owner run id:"
+    assert follow_up_prompt =~ "`observe` action `incident`"
     assert Keyword.get(follow_up_opts, :skip_consolidation) == true
     assert Keyword.get(follow_up_opts, :tools_filter) == :follow_up
     assert Keyword.get(follow_up_opts, :schedule_memory_refresh) == false
@@ -501,15 +526,26 @@ defmodule Nex.Agent.InboundWorkerTest do
     assert payload.metadata["_from_follow_up"] == true
     assert payload.content == "follow-up done"
 
+    assert eventually_observed?(workspace, "inbound.message.received")
+    assert eventually_observed?(workspace, "inbound.owner.dispatch.started")
+    assert eventually_observed?(workspace, "inbound.follow_up.started")
+    assert eventually_observed?(workspace, "inbound.follow_up.finished")
+
     assert_receive {:bus_message, :feishu_outbound, final_payload}, 1_000
     assert final_payload.content == "owner done"
+    assert eventually_observed?(workspace, "inbound.owner.dispatch.finished")
   end
 
   test "follow-up stays single-flight per session and only the latest reply is emitted", %{
     workspace: workspace
   } do
     parent = self()
-    worker_name = String.to_atom("inbound_worker_follow_up_single_flight_#{System.unique_integer([:positive])}")
+
+    worker_name =
+      String.to_atom(
+        "inbound_worker_follow_up_single_flight_#{System.unique_integer([:positive])}"
+      )
+
     follow_up_gate = make_ref()
 
     prompt_fun = fn agent, prompt, opts ->
@@ -532,49 +568,58 @@ defmodule Nex.Agent.InboundWorkerTest do
     start_supervised!({InboundWorker, name: worker_name, agent_prompt_fun: prompt_fun})
     worker = Process.whereis(worker_name)
 
-    send(worker, {:bus_message, :inbound,
-      %Envelope{
-        channel: "feishu",
-        chat_id: "chat-follow-up-single",
-        sender_id: "tester",
-        text: "start long run",
-        message_type: :text,
-        raw: %{},
-        metadata: %{"workspace" => workspace},
-        media_refs: [],
-        attachments: []
-      }})
+    send(
+      worker,
+      {:bus_message, :inbound,
+       %Envelope{
+         channel: "feishu",
+         chat_id: "chat-follow-up-single",
+         sender_id: "tester",
+         text: "start long run",
+         message_type: :text,
+         raw: %{},
+         metadata: %{"workspace" => workspace},
+         media_refs: [],
+         attachments: []
+       }}
+    )
 
     assert_receive {:owner_started, "start long run"}, 1_000
 
-    send(worker, {:bus_message, :inbound,
-      %Envelope{
-        channel: "feishu",
-        chat_id: "chat-follow-up-single",
-        sender_id: "tester",
-        text: "first",
-        message_type: :text,
-        raw: %{},
-        metadata: %{"workspace" => workspace},
-        media_refs: [],
-        attachments: []
-      }})
+    send(
+      worker,
+      {:bus_message, :inbound,
+       %Envelope{
+         channel: "feishu",
+         chat_id: "chat-follow-up-single",
+         sender_id: "tester",
+         text: "first",
+         message_type: :text,
+         raw: %{},
+         metadata: %{"workspace" => workspace},
+         media_refs: [],
+         attachments: []
+       }}
+    )
 
     assert_receive {:follow_up_started, first_prompt, first_follow_up_pid}, 1_000
     assert first_prompt =~ "User follow-up question:\nfirst"
 
-    send(worker, {:bus_message, :inbound,
-      %Envelope{
-        channel: "feishu",
-        chat_id: "chat-follow-up-single",
-        sender_id: "tester",
-        text: "second",
-        message_type: :text,
-        raw: %{},
-        metadata: %{"workspace" => workspace},
-        media_refs: [],
-        attachments: []
-      }})
+    send(
+      worker,
+      {:bus_message, :inbound,
+       %Envelope{
+         channel: "feishu",
+         chat_id: "chat-follow-up-single",
+         sender_id: "tester",
+         text: "second",
+         message_type: :text,
+         raw: %{},
+         metadata: %{"workspace" => workspace},
+         media_refs: [],
+         attachments: []
+       }}
+    )
 
     assert_receive {:follow_up_started, second_prompt, second_follow_up_pid}, 1_000
     assert second_prompt =~ "User follow-up question:\nsecond"
@@ -588,11 +633,14 @@ defmodule Nex.Agent.InboundWorkerTest do
     refute_receive {:bus_message, :feishu_outbound, %{content: "first"}}, 300
   end
 
-  test "/status stays deterministic, /btw uses follow-up llm turn, and /queue on idle starts next owner turn", %{
-    workspace: workspace
-  } do
+  test "/status stays deterministic, /btw uses follow-up llm turn, and /queue on idle starts next owner turn",
+       %{
+         workspace: workspace
+       } do
     parent = self()
-    worker_name = String.to_atom("inbound_worker_status_queue_btw_#{System.unique_integer([:positive])}")
+
+    worker_name =
+      String.to_atom("inbound_worker_status_queue_btw_#{System.unique_integer([:positive])}")
 
     prompt_fun = fn agent, prompt, opts ->
       case Keyword.get(opts, :tools_filter) do
@@ -626,7 +674,9 @@ defmodule Nex.Agent.InboundWorkerTest do
     })
 
     assert_receive {:bus_message, :feishu_outbound, idle_payload}, 1_000
-    assert idle_payload.content == "Status: idle"
+    assert idle_payload.content =~ "Status: idle"
+    assert idle_payload.content =~ "Evidence: recent warnings/errors=0"
+    assert eventually_observed?(workspace, "inbound.status.requested")
 
     send(worker, {
       :bus_message,
@@ -647,6 +697,8 @@ defmodule Nex.Agent.InboundWorkerTest do
     assert_receive {:btw_follow_up_prompt, btw_prompt, btw_opts}, 1_000
     assert btw_prompt =~ "There is no current owner run."
     assert btw_prompt =~ "User follow-up question:\nside question"
+    assert btw_prompt =~ "use `observe` before answering"
+    assert btw_prompt =~ "`observe` action `query`"
     assert Keyword.get(btw_opts, :skip_consolidation) == true
     assert Keyword.get(btw_opts, :tools_filter) == :follow_up
     assert Keyword.get(btw_opts, :schedule_memory_refresh) == false
@@ -674,11 +726,19 @@ defmodule Nex.Agent.InboundWorkerTest do
     assert_receive {:bus_message, :feishu_outbound, queue_payload}, 1_000
     assert queue_payload.content =~ "Queued for next owner turn"
     assert_receive {:owner_prompt, "next task"}, 1_000
+    assert_receive {:bus_message, :feishu_outbound, final_payload}, 1_000
+    assert final_payload.content == "next task done"
+
+    assert eventually_observed?(workspace, "inbound.queue.changed")
+    assert eventually_observed?(workspace, "inbound.owner.dispatch.started")
+    assert eventually_observed?(workspace, "inbound.owner.dispatch.finished")
   end
 
   test "interrupt_session tool uses the same hard control lane as /stop", %{workspace: workspace} do
     parent = self()
-    worker_name = String.to_atom("inbound_worker_interrupt_tool_#{System.unique_integer([:positive])}")
+
+    worker_name =
+      String.to_atom("inbound_worker_interrupt_tool_#{System.unique_integer([:positive])}")
 
     prompt_fun = fn agent, prompt, opts ->
       case Keyword.get(opts, :tools_filter) do
@@ -711,44 +771,56 @@ defmodule Nex.Agent.InboundWorkerTest do
     start_supervised!({InboundWorker, name: worker_name, agent_prompt_fun: prompt_fun})
     worker = Process.whereis(worker_name)
 
-    send(worker, {:bus_message, :inbound,
-      %Envelope{
-        channel: "feishu",
-        chat_id: "chat-interrupt-tool",
-        sender_id: "tester",
-        text: "start long run",
-        message_type: :text,
-        raw: %{},
-        metadata: %{"workspace" => workspace},
-        media_refs: [],
-        attachments: []
-      }})
+    send(
+      worker,
+      {:bus_message, :inbound,
+       %Envelope{
+         channel: "feishu",
+         chat_id: "chat-interrupt-tool",
+         sender_id: "tester",
+         text: "start long run",
+         message_type: :text,
+         raw: %{},
+         metadata: %{"workspace" => workspace},
+         media_refs: [],
+         attachments: []
+       }}
+    )
 
     assert_receive {:owner_started, owner_run_id}, 1_000
     assert is_binary(owner_run_id)
 
-    send(worker, {:bus_message, :inbound,
-      %Envelope{
-        channel: "feishu",
-        chat_id: "chat-interrupt-tool",
-        sender_id: "tester",
-        text: "/btw stop it",
-        message_type: :text,
-        raw: %{},
-        metadata: %{"workspace" => workspace},
-        media_refs: [],
-        attachments: []
-      }})
+    send(
+      worker,
+      {:bus_message, :inbound,
+       %Envelope{
+         channel: "feishu",
+         chat_id: "chat-interrupt-tool",
+         sender_id: "tester",
+         text: "/btw stop it",
+         message_type: :text,
+         raw: %{},
+         metadata: %{"workspace" => workspace},
+         media_refs: [],
+         attachments: []
+       }}
+    )
 
     assert_receive {:follow_up_interrupt_prompt, _prompt}, 1_000
-    assert_receive {:interrupt_tool_result, {:ok, %{cancelled?: true, run_id: ^owner_run_id}}}, 1_000
+
+    assert_receive {:interrupt_tool_result, {:ok, %{cancelled?: true, run_id: ^owner_run_id}}},
+                   1_000
+
     assert_receive {:bus_message, :feishu_outbound, payload}, 1_000
     assert payload.content == "stopped"
+    assert eventually_observed?(workspace, "inbound.interrupt.requested")
     refute_receive {:bus_message, :feishu_outbound, %{content: "owner should be cancelled"}}, 300
   end
 
   test "public request_interrupt API accepts workspace plus session_key", %{workspace: workspace} do
-    worker_name = String.to_atom("inbound_worker_public_interrupt_#{System.unique_integer([:positive])}")
+    worker_name =
+      String.to_atom("inbound_worker_public_interrupt_#{System.unique_integer([:positive])}")
+
     parent = self()
 
     prompt_fun = fn agent, prompt, opts ->
@@ -760,18 +832,21 @@ defmodule Nex.Agent.InboundWorkerTest do
     start_supervised!({InboundWorker, name: worker_name, agent_prompt_fun: prompt_fun})
     worker = Process.whereis(worker_name)
 
-    send(worker, {:bus_message, :inbound,
-      %Envelope{
-        channel: "feishu",
-        chat_id: "chat-public-interrupt",
-        sender_id: "tester",
-        text: "start long run",
-        message_type: :text,
-        raw: %{},
-        metadata: %{"workspace" => workspace},
-        media_refs: [],
-        attachments: []
-      }})
+    send(
+      worker,
+      {:bus_message, :inbound,
+       %Envelope{
+         channel: "feishu",
+         chat_id: "chat-public-interrupt",
+         sender_id: "tester",
+         text: "start long run",
+         message_type: :text,
+         raw: %{},
+         metadata: %{"workspace" => workspace},
+         media_refs: [],
+         attachments: []
+       }}
+    )
 
     assert_receive {:owner_started, "start long run", owner_run_id}, 1_000
 
@@ -784,6 +859,83 @@ defmodule Nex.Agent.InboundWorkerTest do
              )
 
     refute_receive {:bus_message, :feishu_outbound, %{content: "owner should be cancelled"}}, 300
+  end
+
+  test "owner dispatch timeout is written to ControlPlane", %{workspace: workspace} do
+    worker_name = String.to_atom("inbound_worker_timeout_#{System.unique_integer([:positive])}")
+    parent = self()
+
+    prompt_fun = fn agent, _prompt, opts ->
+      send(parent, {:owner_started, Keyword.fetch!(opts, :owner_run_id)})
+      Process.sleep(5_000)
+      {:ok, "late", %{agent | workspace: workspace}}
+    end
+
+    start_supervised!({InboundWorker, name: worker_name, agent_prompt_fun: prompt_fun})
+    worker = Process.whereis(worker_name)
+
+    send(
+      worker,
+      {:bus_message, :inbound,
+       %Envelope{
+         channel: "feishu",
+         chat_id: "chat-timeout",
+         sender_id: "tester",
+         text: "start long run",
+         message_type: :text,
+         raw: %{},
+         metadata: %{"workspace" => workspace},
+         media_refs: [],
+         attachments: []
+       }}
+    )
+
+    assert_receive {:owner_started, owner_run_id}, 1_000
+
+    key = {Path.expand(workspace), "feishu:chat-timeout"}
+    %{active_tasks: %{^key => %{pid: pid}}} = :sys.get_state(worker)
+    send(worker, {:check_timeout, key, pid})
+
+    wait_for(fn -> observations(workspace, "inbound.owner.dispatch.timeout") != [] end)
+
+    assert [timeout] = observations(workspace, "inbound.owner.dispatch.timeout")
+    assert timeout["context"]["run_id"] == owner_run_id
+    assert timeout["attrs"]["reason_type"] == "timeout"
+  end
+
+  test "owner dispatch task crash is written to ControlPlane", %{workspace: workspace} do
+    worker_name = String.to_atom("inbound_worker_crash_#{System.unique_integer([:positive])}")
+    parent = self()
+
+    prompt_fun = fn _agent, _prompt, opts ->
+      send(parent, {:owner_started, Keyword.fetch!(opts, :owner_run_id)})
+      raise "owner crash"
+    end
+
+    start_supervised!({InboundWorker, name: worker_name, agent_prompt_fun: prompt_fun})
+
+    send(
+      Process.whereis(worker_name),
+      {:bus_message, :inbound,
+       %Envelope{
+         channel: "feishu",
+         chat_id: "chat-crash",
+         sender_id: "tester",
+         text: "start crash run",
+         message_type: :text,
+         raw: %{},
+         metadata: %{"workspace" => workspace},
+         media_refs: [],
+         attachments: []
+       }}
+    )
+
+    assert_receive {:owner_started, owner_run_id}, 1_000
+    wait_for(fn -> observations(workspace, "inbound.owner.dispatch.failed") != [] end)
+
+    assert [failed] = observations(workspace, "inbound.owner.dispatch.failed")
+    assert failed["context"]["run_id"] == owner_run_id
+    assert failed["attrs"]["summary"] =~ "owner crash"
   end
 
   test "inbound workspace mismatch does not rewrite global runtime snapshot", %{
@@ -870,6 +1022,7 @@ defmodule Nex.Agent.InboundWorkerTest do
         case Process.get(:llm_call_count, 0) do
           0 ->
             Process.put(:llm_call_count, 1)
+
             callback.(
               {:tool_calls,
                [
@@ -1004,6 +1157,7 @@ defmodule Nex.Agent.InboundWorkerTest do
 
   test "feishu stream sink updates card incrementally and suppresses default final outbound" do
     parent = self()
+
     worker_config = %Nex.Agent.Config{
       Nex.Agent.Config.default()
       | feishu: %{"enabled" => true, "streaming" => true}
@@ -1095,7 +1249,9 @@ defmodule Nex.Agent.InboundWorkerTest do
     assert card_body["type"] == "card_json"
 
     {send_url, send_body} =
-      Enum.find(posts, fn {url, body} -> url =~ "/im/v1/messages" and body["msg_type"] == "interactive" end)
+      Enum.find(posts, fn {url, body} ->
+        url =~ "/im/v1/messages" and body["msg_type"] == "interactive"
+      end)
 
     assert send_url =~ "/im/v1/messages"
     assert send_body["msg_type"] == "interactive"
@@ -1115,6 +1271,7 @@ defmodule Nex.Agent.InboundWorkerTest do
 
   test "feishu stream sink batches rapid deltas before updating card" do
     parent = self()
+
     worker_config = %Nex.Agent.Config{
       Nex.Agent.Config.default()
       | feishu: %{"enabled" => true, "streaming" => true}
@@ -1208,6 +1365,7 @@ defmodule Nex.Agent.InboundWorkerTest do
 
   test "discord stream sink edits current message and opens a new message on newmsg" do
     parent = self()
+
     worker_config = %Nex.Agent.Config{
       Nex.Agent.Config.default()
       | discord: %{"enabled" => true, "streaming" => true}
@@ -1289,6 +1447,7 @@ defmodule Nex.Agent.InboundWorkerTest do
     receive do
       {:discord_http_post, url, body, headers} ->
         collect_discord_posts([{url, body, headers} | acc], timeout)
+
       {:discord_http_patch, url, body, headers} ->
         collect_discord_posts([{url, body, headers} | acc], timeout)
     after
@@ -1336,6 +1495,18 @@ defmodule Nex.Agent.InboundWorkerTest do
       Process.sleep(20)
       wait_for(predicate, attempts - 1)
     end
+  end
+
+  defp eventually_observed?(workspace, tag) do
+    wait_for(fn ->
+      workspace
+      |> observations(tag)
+      |> Enum.any?()
+    end)
+  end
+
+  defp observations(workspace, tag) do
+    ControlPlaneQuery.query(%{"tag" => tag}, workspace: workspace)
   end
 
   defp stream_client_from_response(fun) when is_function(fun, 2) do

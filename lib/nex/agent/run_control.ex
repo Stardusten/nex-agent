@@ -7,9 +7,15 @@ defmodule Nex.Agent.RunControl do
   """
 
   use GenServer
+  require Logger
+  require Nex.Agent.ControlPlane.Gauge
+  require Nex.Agent.ControlPlane.Log
+
+  alias Nex.Agent.ControlPlane.Redactor
 
   @cancel_ref_ttl_ms 60 * 60 * 1000
   @tail_limit 4_000
+  @gauge_tail_limit 1_000
 
   defmodule Run do
     @moduledoc false
@@ -76,6 +82,7 @@ defmodule Nex.Agent.RunControl do
   @type state :: %{
           owners: %{{String.t(), String.t()} => Run.t()},
           run_index: %{String.t() => {String.t(), String.t()}},
+          recent_runs: %{String.t() => map()},
           cancelled_refs: %{reference() => integer()}
         }
 
@@ -90,7 +97,10 @@ defmodule Nex.Agent.RunControl do
   @spec start_owner(String.t(), String.t(), start_attrs(), keyword()) ::
           {:ok, Run.t()} | {:error, :already_running}
   def start_owner(workspace, session_key, attrs \\ %{}, opts \\ []) do
-    GenServer.call(server_name(opts), {:start_owner, normalize_workspace(workspace), session_key, normalize_attrs(attrs)})
+    GenServer.call(
+      server_name(opts),
+      {:start_owner, normalize_workspace(workspace), session_key, normalize_attrs(attrs)}
+    )
   end
 
   @spec finish_owner(String.t(), term()) :: :ok | {:error, :stale}
@@ -120,7 +130,10 @@ defmodule Nex.Agent.RunControl do
   @spec owner_snapshot(String.t(), String.t(), keyword()) ::
           {:ok, owner_snapshot()} | {:error, :idle}
   def owner_snapshot(workspace, session_key, opts \\ []) do
-    GenServer.call(server_name(opts), {:owner_snapshot, normalize_workspace(workspace), session_key})
+    GenServer.call(
+      server_name(opts),
+      {:owner_snapshot, normalize_workspace(workspace), session_key}
+    )
   end
 
   @spec append_tool_output(String.t(), String.t(), iodata()) :: :ok | {:error, :stale}
@@ -155,7 +168,7 @@ defmodule Nex.Agent.RunControl do
 
   @impl true
   def init(:ok) do
-    {:ok, %{owners: %{}, run_index: %{}, cancelled_refs: %{}}}
+    {:ok, %{owners: %{}, run_index: %{}, recent_runs: %{}, cancelled_refs: %{}}}
   end
 
   @impl true
@@ -174,25 +187,58 @@ defmodule Nex.Agent.RunControl do
           |> put_owner(key, run)
           |> prune_state()
 
+        observe_run("run.owner.started", run, %{
+          "status" => Atom.to_string(run.status),
+          "phase" => Atom.to_string(run.current_phase)
+        })
+
+        refresh_owner_gauge(state, run.workspace)
+
         {:reply, {:ok, run}, state}
     end
   end
 
   def handle_call({:finish_owner, run_id, _result}, _from, state) do
     case pop_current_run(state, run_id) do
-      {:ok, _run, state} -> {:reply, :ok, prune_state(state)}
-      :error -> {:reply, {:error, :stale}, prune_state(state)}
+      {:ok, run, state} ->
+        state = state |> remember_recent_run(run) |> prune_state()
+
+        observe_run("run.owner.finished", run, %{
+          "status" => "finished",
+          "phase" => Atom.to_string(run.current_phase)
+        })
+
+        refresh_owner_gauge(state, run.workspace)
+        {:reply, :ok, state}
+
+      :error ->
+        observe_stale_result(state, run_id, "finish")
+        {:reply, {:error, :stale}, prune_state(state)}
     end
   end
 
-  def handle_call({:fail_owner, run_id, _reason}, _from, state) do
+  def handle_call({:fail_owner, run_id, reason}, _from, state) do
     case pop_current_run(state, run_id) do
-      {:ok, _run, state} -> {:reply, :ok, prune_state(state)}
-      :error -> {:reply, {:error, :stale}, prune_state(state)}
+      {:ok, run, state} ->
+        state = state |> remember_recent_run(run) |> prune_state()
+
+        observe_run("run.owner.failed", run, %{
+          "status" => "failed",
+          "phase" => Atom.to_string(run.current_phase),
+          "reason_type" => reason_type(reason),
+          "summary" => error_summary(reason)
+        })
+
+        refresh_owner_gauge(state, run.workspace)
+        {:reply, :ok, state}
+
+      :error ->
+        observe_stale_result(state, run_id, "fail")
+        {:reply, {:error, :stale}, prune_state(state)}
     end
   end
 
-  def handle_call({:cancel_owner, workspace, session_key, _reason}, _from, state) do
+  def handle_call({:cancel_owner, workspace, session_key, reason}, _from, state) do
     key = {workspace, session_key}
 
     case Map.get(state.owners, key) do
@@ -200,8 +246,17 @@ defmodule Nex.Agent.RunControl do
         state =
           state
           |> delete_owner(key, run.id)
+          |> remember_recent_run(run)
           |> remember_cancelled_ref(run.cancel_ref)
           |> prune_state()
+
+        observe_run("run.owner.cancelled", run, %{
+          "status" => "cancelled",
+          "phase" => Atom.to_string(run.current_phase),
+          "reason_type" => reason_type(reason)
+        })
+
+        refresh_owner_gauge(state, run.workspace)
 
         {:reply, {:ok, %{cancelled?: true, run_id: run.id}}, state}
 
@@ -225,11 +280,16 @@ defmodule Nex.Agent.RunControl do
 
     update_reply =
       update_current_run(state, run_id, fn run ->
-        %{run | updated_at_ms: now, current_phase: :tool, current_tool: tool_name,
-          latest_tool_output_tail: tail_text(output)}
+        %{
+          run
+          | updated_at_ms: now,
+            current_phase: :tool,
+            current_tool: tool_name,
+            latest_tool_output_tail: tail_text(output)
+        }
       end)
 
-    reply_with_state(update_reply)
+    reply_with_state(update_reply, "tool_output")
   end
 
   def handle_call({:append_assistant_partial, run_id, text}, _from, state) do
@@ -237,11 +297,15 @@ defmodule Nex.Agent.RunControl do
 
     update_reply =
       update_current_run(state, run_id, fn run ->
-        %{run | updated_at_ms: now, current_phase: :llm,
-          latest_assistant_partial: append_tail(run.latest_assistant_partial, text)}
+        %{
+          run
+          | updated_at_ms: now,
+            current_phase: :llm,
+            latest_assistant_partial: append_tail(run.latest_assistant_partial, text)
+        }
       end)
 
-    reply_with_state(update_reply)
+    reply_with_state(update_reply, "assistant_partial")
   end
 
   def handle_call({:set_phase, run_id, phase}, _from, state) do
@@ -252,7 +316,7 @@ defmodule Nex.Agent.RunControl do
         %{run | updated_at_ms: now, current_phase: phase}
       end)
 
-    reply_with_state(update_reply)
+    reply_with_state(update_reply, "phase")
   end
 
   def handle_call({:set_queued_count, run_id, count}, _from, state) do
@@ -263,18 +327,22 @@ defmodule Nex.Agent.RunControl do
         %{run | updated_at_ms: now, queued_count: count}
       end)
 
-    reply_with_state(update_reply)
+    reply_with_state(update_reply, "queue")
   end
 
   def handle_call({:cancelled?, cancel_ref}, _from, state) do
     {:reply, Map.has_key?(state.cancelled_refs, cancel_ref), prune_state(state)}
   end
 
-  defp reply_with_state({:ok, state}) do
-    {:reply, :ok, prune_state(state)}
+  defp reply_with_state({:ok, run, state}, update_type) do
+    observe_run("run.owner.updated", run, run_update_attrs(run, update_type))
+    state = prune_state(state)
+    refresh_owner_gauge(state, run.workspace)
+    {:reply, :ok, state}
   end
 
-  defp reply_with_state({:error, state}) do
+  defp reply_with_state({:error, run_id, state}, update_type) do
+    observe_stale_result(state, run_id, update_type)
     {:reply, {:error, :stale}, prune_state(state)}
   end
 
@@ -282,9 +350,9 @@ defmodule Nex.Agent.RunControl do
     with {:ok, key} <- fetch_run_key(state, run_id),
          %Run{} = run <- Map.get(state.owners, key) do
       updated = fun.(run)
-      {:ok, put_owner(state, key, updated)}
+      {:ok, updated, put_owner(state, key, updated)}
     else
-      _ -> {:error, state}
+      _ -> {:error, run_id, state}
     end
   end
 
@@ -324,6 +392,16 @@ defmodule Nex.Agent.RunControl do
     put_in(state.cancelled_refs[cancel_ref], now_ms())
   end
 
+  defp remember_recent_run(state, %Run{} = run) do
+    put_in(state.recent_runs[run.id], %{
+      workspace: run.workspace,
+      session_key: run.session_key,
+      channel: run.channel,
+      chat_id: run.chat_id,
+      removed_at_ms: now_ms()
+    })
+  end
+
   defp prune_state(state) do
     cutoff = now_ms() - @cancel_ref_ttl_ms
 
@@ -336,7 +414,16 @@ defmodule Nex.Agent.RunControl do
         end
       end)
 
-    %{state | cancelled_refs: cancelled_refs}
+    recent_runs =
+      Enum.reduce(state.recent_runs, %{}, fn {run_id, meta}, acc ->
+        if Map.get(meta, :removed_at_ms, 0) >= cutoff do
+          Map.put(acc, run_id, meta)
+        else
+          acc
+        end
+      end)
+
+    %{state | cancelled_refs: cancelled_refs, recent_runs: recent_runs}
   end
 
   defp build_run(workspace, session_key, attrs) do
@@ -387,6 +474,162 @@ defmodule Nex.Agent.RunControl do
 
   defp truncate_tail(text) when byte_size(text) <= @tail_limit, do: text
   defp truncate_tail(text), do: binary_part(text, byte_size(text) - @tail_limit, @tail_limit)
+
+  defp refresh_owner_gauge(state, workspace) do
+    owners =
+      state.owners
+      |> Map.values()
+      |> Enum.filter(&(&1.workspace == workspace))
+      |> Enum.sort_by(& &1.started_at_ms)
+      |> Enum.map(&owner_gauge_entry/1)
+
+    _ =
+      Nex.Agent.ControlPlane.Gauge.set(
+        "run.owner.current",
+        %{"owners" => owners},
+        %{"source" => "run_control"},
+        workspace: workspace
+      )
+
+    :ok
+  rescue
+    e ->
+      Logger.warning("[RunControl] run.owner.current gauge failed: #{Exception.message(e)}")
+      :ok
+  end
+
+  defp owner_gauge_entry(%Run{} = run) do
+    %{
+      "run_id" => run.id,
+      "session_key" => run.session_key,
+      "channel" => run.channel,
+      "chat_id" => run.chat_id,
+      "status" => Atom.to_string(run.status),
+      "phase" => Atom.to_string(run.current_phase),
+      "current_tool" => run.current_tool,
+      "elapsed_ms" => max(now_ms() - run.started_at_ms, 0),
+      "queued_count" => run.queued_count,
+      "latest_assistant_partial_tail" => gauge_tail(run.latest_assistant_partial),
+      "latest_tool_output_tail" => gauge_tail(run.latest_tool_output_tail),
+      "updated_at" => ms_to_iso8601(run.updated_at_ms)
+    }
+    |> Redactor.redact()
+  end
+
+  defp gauge_tail(text) when is_binary(text) do
+    text =
+      if String.length(text) > @gauge_tail_limit do
+        String.slice(text, -@gauge_tail_limit, @gauge_tail_limit)
+      else
+        text
+      end
+
+    Redactor.redact(text)
+  end
+
+  defp gauge_tail(_text), do: ""
+
+  defp observe_run(tag, %Run{} = run, attrs) do
+    attrs =
+      attrs
+      |> Map.merge(%{
+        "elapsed_ms" => max(now_ms() - run.started_at_ms, 0),
+        "queued_count" => run.queued_count,
+        "current_tool" => run.current_tool
+      })
+      |> compact_attrs()
+
+    opts = [
+      workspace: run.workspace,
+      run_id: run.id,
+      session_key: run.session_key,
+      channel: run.channel,
+      chat_id: run.chat_id
+    ]
+
+    _ =
+      case tag do
+        "run.owner.failed" -> Nex.Agent.ControlPlane.Log.error(tag, attrs, opts)
+        "run.owner.cancelled" -> Nex.Agent.ControlPlane.Log.warning(tag, attrs, opts)
+        _ -> Nex.Agent.ControlPlane.Log.info(tag, attrs, opts)
+      end
+
+    :ok
+  rescue
+    e ->
+      Logger.warning("[RunControl] #{tag} observation failed: #{Exception.message(e)}")
+      :ok
+  end
+
+  defp observe_stale_result(state, run_id, operation) do
+    meta = Map.get(state.recent_runs, run_id, %{})
+
+    opts =
+      []
+      |> put_log_opt(:workspace, Map.get(meta, :workspace))
+      |> put_log_opt(:run_id, run_id)
+      |> put_log_opt(:session_key, Map.get(meta, :session_key))
+      |> put_log_opt(:channel, Map.get(meta, :channel))
+      |> put_log_opt(:chat_id, Map.get(meta, :chat_id))
+
+    _ =
+      Nex.Agent.ControlPlane.Log.warning(
+        "run.owner.stale_result",
+        %{"operation" => operation, "reason_type" => "stale_result"},
+        opts
+      )
+
+    :ok
+  rescue
+    e ->
+      Logger.warning(
+        "[RunControl] run.owner.stale_result observation failed: #{Exception.message(e)}"
+      )
+
+      :ok
+  end
+
+  defp run_update_attrs(%Run{} = run, update_type) do
+    %{
+      "update_type" => update_type,
+      "status" => Atom.to_string(run.status),
+      "phase" => Atom.to_string(run.current_phase),
+      "current_tool" => run.current_tool,
+      "queued_count" => run.queued_count
+    }
+    |> compact_attrs()
+  end
+
+  defp error_summary(reason) do
+    reason
+    |> inspect(limit: 20, printable_limit: 1000)
+    |> String.slice(0, 1000)
+  end
+
+  defp reason_type(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp reason_type(reason) when is_binary(reason), do: String.slice(reason, 0, 120)
+  defp reason_type({type, _detail}) when is_atom(type), do: Atom.to_string(type)
+  defp reason_type(%{__struct__: struct}), do: inspect(struct)
+  defp reason_type(_reason), do: "error"
+
+  defp compact_attrs(attrs) do
+    attrs
+    |> Enum.reject(fn {_key, value} -> value in [nil, ""] end)
+    |> Map.new()
+  end
+
+  defp put_log_opt(opts, _key, nil), do: opts
+  defp put_log_opt(opts, _key, ""), do: opts
+  defp put_log_opt(opts, key, value), do: Keyword.put(opts, key, value)
+
+  defp ms_to_iso8601(ms) when is_integer(ms) do
+    ms
+    |> DateTime.from_unix!(:millisecond)
+    |> DateTime.truncate(:second)
+    |> DateTime.to_iso8601()
+  rescue
+    _e -> Nex.Agent.ControlPlane.Store.timestamp()
+  end
 
   defp parse_session_key(session_key) do
     case String.split(session_key, ":", parts: 2) do

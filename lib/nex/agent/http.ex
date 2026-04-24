@@ -1,23 +1,28 @@
 defmodule Nex.Agent.HTTP do
   @moduledoc false
 
+  alias Nex.Agent.ControlPlane.Log, as: ControlPlaneLog
   alias Nex.Agent.RunControl
+  require ControlPlaneLog
 
   @type proxy_tuple :: {:http | :https, String.t(), :inet.port_number(), keyword()}
   @type req_method :: :get | :post | :put | :patch | :delete
 
   @default_req_opts [retry: false, receive_timeout: 30_000, finch: Req.Finch]
+  @internal_opts [:cancel_ref, :observe_context, :observe_attrs]
   @cancel_poll_ms 50
 
   @spec request(req_method(), String.t(), keyword()) :: {:ok, term()} | {:error, term()}
   def request(method, url, opts \\ []) when method in [:get, :post, :put, :patch, :delete] do
+    {internal_opts, opts} = Keyword.split(opts, @internal_opts)
+
     opts =
       @default_req_opts
       |> Keyword.merge(opts)
       |> maybe_add_proxy(url)
       |> normalize_req_transport_opts()
 
-    run_request(request_fun(method), url, opts)
+    run_request(method, request_fun(method), url, opts, internal_opts)
   end
 
   @spec get(String.t(), keyword()) :: {:ok, term()} | {:error, term()}
@@ -54,12 +59,31 @@ defmodule Nex.Agent.HTTP do
       end
   end
 
-  defp run_request(request_fun, url, opts) do
+  defp run_request(method, request_fun, url, opts, internal_opts) do
     timeout = Keyword.get(opts, :receive_timeout, 30_000)
-    cancel_ref = Keyword.get(opts, :cancel_ref)
-    task = Task.async(fn -> request_fun.(url, opts) end)
+    cancel_ref = Keyword.get(internal_opts, :cancel_ref)
+    observe_opts = observe_opts(internal_opts)
+    started_at = System.monotonic_time(:millisecond)
+    base_attrs = http_attrs(method, url, internal_opts)
+    emit_observation(:info, "http.request.started", base_attrs, observe_opts)
 
-    wait_request(task, timeout, cancel_ref, System.monotonic_time(:millisecond))
+    task =
+      Task.async(fn ->
+        try do
+          request_fun.(url, opts)
+        rescue
+          e ->
+            {:error, {:exception, exception_class(e), Exception.message(e)}}
+        catch
+          kind, reason ->
+            {:error, {:exception, to_string(kind), inspect(reason)}}
+        end
+      end)
+
+    result = wait_request(task, timeout, cancel_ref, started_at)
+    duration_ms = duration_since(started_at)
+    emit_request_result(result, base_attrs, duration_ms, observe_opts)
+    result
   end
 
   defp wait_request(task, timeout_ms, cancel_ref, started_at_ms) do
@@ -79,6 +103,9 @@ defmodule Nex.Agent.HTTP do
           {:ok, result} ->
             result
 
+          {:exit, reason} ->
+            {:error, {:exception, "exit", inspect(reason)}}
+
           nil ->
             wait_request(task, timeout_ms, cancel_ref, started_at_ms)
         end
@@ -87,6 +114,142 @@ defmodule Nex.Agent.HTTP do
 
   defp cancelled?(ref) when is_reference(ref), do: RunControl.cancelled?(ref)
   defp cancelled?(_ref), do: false
+
+  defp emit_request_result({:ok, response} = _result, attrs, duration_ms, opts) do
+    attrs =
+      attrs
+      |> Map.put("duration_ms", duration_ms)
+      |> maybe_put_attr("status", response_status(response))
+
+    emit_observation(:info, "http.request.finished", attrs, opts)
+  end
+
+  defp emit_request_result({:error, :timeout}, attrs, duration_ms, opts) do
+    attrs =
+      attrs
+      |> Map.put("duration_ms", duration_ms)
+      |> Map.put("reason_type", "timeout")
+      |> Map.put("retryable", true)
+
+    emit_observation(:error, "http.request.timeout", attrs, opts)
+  end
+
+  defp emit_request_result({:error, :cancelled}, attrs, duration_ms, opts) do
+    attrs =
+      attrs
+      |> Map.put("duration_ms", duration_ms)
+      |> Map.put("reason_type", "cancelled")
+      |> Map.put("retryable", false)
+      |> Map.put("cancelled", true)
+
+    emit_observation(:warning, "http.request.cancelled", attrs, opts)
+  end
+
+  defp emit_request_result({:error, {:exception, class, _message}}, attrs, duration_ms, opts) do
+    attrs =
+      attrs
+      |> Map.put("duration_ms", duration_ms)
+      |> Map.put("reason_type", class)
+      |> Map.put("retryable", false)
+
+    emit_observation(:error, "http.request.failed", attrs, opts)
+  end
+
+  defp emit_request_result({:error, reason}, attrs, duration_ms, opts) do
+    attrs =
+      attrs
+      |> Map.put("duration_ms", duration_ms)
+      |> Map.put("reason_type", reason_type(reason))
+      |> Map.put("retryable", retryable_reason?(reason))
+
+    emit_observation(:error, "http.request.failed", attrs, opts)
+  end
+
+  defp emit_request_result(_other, attrs, duration_ms, opts) do
+    attrs =
+      attrs
+      |> Map.put("duration_ms", duration_ms)
+      |> Map.put("reason_type", "unexpected_result")
+      |> Map.put("retryable", false)
+
+    emit_observation(:error, "http.request.failed", attrs, opts)
+  end
+
+  defp observe_opts(internal_opts) do
+    context = Keyword.get(internal_opts, :observe_context, %{})
+
+    []
+    |> maybe_put_opt(:workspace, Map.get(context, :workspace) || Map.get(context, "workspace"))
+    |> maybe_put_opt(:run_id, Map.get(context, :run_id) || Map.get(context, "run_id"))
+    |> maybe_put_opt(
+      :session_key,
+      Map.get(context, :session_key) || Map.get(context, "session_key")
+    )
+    |> maybe_put_opt(:channel, Map.get(context, :channel) || Map.get(context, "channel"))
+    |> maybe_put_opt(:chat_id, Map.get(context, :chat_id) || Map.get(context, "chat_id"))
+    |> maybe_put_opt(
+      :tool_call_id,
+      Map.get(context, :tool_call_id) || Map.get(context, "tool_call_id")
+    )
+    |> maybe_put_opt(:trace_id, Map.get(context, :trace_id) || Map.get(context, "trace_id"))
+  end
+
+  defp http_attrs(method, url, internal_opts) do
+    uri = URI.parse(url)
+
+    %{
+      "method" => Atom.to_string(method),
+      "scheme" => uri.scheme,
+      "host" => uri.host,
+      "path" => uri.path || "/"
+    }
+    |> Map.merge(Keyword.get(internal_opts, :observe_attrs, %{}) |> stringify_keys())
+    |> Map.take(~w(method scheme host path status duration_ms reason_type retryable cancelled))
+    |> Enum.reject(fn {_key, value} -> value in [nil, ""] end)
+    |> Map.new()
+  end
+
+  defp emit_observation(level, tag, attrs, opts) do
+    case level do
+      :info -> ControlPlaneLog.info(tag, attrs, opts)
+      :warning -> ControlPlaneLog.warning(tag, attrs, opts)
+      :error -> ControlPlaneLog.error(tag, attrs, opts)
+    end
+
+    :ok
+  rescue
+    _e -> :ok
+  end
+
+  defp response_status(%{status: status}) when is_integer(status), do: status
+  defp response_status(%{"status" => status}) when is_integer(status), do: status
+  defp response_status(_response), do: nil
+
+  defp reason_type(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp reason_type({type, _detail}) when is_atom(type), do: Atom.to_string(type)
+  defp reason_type(%{__struct__: struct}), do: struct |> Module.split() |> List.last()
+  defp reason_type(reason) when is_binary(reason), do: String.slice(reason, 0, 120)
+  defp reason_type(_reason), do: "error"
+
+  defp retryable_reason?(reason) when reason in [:timeout, :closed, :econnreset], do: true
+  defp retryable_reason?(_reason), do: false
+
+  defp exception_class(%{__struct__: struct}), do: inspect(struct)
+  defp exception_class(_), do: "Exception"
+
+  defp duration_since(started_at), do: System.monotonic_time(:millisecond) - started_at
+
+  defp maybe_put_attr(map, _key, nil), do: map
+  defp maybe_put_attr(map, key, value), do: Map.put(map, key, value)
+
+  defp maybe_put_opt(opts, _key, nil), do: opts
+  defp maybe_put_opt(opts, key, value), do: Keyword.put(opts, key, value)
+
+  defp stringify_keys(map) when is_map(map) do
+    Map.new(map, fn {key, value} -> {to_string(key), value} end)
+  end
+
+  defp stringify_keys(_), do: %{}
 
   @spec maybe_add_proxy(Keyword.t(), String.t() | URI.t()) :: Keyword.t()
   def maybe_add_proxy(opts, url_or_uri) do

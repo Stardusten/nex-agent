@@ -2,6 +2,7 @@ defmodule Nex.Agent.HTTPTest do
   use ExUnit.Case, async: false
 
   alias Nex.Agent.{HTTP, RunControl}
+  alias Nex.Agent.ControlPlane.Query, as: ControlPlaneQuery
 
   @proxy_keys [
     "HTTP_PROXY",
@@ -121,7 +122,9 @@ defmodule Nex.Agent.HTTPTest do
 
     try do
       assert {:ok, %{status: 204}} =
-               HTTP.request(:put, "https://discord.com/api/v10/channels/1/messages/2", headers: [])
+               HTTP.request(:put, "https://discord.com/api/v10/channels/1/messages/2",
+                 headers: []
+               )
 
       assert_receive {:req_put, "https://discord.com/api/v10/channels/1/messages/2", opts}
       assert opts[:connect_options][:proxy] == {:http, "127.0.0.1", 7890, []}
@@ -139,7 +142,9 @@ defmodule Nex.Agent.HTTPTest do
       start_supervised!({RunControl, name: RunControl})
     end
 
-    workspace = Path.join(System.tmp_dir!(), "nex-agent-http-cancel-#{System.unique_integer([:positive])}")
+    workspace =
+      Path.join(System.tmp_dir!(), "nex-agent-http-cancel-#{System.unique_integer([:positive])}")
+
     session_key = "feishu:chat-http-cancel"
 
     assert {:ok, run} = RunControl.start_owner(workspace, session_key, %{})
@@ -147,8 +152,8 @@ defmodule Nex.Agent.HTTPTest do
     me = self()
     old_get = Application.get_env(:nex_agent, :http_test_req_get)
 
-    Application.put_env(:nex_agent, :http_test_req_get, fn _url, _opts ->
-      send(me, :http_req_started)
+    Application.put_env(:nex_agent, :http_test_req_get, fn _url, opts ->
+      send(me, {:http_req_started, opts})
       Process.sleep(5_000)
       {:ok, %{status: 200, body: "late"}}
     end)
@@ -166,8 +171,11 @@ defmodule Nex.Agent.HTTPTest do
           result
         end)
 
-      assert_receive :http_req_started, 1_000
-      assert {:ok, %{cancelled?: true, run_id: _run_id}} = RunControl.cancel_owner(workspace, session_key, :user_stop)
+      assert_receive {:http_req_started, req_opts}, 1_000
+      refute Keyword.has_key?(req_opts, :cancel_ref)
+
+      assert {:ok, %{cancelled?: true, run_id: _run_id}} =
+               RunControl.cancel_owner(workspace, session_key, :user_stop)
 
       assert_receive {:http_cancel_result, {:error, :cancelled}}, 2_000
       Task.shutdown(task, :brutal_kill)
@@ -176,6 +184,88 @@ defmodule Nex.Agent.HTTPTest do
         nil -> Application.delete_env(:nex_agent, :http_test_req_get)
         value -> Application.put_env(:nex_agent, :http_test_req_get, value)
       end
+    end
+  end
+
+  test "request/3 records lifecycle observations without leaking query or internal opts" do
+    workspace =
+      Path.join(
+        System.tmp_dir!(),
+        "nex-agent-http-observe-#{System.unique_integer([:positive])}"
+      )
+
+    me = self()
+    old_get = Application.get_env(:nex_agent, :http_test_req_get)
+
+    Application.put_env(:nex_agent, :http_test_req_get, fn url, opts ->
+      send(me, {:req_get, url, opts})
+      {:ok, %{status: 202, body: "ok"}}
+    end)
+
+    try do
+      assert {:ok, %{status: 202}} =
+               HTTP.get("https://example.com/path?token=secret",
+                 cancel_ref: make_ref(),
+                 observe_context: %{workspace: workspace, run_id: "run_http"}
+               )
+
+      assert_receive {:req_get, _url, opts}
+      refute Keyword.has_key?(opts, :cancel_ref)
+      refute Keyword.has_key?(opts, :observe_context)
+
+      assert [started] =
+               ControlPlaneQuery.query(%{"tag" => "http.request.started"}, workspace: workspace)
+
+      assert started["context"]["run_id"] == "run_http"
+      assert started["attrs"]["host"] == "example.com"
+      assert started["attrs"]["path"] == "/path"
+      refute inspect(started) =~ "token=secret"
+
+      assert [finished] =
+               ControlPlaneQuery.query(%{"tag" => "http.request.finished"}, workspace: workspace)
+
+      assert finished["attrs"]["status"] == 202
+    after
+      case old_get do
+        nil -> Application.delete_env(:nex_agent, :http_test_req_get)
+        value -> Application.put_env(:nex_agent, :http_test_req_get, value)
+      end
+
+      File.rm_rf!(workspace)
+    end
+  end
+
+  test "request/3 converts request task exceptions into structured errors and observations" do
+    workspace =
+      Path.join(
+        System.tmp_dir!(),
+        "nex-agent-http-exception-#{System.unique_integer([:positive])}"
+      )
+
+    old_get = Application.get_env(:nex_agent, :http_test_req_get)
+
+    Application.put_env(:nex_agent, :http_test_req_get, fn _url, _opts ->
+      raise ArgumentError, "boom"
+    end)
+
+    try do
+      assert {:error, {:exception, "ArgumentError", "boom"}} =
+               HTTP.get("https://example.com/fail",
+                 observe_context: %{workspace: workspace, run_id: "run_http_exception"}
+               )
+
+      assert [failed] =
+               ControlPlaneQuery.query(%{"tag" => "http.request.failed"}, workspace: workspace)
+
+      assert failed["context"]["run_id"] == "run_http_exception"
+      assert failed["attrs"]["reason_type"] == "ArgumentError"
+    after
+      case old_get do
+        nil -> Application.delete_env(:nex_agent, :http_test_req_get)
+        value -> Application.put_env(:nex_agent, :http_test_req_get, value)
+      end
+
+      File.rm_rf!(workspace)
     end
   end
 end

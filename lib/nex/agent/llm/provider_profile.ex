@@ -93,6 +93,8 @@ defmodule Nex.Agent.LLM.ProviderProfile do
   end
 
   defp call_adapter(adapter, function, args) do
+    Code.ensure_loaded(adapter)
+
     if function_exported?(adapter, function, length(args)) do
       apply(adapter, function, args)
     else

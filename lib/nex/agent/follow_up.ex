@@ -13,6 +13,7 @@ defmodule Nex.Agent.FollowUp do
                    "executor_status",
                    "find",
                    "memory_status",
+                   "observe",
                    "read",
                    "skill_discover",
                    "skill_get",
@@ -42,8 +43,18 @@ defmodule Nex.Agent.FollowUp do
     - Keep the reply concise and directly answer the user's side question.
     - Only use tools exposed in this turn. They are read-only except a possible interrupt tool.
     - Use the interrupt tool only when the user clearly asks to stop, cancel, abort, or switch away from the current owner task.
+    - For questions about errors, failures, stuck progress, backend state, logs, status, or incidents, use `observe` before answering unless the user only asks to stop or cancel.
+    - Do not infer that there are no errors from the owner snapshot alone; check ControlPlane evidence first.
 
     Session mode: #{mode}
+    Workspace: #{Keyword.get(opts, :workspace, run.workspace)}
+    Session key: #{Keyword.get(opts, :session_key, run.session_key)}
+    Owner run id: #{run.id}
+
+    Recommended observe filters:
+    - `observe` action `summary` for current workspace gauges and recent warnings.
+    - `observe` action `incident` with `run_id: "#{run.id}"` for current run failures.
+    - `observe` action `query` with `session_key: "#{run.session_key}"` for session evidence.
 
     Owner snapshot:
     #{render_status(run)}
@@ -65,8 +76,16 @@ defmodule Nex.Agent.FollowUp do
     - Answer the user's question directly and concisely.
     - Do not invent hidden state or claim a task is still running.
     - Only use tools exposed in this turn.
+    - For questions about errors, failures, backend state, logs, status, or incidents, use `observe` before answering.
+    - `observe summary` may show recent workspace/session evidence, but do not invent an active owner run when the snapshot is idle.
 
     Session mode: #{mode}
+    Workspace: #{Keyword.get(opts, :workspace, "-")}
+    Session key: #{Keyword.get(opts, :session_key, "-")}
+
+    Recommended observe filters:
+    - `observe` action `summary` for current workspace gauges and recent warnings.
+    - `observe` action `query` with `session_key: "#{Keyword.get(opts, :session_key, "-")}"` for session evidence.
 
     User follow-up question:
     #{String.trim(question)}

@@ -46,7 +46,7 @@ defmodule Nex.Agent.Tool.WebFetch do
 
   def execute(%{"url" => url}, opts) do
     if valid_url?(url) do
-      do_fetch(url, request_fun(opts), cancel_ref(opts))
+      do_fetch(url, request_fun(opts), cancel_ref(opts), observe_context(opts))
     else
       {:ok, %{error: "Invalid URL: #{url}"}}
     end
@@ -59,7 +59,7 @@ defmodule Nex.Agent.Tool.WebFetch do
     end
   end
 
-  defp do_fetch(url, http_get, cancel_ref) do
+  defp do_fetch(url, http_get, cancel_ref, observe_context) do
     headers = [
       {"User-Agent", @user_agent},
       {"Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"},
@@ -69,6 +69,7 @@ defmodule Nex.Agent.Tool.WebFetch do
     req_opts =
       [headers: headers, max_redirects: 5, receive_timeout: 30_000]
       |> maybe_put_cancel_ref(cancel_ref)
+      |> maybe_put_observe_context(observe_context)
       |> HTTP.maybe_add_proxy(url)
 
     case http_get.(url, req_opts) do
@@ -102,6 +103,15 @@ defmodule Nex.Agent.Tool.WebFetch do
   defp cancel_ref(_opts), do: nil
   defp maybe_put_cancel_ref(opts, nil), do: opts
   defp maybe_put_cancel_ref(opts, cancel_ref), do: Keyword.put(opts, :cancel_ref, cancel_ref)
+
+  defp observe_context(opts) when is_map(opts) do
+    Map.take(opts, [:workspace, :run_id, :session_key, :channel, :chat_id, :tool_call_id])
+  end
+
+  defp observe_context(_opts), do: %{}
+
+  defp maybe_put_observe_context(opts, context) when context == %{}, do: opts
+  defp maybe_put_observe_context(opts, context), do: Keyword.put(opts, :observe_context, context)
 
   defp ensure_text_body(response, body) when is_binary(body) do
     content_type = response_content_type(response)

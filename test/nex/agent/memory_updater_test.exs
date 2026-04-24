@@ -2,6 +2,7 @@ defmodule Nex.Agent.MemoryUpdaterTest do
   use ExUnit.Case, async: false
 
   alias Nex.Agent.{Memory, MemoryUpdater, Session, SessionManager, Skills}
+  alias Nex.Agent.ControlPlane.Query
 
   setup do
     workspace =
@@ -83,6 +84,39 @@ defmodule Nex.Agent.MemoryUpdaterTest do
     memory = Memory.read_long_term(workspace: workspace)
     assert memory =~ "Learned alpha."
     assert memory =~ "Learned beta."
+  end
+
+  test "records refresh job completion in ControlPlane", %{workspace: workspace} do
+    session =
+      %{
+        Session.new("session:control-plane")
+        | messages: build_messages("control-plane"),
+          metadata: %{
+            "memory_refresh_llm_call_fun" =>
+              fn _messages, _opts ->
+                {:ok,
+                 %{
+                   "status" => "update",
+                   "memory_update" =>
+                     "# Long-term Memory\n\n## Workflow Lessons\n- Captured by control plane.\n"
+                 }}
+              end
+          }
+      }
+
+    MemoryUpdater.enqueue(session, workspace: workspace)
+
+    wait_for(fn ->
+      MemoryUpdater.status("session:control-plane", workspace: workspace)["status"] == "idle"
+    end)
+
+    assert [
+             %{
+               "tag" => "memory.refresh.job.finished",
+               "context" => %{"session_key" => "session:control-plane"},
+               "attrs_summary" => %{"result_status" => "ok", "status" => "updated"}
+             }
+           ] = Query.recent_events(workspace: workspace, tag_prefix: "memory.refresh.job.")
   end
 
   defp start_or_restart_supervised!(child_spec) do

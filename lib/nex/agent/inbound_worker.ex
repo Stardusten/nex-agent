@@ -7,8 +7,20 @@ defmodule Nex.Agent.InboundWorker do
 
   use GenServer
   require Logger
+  require Nex.Agent.ControlPlane.Log
 
-  alias Nex.Agent.{Bus, Command, Config, FollowUp, MemoryUpdater, Outbound, RunControl, Runtime, Workspace}
+  alias Nex.Agent.{
+    Bus,
+    Command,
+    Config,
+    FollowUp,
+    MemoryUpdater,
+    Outbound,
+    RunControl,
+    Runtime,
+    Workspace
+  }
+
   alias Nex.Agent.Command.Invocation
   alias Nex.Agent.Channel.Discord
   alias Nex.Agent.Channel.Discord.StreamConverter, as: DiscordStreamConverter
@@ -16,6 +28,7 @@ defmodule Nex.Agent.InboundWorker do
   alias Nex.Agent.Channel.Feishu
   alias Nex.Agent.Channel.Feishu.StreamConverter
   alias Nex.Agent.Channel.Feishu.StreamState, as: FeishuStreamState
+  alias Nex.Agent.ControlPlane.{Query, Redactor}
   alias Nex.Agent.Inbound.Envelope
   alias Nex.Agent.Runtime.Snapshot
   alias Nex.Agent.Stream.Result
@@ -154,10 +167,19 @@ defmodule Nex.Agent.InboundWorker do
     from_subagent = Map.get(payload.metadata, "_from_subagent") == true
 
     if current_owner_run?(state, key, run_id) and RunControl.finish_owner(run_id, result) == :ok do
+      observe_owner_dispatch(
+        "inbound.owner.dispatch.finished",
+        :info,
+        payload,
+        run_id,
+        %{"result_status" => "ok"}
+      )
+
       state =
         if from_cron, do: state, else: put_in(state.agents[key], updated_agent)
 
       state = clear_active_task(state, key, run_id)
+
       {state, handled_by_stream?} =
         finalize_stream_session(state, stream_key(key, run_id), {:ok, result})
 
@@ -186,7 +208,10 @@ defmodule Nex.Agent.InboundWorker do
 
       {:noreply, maybe_drain_pending(state, key)}
     else
-      Logger.info("[InboundWorker] Dropping stale async success for #{inspect(key)} run_id=#{run_id}")
+      Logger.info(
+        "[InboundWorker] Dropping stale async success for #{inspect(key)} run_id=#{run_id}"
+      )
+
       {:noreply, drop_stream_state(state, stream_key(key, run_id))}
     end
   end
@@ -197,6 +222,14 @@ defmodule Nex.Agent.InboundWorker do
     from_subagent = Map.get(payload.metadata, "_from_subagent") == true
 
     if current_owner_run?(state, key, run_id) and RunControl.fail_owner(run_id, reason) == :ok do
+      observe_owner_dispatch(
+        "inbound.owner.dispatch.failed",
+        :error,
+        payload,
+        run_id,
+        error_attrs(reason)
+      )
+
       state =
         if from_cron, do: state, else: put_in(state.agents[key], updated_agent)
 
@@ -204,7 +237,11 @@ defmodule Nex.Agent.InboundWorker do
       formatted_reason = streaming_error_message(reason)
 
       {state, handled_by_stream?} =
-        finalize_stream_session(state, stream_key(key, run_id), {:error, formatted_reason, reason})
+        finalize_stream_session(
+          state,
+          stream_key(key, run_id),
+          {:error, formatted_reason, reason}
+        )
 
       unless from_cron or handled_by_stream? or suppress_outbound?(reason) do
         publish_outbound(payload, "Error: #{formatted_reason}")
@@ -222,7 +259,10 @@ defmodule Nex.Agent.InboundWorker do
 
       {:noreply, maybe_drain_pending(state, key)}
     else
-      Logger.info("[InboundWorker] Dropping stale async error for #{inspect(key)} run_id=#{run_id}")
+      Logger.info(
+        "[InboundWorker] Dropping stale async error for #{inspect(key)} run_id=#{run_id}"
+      )
+
       {:noreply, drop_stream_state(state, stream_key(key, run_id))}
     end
   end
@@ -230,11 +270,23 @@ defmodule Nex.Agent.InboundWorker do
   @impl true
   def handle_info({:async_result, key, run_id, {:error, reason}, payload}, state) do
     if current_owner_run?(state, key, run_id) and RunControl.fail_owner(run_id, reason) == :ok do
+      observe_owner_dispatch(
+        "inbound.owner.dispatch.failed",
+        :error,
+        payload,
+        run_id,
+        error_attrs(reason)
+      )
+
       state = clear_active_task(state, key, run_id)
       formatted_reason = streaming_error_message(reason)
 
       {state, handled_by_stream?} =
-        finalize_stream_session(state, stream_key(key, run_id), {:error, formatted_reason, reason})
+        finalize_stream_session(
+          state,
+          stream_key(key, run_id),
+          {:error, formatted_reason, reason}
+        )
 
       unless handled_by_stream? or suppress_outbound?(reason) do
         publish_outbound(payload, "Error: #{formatted_reason}")
@@ -244,7 +296,10 @@ defmodule Nex.Agent.InboundWorker do
 
       {:noreply, maybe_drain_pending(state, key)}
     else
-      Logger.info("[InboundWorker] Dropping stale async failure for #{inspect(key)} run_id=#{run_id}")
+      Logger.info(
+        "[InboundWorker] Dropping stale async failure for #{inspect(key)} run_id=#{run_id}"
+      )
+
       {:noreply, drop_stream_state(state, stream_key(key, run_id))}
     end
   end
@@ -255,6 +310,10 @@ defmodule Nex.Agent.InboundWorker do
 
     case result do
       {:ok, response, updated_agent} ->
+        observe_follow_up("inbound.follow_up.finished", :info, payload, %{
+          "result_status" => "ok"
+        })
+
         state = maybe_store_follow_up_agent(state, payload, updated_agent)
 
         unless suppress_outbound?(response) and empty_content?(response) do
@@ -264,11 +323,13 @@ defmodule Nex.Agent.InboundWorker do
         {:noreply, state}
 
       {:error, reason, updated_agent} ->
+        observe_follow_up("inbound.follow_up.failed", :error, payload, error_attrs(reason))
         state = maybe_store_follow_up_agent(state, payload, updated_agent)
         maybe_publish_follow_up_error(payload, reason)
         {:noreply, state}
 
       {:error, reason} ->
+        observe_follow_up("inbound.follow_up.failed", :error, payload, error_attrs(reason))
         maybe_publish_follow_up_error(payload, reason)
         {:noreply, state}
     end
@@ -277,7 +338,8 @@ defmodule Nex.Agent.InboundWorker do
   @impl true
   def handle_info({:check_timeout, key, pid}, state) do
     if active_task_pid(state, key) == pid and Process.alive?(pid) do
-      Logger.warning("[InboundWorker] Task #{key} timed out after 10 minutes, killing")
+      Logger.warning("[InboundWorker] Task #{inspect(key)} timed out after 10 minutes, killing")
+      observe_owner_timeout(state, key)
       Process.exit(pid, :kill)
     end
 
@@ -288,16 +350,27 @@ defmodule Nex.Agent.InboundWorker do
   def handle_info({:DOWN, _ref, :process, pid, reason}, state) do
     cond do
       match = find_follow_up_by_pid(state, pid) ->
-        {key, _entry} = match
+        {key, entry} = match
+
         if reason != :normal and reason != :killed do
-          Logger.warning("[InboundWorker] Follow-up task #{inspect(pid)} exited: #{inspect(reason)}")
+          Logger.warning(
+            "[InboundWorker] Follow-up task #{inspect(pid)} exited: #{inspect(reason)}"
+          )
+
+          observe_follow_up_exit(key, entry, reason)
         end
+
         {:noreply, %{state | active_follow_ups: Map.delete(state.active_follow_ups, key)}}
 
       match = find_active_task_by_pid(state, pid) ->
         {key, %{run_id: run_id, workspace: workspace, session_key: session_key}} = match
+
         if reason != :normal and reason != :killed do
-          Logger.warning("[InboundWorker] Task process #{inspect(pid)} crashed: #{inspect(reason)}")
+          Logger.warning(
+            "[InboundWorker] Task process #{inspect(pid)} crashed: #{inspect(reason)}"
+          )
+
+          observe_owner_process_exit(workspace, session_key, run_id, reason)
         end
 
         _ =
@@ -441,11 +514,19 @@ defmodule Nex.Agent.InboundWorker do
   @impl true
   def handle_info({:discord_thinking_tick, key}, state) do
     case Map.fetch(state.stream_states, key) do
-      {:ok, {:discord, %DiscordStreamState{converter: %{placeholder: true} = converter} = discord_state}} ->
+      {:ok,
+       {:discord,
+        %DiscordStreamState{converter: %{placeholder: true} = converter} = discord_state}} ->
         case DiscordStreamConverter.update_thinking_timer(converter) do
           {:ok, updated_converter} ->
             timer_ref = Process.send_after(self(), {:discord_thinking_tick, key}, 1_000)
-            updated = %{discord_state | converter: updated_converter, thinking_timer_ref: timer_ref}
+
+            updated = %{
+              discord_state
+              | converter: updated_converter,
+                thinking_timer_ref: timer_ref
+            }
+
             {:noreply, put_in(state.stream_states[key], {:discord, updated})}
         end
 
@@ -465,6 +546,8 @@ defmodule Nex.Agent.InboundWorker do
     content = normalize_inbound_content(envelope.text)
     cmd = String.trim(content)
     key = runtime_key(workspace, session_key)
+
+    observe_inbound_received(envelope, workspace, session_key, content)
 
     Logger.info(
       "InboundWorker received channel=#{channel} chat_id=#{chat_id} workspace=#{workspace} cmd=#{inspect(cmd)}"
@@ -538,6 +621,16 @@ defmodule Nex.Agent.InboundWorker do
     state = %{state | pending_queue: Map.delete(state.pending_queue, key)}
     state = update_queue_count(state, key, 0)
 
+    observe_queue_changed(
+      workspace,
+      session_key,
+      envelope.channel,
+      envelope.chat_id,
+      "drop",
+      0,
+      dropped
+    )
+
     publish_outbound(
       envelope,
       "Stopped #{count} task(s)#{if dropped > 0, do: ", dropped #{dropped} queued message(s)", else: ""}."
@@ -553,15 +646,27 @@ defmodule Nex.Agent.InboundWorker do
   end
 
   defp handle_status_command(state, session_key, workspace, %Envelope{} = envelope) do
+    observe_status_requested(envelope, workspace, session_key)
+
     case RunControl.owner_snapshot(workspace, session_key) do
-      {:ok, run} -> publish_outbound(envelope, FollowUp.render_status(run))
-      {:error, :idle} -> publish_outbound(envelope, "Status: idle")
+      {:ok, run} ->
+        publish_outbound(envelope, FollowUp.render_status(run) <> "\n" <> status_evidence(run))
+
+      {:error, :idle} ->
+        publish_outbound(envelope, "Status: idle\n" <> status_evidence(workspace, session_key))
     end
 
     state
   end
 
-  defp handle_queue_command(state, key, session_key, workspace, %Invocation{} = invocation, %Envelope{} = envelope) do
+  defp handle_queue_command(
+         state,
+         key,
+         session_key,
+         workspace,
+         %Invocation{} = invocation,
+         %Envelope{} = envelope
+       ) do
     message = invocation.args |> Enum.join(" ") |> String.trim()
 
     if message == "" do
@@ -569,12 +674,24 @@ defmodule Nex.Agent.InboundWorker do
       state
     else
       queued_envelope = %{envelope | text: message}
+
       queue =
         state.pending_queue
         |> Map.get(key, :queue.new())
         |> then(&:queue.in({session_key, workspace, message, queued_envelope}, &1))
+
       state = %{state | pending_queue: Map.put(state.pending_queue, key, queue)}
       state = update_queue_count(state, key, :queue.len(queue))
+
+      observe_queue_changed(
+        workspace,
+        session_key,
+        envelope.channel,
+        envelope.chat_id,
+        "enqueue",
+        :queue.len(queue),
+        0
+      )
 
       unless task_running?(state, key) do
         send(self(), {:drain_queued_owner_run, key})
@@ -585,7 +702,13 @@ defmodule Nex.Agent.InboundWorker do
     end
   end
 
-  defp handle_btw_command(state, session_key, workspace, %Invocation{} = invocation, %Envelope{} = envelope) do
+  defp handle_btw_command(
+         state,
+         session_key,
+         workspace,
+         %Invocation{} = invocation,
+         %Envelope{} = envelope
+       ) do
     question = invocation.args |> Enum.join(" ") |> String.trim()
 
     cond do
@@ -620,9 +743,20 @@ defmodule Nex.Agent.InboundWorker do
       end
 
     mode = if owner_snapshot, do: :busy, else: :idle
-    prompt = FollowUp.prompt(owner_snapshot, question, mode: mode)
+
+    prompt =
+      FollowUp.prompt(owner_snapshot, question,
+        mode: mode,
+        workspace: workspace,
+        session_key: session_key
+      )
+
     parent = self()
     {channel, chat_id} = parse_session_key(session_key)
+
+    observe_follow_up("inbound.follow_up.started", :info, envelope, %{
+      "mode" => Atom.to_string(mode)
+    })
 
     {:ok, pid} =
       Task.Supervisor.start_child(Nex.Agent.TaskSupervisor, fn ->
@@ -631,28 +765,31 @@ defmodule Nex.Agent.InboundWorker do
             state.agent_prompt_fun,
             agent,
             prompt,
-            [
-              channel: channel,
-              chat_id: chat_id,
-              workspace: workspace,
-              skip_consolidation: true,
-              tools_filter: :follow_up,
-              schedule_memory_refresh: false,
-              skip_skills: true,
-              metadata:
-                (envelope.metadata || %{})
-                |> Map.new()
-                |> Map.put("_follow_up", true)
-                |> Map.put("follow_up_question", question)
-                |> Map.put("follow_up_mode", Atom.to_string(mode))
-            ]
+            channel: channel,
+            chat_id: chat_id,
+            workspace: workspace,
+            skip_consolidation: true,
+            tools_filter: :follow_up,
+            schedule_memory_refresh: false,
+            skip_skills: true,
+            metadata:
+              (envelope.metadata || %{})
+              |> Map.new()
+              |> Map.put("_follow_up", true)
+              |> Map.put("follow_up_question", question)
+              |> Map.put("follow_up_mode", Atom.to_string(mode))
           )
 
         send(parent, {:follow_up_result, key, self(), result, envelope})
       end)
 
     Process.monitor(pid)
-    put_in(state.active_follow_ups[key], %{pid: pid, workspace: workspace, session_key: session_key})
+
+    put_in(state.active_follow_ups[key], %{
+      pid: pid,
+      workspace: workspace,
+      session_key: session_key
+    })
   end
 
   defp dispatch_async(state, key, session_key, workspace, content, %Envelope{} = envelope) do
@@ -670,6 +807,11 @@ defmodule Nex.Agent.InboundWorker do
     {:ok, run} = start_owner_run(workspace, session_key, channel, chat_id)
     _ = RunControl.set_queued_count(run.id, queued_count(state, key))
     _ = RunControl.set_phase(run.id, :llm)
+
+    observe_owner_dispatch("inbound.owner.dispatch.started", :info, envelope, run.id, %{
+      "queued_count" => queued_count(state, key)
+    })
+
     {:ok, agent, state} = ensure_agent(state, key, session_key, workspace)
     parent = self()
     from_cron = get_in(envelope.metadata, ["_from_cron"]) == true
@@ -752,6 +894,7 @@ defmodule Nex.Agent.InboundWorker do
         if Process.whereis(Feishu) do
           trace_id = "feishu-stream-#{System.unique_integer([:positive])}"
           started_at_ms = System.monotonic_time(:millisecond)
+
           metadata =
             metadata
             |> Map.put("_feishu_stream_trace_id", trace_id)
@@ -767,8 +910,7 @@ defmodule Nex.Agent.InboundWorker do
 
           send(
             parent,
-            {:stream_state_started,
-             key,
+            {:stream_state_started, key,
              {:feishu,
               %FeishuStreamState{
                 converter: converter,
@@ -888,6 +1030,16 @@ defmodule Nex.Agent.InboundWorker do
             state = %{state | pending_queue: remaining}
             state = update_queue_count(state, key, :queue.len(rest))
 
+            observe_queue_changed(
+              workspace,
+              session_key,
+              envelope.channel,
+              envelope.chat_id,
+              "drain",
+              :queue.len(rest),
+              0
+            )
+
             Logger.info(
               "[InboundWorker] Draining queued message for #{inspect(key)} (remaining=#{:queue.len(rest)})"
             )
@@ -916,6 +1068,7 @@ defmodule Nex.Agent.InboundWorker do
 
   defp request_interrupt_impl(state, key, session_key, workspace, reason, requester_pid) do
     interrupted_run_id = current_run_id(state, key)
+
     follow_up_cancelled? =
       case Map.get(state.active_follow_ups, key) do
         %{pid: pid} when pid != requester_pid -> true
@@ -944,6 +1097,7 @@ defmodule Nex.Agent.InboundWorker do
 
     total_count = count + subagent_count + if(follow_up_cancelled?, do: 1, else: 0)
     reply = {:ok, %{cancelled?: total_count > 0, run_id: interrupted_run_id, count: total_count}}
+    observe_interrupt_requested(workspace, session_key, interrupted_run_id, reason, total_count)
     {reply, state}
   end
 
@@ -1041,7 +1195,8 @@ defmodule Nex.Agent.InboundWorker do
 
   defp runtime_command_definitions(workspace) do
     case runtime_snapshot_for_workspace(workspace) do
-      %Snapshot{commands: %{definitions: definitions}} when is_list(definitions) and definitions != [] ->
+      %Snapshot{commands: %{definitions: definitions}}
+      when is_list(definitions) and definitions != [] ->
         definitions
 
       _ ->
@@ -1262,12 +1417,18 @@ defmodule Nex.Agent.InboundWorker do
                 {%{state | stream_states: Map.delete(state.stream_states, key)}, true}
 
               {:error, reason} ->
-                Logger.warning("[InboundWorker] feishu stream finalize failed: #{inspect(reason)}")
+                Logger.warning(
+                  "[InboundWorker] feishu stream finalize failed: #{inspect(reason)}"
+                )
+
                 {%{state | stream_states: Map.delete(state.stream_states, key)}, true}
             end
 
           {:error, reason} ->
-            Logger.warning("[InboundWorker] feishu stream flush before finalize failed: #{inspect(reason)}")
+            Logger.warning(
+              "[InboundWorker] feishu stream flush before finalize failed: #{inspect(reason)}"
+            )
+
             {%{state | stream_states: Map.delete(state.stream_states, key)}, true}
         end
 
@@ -1313,12 +1474,18 @@ defmodule Nex.Agent.InboundWorker do
                 {%{state | stream_states: Map.delete(state.stream_states, key)}, true}
 
               {:error, reason} ->
-                Logger.warning("[InboundWorker] discord stream finalize failed: #{inspect(reason)}")
+                Logger.warning(
+                  "[InboundWorker] discord stream finalize failed: #{inspect(reason)}"
+                )
+
                 {%{state | stream_states: Map.delete(state.stream_states, key)}, true}
             end
 
           {:error, reason} ->
-            Logger.warning("[InboundWorker] discord stream flush before finalize failed: #{inspect(reason)}")
+            Logger.warning(
+              "[InboundWorker] discord stream flush before finalize failed: #{inspect(reason)}"
+            )
+
             {%{state | stream_states: Map.delete(state.stream_states, key)}, true}
         end
 
@@ -1331,20 +1498,267 @@ defmodule Nex.Agent.InboundWorker do
   defp normalize_inbound_content(nil), do: ""
   defp normalize_inbound_content(content), do: inspect(content, printable_limit: 500, limit: 50)
 
+  defp observe_inbound_received(%Envelope{} = envelope, workspace, session_key, content) do
+    observe_log(
+      :info,
+      "inbound.message.received",
+      %{
+        "message_type" => Atom.to_string(envelope.message_type || :unknown),
+        "message_preview" => preview_text(content),
+        "has_attachments" => envelope.attachments != [],
+        "media_ref_count" => length(envelope.media_refs || [])
+      },
+      workspace: workspace,
+      session_key: session_key,
+      channel: envelope.channel,
+      chat_id: payload_chat_id(envelope)
+    )
+  end
+
+  defp observe_owner_dispatch(tag, level, %Envelope{} = envelope, run_id, attrs) do
+    workspace = payload_workspace(envelope)
+    session_key = session_key(envelope.channel, payload_chat_id(envelope))
+
+    observe_log(
+      level,
+      tag,
+      attrs,
+      workspace: workspace,
+      run_id: run_id,
+      session_key: session_key,
+      channel: envelope.channel,
+      chat_id: payload_chat_id(envelope)
+    )
+  end
+
+  defp observe_owner_timeout(state, key) do
+    case Map.get(state.active_tasks, key) do
+      %{run_id: run_id, workspace: workspace, session_key: session_key} ->
+        {channel, chat_id} = parse_session_key(session_key)
+
+        observe_log(
+          :error,
+          "inbound.owner.dispatch.timeout",
+          %{"result_status" => "timeout", "reason_type" => "timeout"},
+          workspace: workspace,
+          run_id: run_id,
+          session_key: session_key,
+          channel: channel,
+          chat_id: chat_id
+        )
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp observe_owner_process_exit(workspace, session_key, run_id, reason) do
+    {channel, chat_id} = parse_session_key(session_key)
+
+    observe_log(
+      :error,
+      "inbound.owner.dispatch.failed",
+      error_attrs(reason),
+      workspace: workspace,
+      run_id: run_id,
+      session_key: session_key,
+      channel: channel,
+      chat_id: chat_id
+    )
+  end
+
+  defp observe_follow_up(tag, level, %Envelope{} = envelope, attrs) do
+    workspace = payload_workspace(envelope)
+    session_key = session_key(envelope.channel, payload_chat_id(envelope))
+
+    observe_log(
+      level,
+      tag,
+      attrs,
+      workspace: workspace,
+      session_key: session_key,
+      channel: envelope.channel,
+      chat_id: payload_chat_id(envelope)
+    )
+  end
+
+  defp observe_follow_up_exit(_key, %{workspace: workspace, session_key: session_key}, reason) do
+    {channel, chat_id} = parse_session_key(session_key)
+
+    observe_log(
+      :error,
+      "inbound.follow_up.failed",
+      error_attrs(reason),
+      workspace: workspace,
+      session_key: session_key,
+      channel: channel,
+      chat_id: chat_id
+    )
+  end
+
+  defp observe_queue_changed(
+         workspace,
+         session_key,
+         channel,
+         chat_id,
+         action,
+         queued_count,
+         dropped_count
+       ) do
+    observe_log(
+      :info,
+      "inbound.queue.changed",
+      %{
+        "action" => action,
+        "queued_count" => queued_count,
+        "dropped_count" => dropped_count
+      },
+      workspace: workspace,
+      session_key: session_key,
+      channel: channel,
+      chat_id: to_string(chat_id)
+    )
+  end
+
+  defp observe_interrupt_requested(workspace, session_key, run_id, reason, count) do
+    {channel, chat_id} = parse_session_key(session_key)
+
+    observe_log(
+      :warning,
+      "inbound.interrupt.requested",
+      %{
+        "run_id" => run_id,
+        "reason_type" => reason_type(reason),
+        "cancelled_count" => count
+      },
+      workspace: workspace,
+      run_id: run_id,
+      session_key: session_key,
+      channel: channel,
+      chat_id: chat_id
+    )
+  end
+
+  defp observe_status_requested(%Envelope{} = envelope, workspace, session_key) do
+    observe_log(
+      :info,
+      "inbound.status.requested",
+      %{},
+      workspace: workspace,
+      session_key: session_key,
+      channel: envelope.channel,
+      chat_id: payload_chat_id(envelope)
+    )
+  end
+
+  defp observe_log(level, tag, attrs, opts) do
+    attrs = attrs |> compact_attrs() |> Redactor.redact()
+
+    _ =
+      case level do
+        :error -> Nex.Agent.ControlPlane.Log.error(tag, attrs, opts)
+        :warning -> Nex.Agent.ControlPlane.Log.warning(tag, attrs, opts)
+        _ -> Nex.Agent.ControlPlane.Log.info(tag, attrs, opts)
+      end
+
+    :ok
+  rescue
+    e ->
+      Logger.warning("[InboundWorker] #{tag} observation failed: #{Exception.message(e)}")
+      :ok
+  end
+
+  defp status_evidence(%RunControl.Run{} = run) do
+    status_evidence(run.workspace, run.session_key, run.id)
+  end
+
+  defp status_evidence(workspace, session_key, run_id \\ nil) do
+    filters =
+      %{"session_key" => session_key, "limit" => 50}
+      |> maybe_put_filter("run_id", run_id)
+
+    warnings_or_errors =
+      filters
+      |> Query.query(workspace: workspace)
+      |> Enum.filter(&(&1["level"] in ["warning", "error", "critical"]))
+
+    latest = List.last(warnings_or_errors)
+
+    "Evidence: recent warnings/errors=#{length(warnings_or_errors)}" <>
+      latest_evidence_suffix(latest)
+  end
+
+  defp latest_evidence_suffix(nil), do: ""
+
+  defp latest_evidence_suffix(observation) do
+    tag = Map.get(observation, "tag", "unknown")
+
+    summary =
+      observation
+      |> get_in(["attrs", "summary"])
+      |> case do
+        value when is_binary(value) and value != "" -> value
+        _ -> get_in(observation, ["attrs", "reason_type"]) || "-"
+      end
+      |> to_string()
+      |> String.slice(0, 200)
+
+    " latest=#{tag}: #{summary}"
+  end
+
+  defp maybe_put_filter(filters, _key, nil), do: filters
+  defp maybe_put_filter(filters, key, value), do: Map.put(filters, key, value)
+
+  defp preview_text(text) when is_binary(text) do
+    text
+    |> String.trim()
+    |> String.slice(0, 200)
+    |> Redactor.redact()
+  end
+
+  defp preview_text(_text), do: ""
+
+  defp error_attrs(reason) do
+    %{
+      "result_status" => "error",
+      "reason_type" => reason_type(reason),
+      "summary" => format_reason(reason) |> String.slice(0, 1000)
+    }
+  end
+
+  defp reason_type(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp reason_type(reason) when is_binary(reason), do: String.slice(reason, 0, 120)
+  defp reason_type({type, _detail}) when is_atom(type), do: Atom.to_string(type)
+  defp reason_type(%{__struct__: struct}), do: inspect(struct)
+  defp reason_type(_reason), do: "error"
+
+  defp compact_attrs(attrs) do
+    attrs
+    |> Enum.reject(fn {_key, value} -> value in [nil, ""] end)
+    |> Map.new()
+  end
+
   defp payload_chat_id(%Envelope{} = payload) do
     payload.chat_id
     |> to_string()
   end
 
   defp maybe_store_follow_up_agent(state, %Envelope{} = payload, %Nex.Agent{} = updated_agent) do
-    key = runtime_key(payload_workspace(payload), session_key(payload.channel, payload_chat_id(payload)))
+    key =
+      runtime_key(
+        payload_workspace(payload),
+        session_key(payload.channel, payload_chat_id(payload))
+      )
+
     put_in(state.agents[key], %{updated_agent | workspace: payload_workspace(payload)})
   end
 
   defp maybe_store_follow_up_agent(state, _payload, _updated_agent), do: state
 
   defp payload_workspace(%Envelope{} = payload) do
-    workspace = Map.get(payload.metadata || %{}, "workspace") || Map.get(payload.metadata || %{}, :workspace)
+    workspace =
+      Map.get(payload.metadata || %{}, "workspace") ||
+        Map.get(payload.metadata || %{}, :workspace)
 
     if is_binary(workspace) and String.trim(workspace) != "" do
       Path.expand(workspace)
@@ -1445,7 +1859,11 @@ defmodule Nex.Agent.InboundWorker do
     if Process.whereis(Nex.Agent.Subagent), do: Nex.Agent.Subagent.cancel_by_owner_run(run_id)
 
     state =
-      case finalize_stream_session(state, stream_key(key, run_id), {:error, "Cancelled", :cancelled}) do
+      case finalize_stream_session(
+             state,
+             stream_key(key, run_id),
+             {:error, "Cancelled", :cancelled}
+           ) do
         {state, _handled?} -> state
       end
 
@@ -1518,11 +1936,17 @@ defmodule Nex.Agent.InboundWorker do
 
   defp schedule_feishu_flush(stream_state, _key), do: stream_state
 
-  defp cancel_feishu_flush(%FeishuStreamState{flush_timer_ref: nil} = stream_state), do: stream_state
+  defp cancel_feishu_flush(%FeishuStreamState{flush_timer_ref: nil} = stream_state),
+    do: stream_state
 
   defp cancel_feishu_flush(%FeishuStreamState{flush_timer_ref: ref} = stream_state) do
     Process.cancel_timer(ref)
-    feishu_stream_trace(stream_state, "cancel_flush pending_bytes=#{byte_size(stream_state.pending_text)}")
+
+    feishu_stream_trace(
+      stream_state,
+      "cancel_flush pending_bytes=#{byte_size(stream_state.pending_text)}"
+    )
+
     %{stream_state | flush_timer_ref: nil}
   end
 
@@ -1546,7 +1970,8 @@ defmodule Nex.Agent.InboundWorker do
           "flush_done active_card_id=#{inspect(updated_converter.active_card_id)} active_len=#{byte_size(updated_converter.active_text)}"
         )
 
-        {:ok, %{stream_state | converter: updated_converter, pending_text: "", flush_timer_ref: nil}}
+        {:ok,
+         %{stream_state | converter: updated_converter, pending_text: "", flush_timer_ref: nil}}
 
       {:error, reason} ->
         feishu_stream_trace(stream_state, "flush_error reason=#{inspect(reason)}")
@@ -1573,7 +1998,11 @@ defmodule Nex.Agent.InboundWorker do
   end
 
   defp apply_feishu_stream_event(stream_state, _key, :finish) do
-    feishu_stream_trace(stream_state, "finish_event pending_bytes=#{byte_size(stream_state.pending_text)}")
+    feishu_stream_trace(
+      stream_state,
+      "finish_event pending_bytes=#{byte_size(stream_state.pending_text)}"
+    )
+
     flush_feishu_stream(cancel_feishu_flush(stream_state))
   end
 
@@ -1638,7 +2067,8 @@ defmodule Nex.Agent.InboundWorker do
 
   defp schedule_discord_flush(discord_state, _key), do: discord_state
 
-  defp cancel_discord_flush(%DiscordStreamState{flush_timer_ref: nil} = discord_state), do: discord_state
+  defp cancel_discord_flush(%DiscordStreamState{flush_timer_ref: nil} = discord_state),
+    do: discord_state
 
   defp cancel_discord_flush(%DiscordStreamState{flush_timer_ref: ref} = discord_state) do
     Process.cancel_timer(ref)
@@ -1656,10 +2086,18 @@ defmodule Nex.Agent.InboundWorker do
     {:ok, %{discord_state | flush_timer_ref: nil}}
   end
 
-  defp flush_discord_converter(%DiscordStreamState{converter: converter, pending_text: pending_text} = discord_state) do
+  defp flush_discord_converter(
+         %DiscordStreamState{converter: converter, pending_text: pending_text} = discord_state
+       ) do
     case DiscordStreamConverter.push_text(converter, pending_text) do
       {:ok, updated_converter} ->
-        discord_state = %{discord_state | converter: updated_converter, pending_text: "", flush_timer_ref: nil}
+        discord_state = %{
+          discord_state
+          | converter: updated_converter,
+            pending_text: "",
+            flush_timer_ref: nil
+        }
+
         # Cancel thinking timer once real text has been pushed (placeholder replaced)
         discord_state =
           if not updated_converter.placeholder do

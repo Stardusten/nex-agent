@@ -6,9 +6,9 @@ defmodule Nex.Agent.Memory do
   - `memory/MEMORY.md` for durable long-term facts
   """
 
-  require Logger
-
-  alias Nex.Agent.{Config, Workspace}
+  alias Nex.Agent.{Config, Evolution, Workspace}
+  alias Nex.Agent.ControlPlane.Log
+  require Log
 
   @empty_memory_context "(empty)"
   @raw_archive_failure_threshold 3
@@ -185,8 +185,15 @@ defmodule Nex.Agent.Memory do
         llm_call_fun =
           Keyword.get(opts, :llm_call_fun, &Nex.Agent.Runner.call_llm_for_consolidation/2)
 
-        Logger.info(
-          "[Memory] Refresh LLM call: provider=#{provider} model=#{model} pending=#{length(pending_messages)} tool_choice=#{inspect(llm_opts[:tool_choice])}"
+        Log.info(
+          "memory.refresh.llm.call.started",
+          %{
+            "provider" => to_string(provider),
+            "model" => to_string(model),
+            "pending_message_count" => length(pending_messages),
+            "tool_choice_summary" => inspect(llm_opts[:tool_choice], limit: 20)
+          },
+          memory_opts
         )
 
         case call_consolidation_llm(
@@ -195,7 +202,8 @@ defmodule Nex.Agent.Memory do
                llm_call_fun,
                provider,
                prompt_memory,
-               lines
+               lines,
+               memory_opts
              ) do
           {:ok, result} ->
             case normalize_refresh_args(result) do
@@ -216,15 +224,29 @@ defmodule Nex.Agent.Memory do
                 end
 
               {:error, reason} ->
-                Logger.warning(
-                  "[Memory] Refresh normalize_args failed: #{reason}, raw=#{inspect(result, limit: 200)}"
+                Log.warning(
+                  "memory.refresh.normalize_args.failed",
+                  %{
+                    "reason_type" => to_string(reason),
+                    "error_summary" => to_string(reason),
+                    "raw_summary" => inspect(result, limit: 20, printable_limit: 300)
+                  },
+                  memory_opts
                 )
 
                 {:error, reason}
             end
 
           {:error, reason} ->
-            Logger.error("[Memory] Refresh LLM call failed: #{inspect(reason, limit: 500)}")
+            Log.error(
+              "memory.refresh.llm.call.failed",
+              %{
+                "reason_type" => reason_type(reason),
+                "error_summary" => error_summary(reason)
+              },
+              memory_opts
+            )
+
             {:error, reason}
         end
       end
@@ -239,6 +261,7 @@ defmodule Nex.Agent.Memory do
     case refresh(session, provider, model, opts) do
       {:ok, updated_session, _status} ->
         clear_refresh_failure_count(session, opts)
+        Evolution.maybe_trigger_after_consolidation(opts)
         {:ok, updated_session}
 
       {:error, reason} ->
@@ -276,12 +299,26 @@ defmodule Nex.Agent.Memory do
     ]
   end
 
-  defp call_consolidation_llm(messages, llm_opts, llm_call_fun, provider, prompt_memory, lines) do
+  defp call_consolidation_llm(
+         messages,
+         llm_opts,
+         llm_call_fun,
+         provider,
+         prompt_memory,
+         lines,
+         memory_opts
+       ) do
     case llm_call_fun.(messages, llm_opts) do
       {:error, reason} = error ->
         if should_retry_empty_memory_context?(provider, reason, prompt_memory) do
-          Logger.warning(
-            "[Memory] Consolidation compatibility fallback triggered after Anthropic empty/non-JSON success response, retrying with empty memory context"
+          Log.warning(
+            "memory.refresh.compatibility_retry",
+            %{
+              "provider" => to_string(provider),
+              "reason_type" => reason_type(reason),
+              "error_summary" => error_summary(reason)
+            },
+            memory_opts
           )
 
           llm_call_fun.(refresh_messages(@empty_memory_context, lines), llm_opts)
@@ -664,5 +701,16 @@ defmodule Nex.Agent.Memory do
     else
       Workspace.default_root()
     end
+  end
+
+  defp reason_type(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp reason_type(reason) when is_binary(reason), do: String.slice(reason, 0, 120)
+  defp reason_type({reason, _detail}), do: reason_type(reason)
+  defp reason_type(reason), do: inspect(reason, limit: 20, printable_limit: 120)
+
+  defp error_summary(reason) do
+    reason
+    |> inspect(limit: 20, printable_limit: 300)
+    |> String.slice(0, 300)
   end
 end

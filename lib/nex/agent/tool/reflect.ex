@@ -72,7 +72,8 @@ defmodule Nex.Agent.Tool.Reflect do
   def execute(%{"action" => "evolution_status"}, ctx) do
     workspace = Map.get(ctx, :workspace)
     events = Evolution.recent_events(workspace: workspace)
-    signals = Evolution.read_signals(workspace: workspace)
+    signals = Evolution.recent_signals(workspace: workspace)
+    candidates = Evolution.recent_candidates(workspace: workspace)
 
     events_text =
       if events == [] do
@@ -81,20 +82,32 @@ defmodule Nex.Agent.Tool.Reflect do
         events
         |> Enum.take(10)
         |> Enum.map_join("\n", fn e ->
-          "- [#{Map.get(e, "timestamp", "?")}] #{Map.get(e, "event", "?")} #{inspect(Map.get(e, "payload", %{}))}"
+          "- [#{Map.get(e, "timestamp", "?")}] #{event_tag(e)} #{inspect(event_payload(e))}"
         end)
       end
 
     signals_text =
       if signals == [] do
-        "No pending signals."
+        "No recent signal observations."
       else
-        "#{length(signals)} pending signal(s):\n" <>
+        "#{length(signals)} recent signal observation(s):\n" <>
           (signals
            |> Enum.take(10)
            |> Enum.map_join("\n", fn s ->
-             "- [#{Map.get(s, "source", "?")}] #{Map.get(s, "signal", "")}"
+             attrs = Map.get(s, "attrs_summary", %{})
+             "- [#{Map.get(attrs, "source", "?")}] #{Map.get(attrs, "signal", "")}"
            end))
+      end
+
+    candidates_text =
+      if candidates == [] do
+        "No recent candidates."
+      else
+        candidates
+        |> Enum.take(10)
+        |> Enum.map_join("\n", fn candidate ->
+          "- [#{candidate["status"]}] #{candidate["candidate_id"]} #{candidate["kind"]}: #{candidate["summary"]}"
+        end)
       end
 
     {:ok,
@@ -104,8 +117,11 @@ defmodule Nex.Agent.Tool.Reflect do
      ### Recent Events
      #{events_text}
 
-     ### Pending Signals
+     ### Recent Signals
      #{signals_text}
+
+     ### Recent Candidates
+     #{candidates_text}
      """}
   end
 
@@ -127,28 +143,67 @@ defmodule Nex.Agent.Tool.Reflect do
       formatted =
         events
         |> Enum.map_join("\n\n", fn e ->
-          event = Map.get(e, "event", "?")
+          event = event_tag(e)
           ts = Map.get(e, "timestamp", "?")
-          payload = Map.get(e, "payload", %{})
+          payload = event_payload(e)
 
           case event do
-            "evolution.soul_updated" ->
-              "**[#{ts}] Soul Updated**\nPrinciple: #{Map.get(payload, "principle", "?")}"
+            "evolution.candidate.proposed" ->
+              [
+                "**[#{ts}] evolution.candidate.proposed**",
+                "Kind: #{Map.get(payload, "kind", "?")}",
+                "Summary: #{Map.get(payload, "summary", "?")}"
+              ]
+              |> maybe_append_line(payload["risk"] && "Risk: #{payload["risk"]}")
+              |> Enum.join("\n")
 
-            "evolution.memory_updated" ->
-              "**[#{ts}] Memory Updated**\nContent: #{Map.get(payload, "content", "?")}"
+            "evolution.candidate.approved" ->
+              [
+                "**[#{ts}] evolution.candidate.approved**",
+                "Candidate: #{Map.get(payload, "candidate_id", "?")}",
+                "Mode: #{Map.get(payload, "mode", "?")}"
+              ]
+              |> maybe_append_line(payload["decision_reason"] && "Reason: #{payload["decision_reason"]}")
+              |> Enum.join("\n")
 
-            "evolution.skill_drafted" ->
-              "**[#{ts}] Skill Drafted**\nName: #{Map.get(payload, "name", "?")}\nDescription: #{Map.get(payload, "description", "?")}"
+            "evolution.candidate.rejected" ->
+              [
+                "**[#{ts}] evolution.candidate.rejected**",
+                "Candidate: #{Map.get(payload, "candidate_id", "?")}"
+              ]
+              |> maybe_append_line(payload["decision_reason"] && "Reason: #{payload["decision_reason"]}")
+              |> Enum.join("\n")
 
-            "evolution.code_hint" ->
-              "**[#{ts}] Code Hint**\n#{Map.get(payload, "hint", "?")}"
+            "evolution.candidate.realization.generated" ->
+              [
+                "**[#{ts}] evolution.candidate.realization.generated**",
+                "Candidate: #{Map.get(payload, "candidate_id", "?")}",
+                "Mode: #{Map.get(payload, "mode", "?")}"
+              ]
+              |> maybe_append_line(payload["execution"] && "Execution: #{inspect(payload["execution"])}")
+              |> Enum.join("\n")
 
-            "evolution.cycle_completed" ->
+            "evolution.candidate.apply.completed" ->
+              [
+                "**[#{ts}] evolution.candidate.apply.completed**",
+                "Candidate: #{Map.get(payload, "candidate_id", "?")}",
+                "Result: #{Map.get(payload, "result_summary", "?")}"
+              ]
+              |> Enum.join("\n")
+
+            "evolution.candidate.apply.failed" ->
+              [
+                "**[#{ts}] evolution.candidate.apply.failed**",
+                "Candidate: #{Map.get(payload, "candidate_id", "?")}",
+                "Error: #{Map.get(payload, "error_summary", "?")}"
+              ]
+              |> Enum.join("\n")
+
+            "evolution.cycle.completed" ->
               details =
                 [
                   "**[#{ts}] Cycle Completed**",
-                  "Soul: #{Map.get(payload, "soul_updates", 0)}, Memory: #{Map.get(payload, "memory_updates", 0)}, Skills: #{Map.get(payload, "skill_candidates", 0)}"
+                  "Evidence: #{Map.get(payload, "evidence_count", 0)}, Patterns: #{Map.get(payload, "pattern_count", 0)}, Candidates: #{Map.get(payload, "candidate_count", 0)}"
                 ]
                 |> maybe_append_line(payload["trigger"] && "Trigger: #{payload["trigger"]}")
                 |> maybe_append_line(payload["profile"] && "Profile: #{payload["profile"]}")
@@ -227,6 +282,11 @@ defmodule Nex.Agent.Tool.Reflect do
     do:
       {:error,
        "action is required (source, versions, introspect, list_modules, evolution_status, trigger_evolution, evolution_history)"}
+
+  defp event_tag(event), do: Map.get(event, "tag") || Map.get(event, "event") || "?"
+
+  defp event_payload(event),
+    do: Map.get(event, "attrs_summary") || Map.get(event, "payload") || %{}
 
   defp trigger_evolution(ctx) do
     workspace = Map.get(ctx, :workspace)

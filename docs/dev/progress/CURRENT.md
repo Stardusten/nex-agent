@@ -115,6 +115,33 @@ Phase 12 now establishes the LLM provider adapter boundary:
   - that policy lives under the OpenAI Codex provider adapter namespace
   - third-party codex-compatible API key routes must remain independent
 
+Phase 13 planning now defines the Control Plane observability direction:
+
+- structured observation is the machine source of truth; human text logs are projections, not primary agent state
+- `context` is only for correlation identity such as workspace/run/session/channel/tool call; domain data belongs in `attrs`
+- the necessary API surface is `ControlPlane.Log`, `Metric`, `Gauge`, `Budget`, `Store`, `Query`, and one agent-facing `observe` tool
+- Phase 13A is now implemented as the first cutover:
+  - `Nex.Agent.ControlPlane.{Store,Redactor,Query,Log,Metric,Gauge,Budget}` is in place with JSONL observations and gauge/budget state under workspace `control_plane/`
+  - `observe` is the single agent-facing query tool and is exposed on `:all`, `:base`, and `:follow_up`
+  - Phase 11A `SelfHealing.EventStore` / `EnergyLedger` are deleted; Runner, SelfUpdate, and the minimal router use ControlPlane observations/budget for the three 11A failure classes
+- Phase 13B is now implemented for runtime lifecycle observability:
+  - Runner emits run, LLM call, tool batch, tool call, and tool task lifecycle observations.
+  - Tool.Registry emits deterministic execution started/finished/failed/cancelled observations.
+  - HTTP emits request started/finished/failed/timeout/cancelled observations, strips Nex internal opts before Req, and converts request task exceptions to structured errors.
+  - SelfUpdate deploy emits started/finished/failed observations under the same ControlPlane store.
+- Phase 13C is now implemented for run-control and follow-up observability:
+  - RunControl emits `run.owner.*` lifecycle observations and projects active owner runs into workspace-level `run.owner.current` gauge.
+  - InboundWorker emits inbound, owner dispatch, follow-up, queue, interrupt, status, timeout, and crash observations.
+  - `/status` remains deterministic and now appends recent ControlPlane warning/error evidence for the current run/session.
+  - Follow-up prompts require `observe summary` / `observe incident` before answering error, stuck, backend, log, status, or incident questions.
+- Phase 13D is now implemented for semantic log and Admin query cutover:
+  - Production code no longer calls `Audit.*` / `RequestTrace.*` as machine truth sources; remaining modules are ControlPlane compatibility wrappers.
+  - `Audit.append/3` writes `ControlPlane.Log` observations and publishes observation summaries instead of `audit/events.jsonl`.
+  - `RequestTrace.append_event/2`, `list_paths/1`, and `read_trace/2` are ControlPlane-derived and do not write or read request trace JSONL files.
+  - Admin recent events and request trace detail read `ControlPlane.Query` summaries/run traces, aligning Admin with `observe`.
+  - Runner request trace compatibility observations store bounded summaries only, not full prompts, messages, responses, or tool results.
+  - Direct `Logger.*` files are captured by `control_plane_logger_cutover_test.exs` as an explicit reviewed allowlist.
+
 ## Current Plan Pointer
 
 - [Phase 1 Runtime Reload Foundation](../task-plan/phase1-runtime-reload-foundation.md)
@@ -134,6 +161,14 @@ Phase 12 now establishes the LLM provider adapter boundary:
 - [Phase 11 Self-Healing Driver](../task-plan/phase11-self-healing-driver.md)
 - [Phase 11A Minimal Self-Healing Loop](../task-plan/phase11a-minimal-self-healing-loop.md)
 - [Phase 12 LLM Provider Adapter Architecture](../task-plan/phase12-llm-provider-adapter-architecture.md)
+- [Phase 13 Control Plane Observability](../task-plan/phase13-control-plane-observability.md)
+- [Phase 13A Minimal Control Plane Observability Cutover](../task-plan/phase13a-minimal-control-plane-observability-cutover.md)
+- [Phase 13B Control Plane Runtime Lifecycle Observability](../task-plan/phase13b-control-plane-runtime-lifecycle-observability.md)
+- [Phase 13C Run Control And Follow-Up Observability](../task-plan/phase13c-run-control-follow-up-observability.md)
+- [Phase 13D Semantic Log And Admin Query Cutover](../task-plan/phase13d-semantic-log-and-admin-query-cutover.md)
+- [Phase 13E Evolution Control Plane Consumption](../task-plan/phase13e-evolution-control-plane-consumption.md)
+- [Phase 14 Owner-Approved Evolution Execution](../task-plan/phase14-owner-approved-evolution-execution.md)
+- [Phase 15 Provider-Native Tool Capability Resolution](../task-plan/phase15-provider-native-tool-capability-resolution.md)
 - [2026-04-16 IM Inbound Media Architecture](../findings/2026-04-16-im-inbound-media-architecture.md)
 - [2026-04-16 IM Streaming Capabilities And Delivery Contract](../findings/2026-04-16-im-streaming-capabilities.md)
 - [2026-04-16 Streaming Architecture Convergence](../findings/2026-04-16-streaming-architecture-convergence.md)
@@ -143,12 +178,12 @@ Phase 12 now establishes the LLM provider adapter boundary:
 
 ## Immediate Next Steps
 
-1. 验收 Phase 11A：跑 self-healing focused tests、Runner/self_update/context_builder 回归，并确认 hook failure 不影响主返回。
-2. 用真实 gateway/manual 场景检查 busy 普通消息 follow-up、`/btw`、`/status`、`/stop` 和可选 interrupt tool 的实际交互时序。
-3. 跑更完整的 channel 回归：`test/nex/agent/channel_discord_test.exs`、`test/nex/agent/channel_feishu_test.exs`。
-4. 如需继续收紧取消链路，下一步是把 HTTP 级取消从 tool 层早退推进到底层 `Nex.Agent.HTTP` / provider path。
-5. Phase 7 留存问题仍需后续处理：Finch 连接池泄漏、飞书 `close_streaming_mode` 404、LLM 空返回兜底。
-6. 后续新增 LLM provider 时，只新增 `lib/nex/agent/llm/providers/<provider>.ex`、注册 `ProviderRegistry`、补 focused provider tests；不要在 `ReqLLM` 或 `ProviderProfile` 增加 provider 分支。
+1. 优先进入 Phase 15：建立 capability-resolved tool 主链，把 `web_search` 从“静态 local tool + Codex 特判 rewrite”迁到统一 resolver，至少支持 `openai-codex` 官方 OAuth backend 的 native search。
+2. 在 Phase 15 中同时收口 `ProviderProfile.default_api_key(:openai_codex)` facade 偏差，确保 provider profile 真相源与 `Auth.Codex.resolve_access_token/0` 对齐。
+3. Phase 15 完成后，再补真实 gateway/manual 验证，确认 capability resolution 在实际 workspace 上不会泄漏 parallel definitions，且 `web_search` 在不同 provider / surface 下行为一致。
+4. 跑更完整的 channel 回归：`test/nex/agent/channel_discord_test.exs`、`test/nex/agent/channel_feishu_test.exs`。
+5. 用真实 gateway/manual 场景检查 busy 普通消息 follow-up、`/btw`、`/status`、`/stop`、可选 interrupt tool，以及 follow-up 使用 `observe summary` 的实际交互时序。
+6. Phase 7 留存问题仍需后续处理：Finch 连接池泄漏、飞书 `close_streaming_mode` 404、LLM 空返回兜底。
 
 ## Reviewer Verification
 

@@ -31,31 +31,32 @@ defmodule Nex.Agent.Tool.SoulUpdate do
     }
   end
 
-  def execute(%{"content" => content}, _ctx) do
+  def execute(%{"content" => content}, ctx) do
     normalized = normalize_legacy_footers(content)
     trimmed = String.trim(normalized)
 
     if trimmed == "" do
       {:error, "content is required"}
     else
-      persist_soul(normalized)
+      persist_soul(normalized, ctx)
     end
   end
 
   def execute(_args, _ctx), do: {:error, "content is required"}
 
-  defp persist_soul(content) do
+  defp persist_soul(content, ctx) do
     case ContextDiagnostics.validate_write(:soul, content, source: "SOUL.md") do
       {:error, diagnostics} ->
         {:error, ContextDiagnostics.write_error_message(diagnostics)}
 
       :ok ->
         workspace =
-          Application.get_env(
-            :nex_agent,
-            :workspace_path,
-            Path.join(System.get_env("HOME", "."), ".nex/agent/workspace")
-          )
+          Map.get(ctx, :workspace) || Map.get(ctx, "workspace") ||
+            Application.get_env(
+              :nex_agent,
+              :workspace_path,
+              Path.join(System.get_env("HOME", "."), ".nex/agent/workspace")
+            )
 
         soul_path = Path.join(workspace, "SOUL.md")
 

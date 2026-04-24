@@ -191,11 +191,12 @@ defmodule Mix.Tasks.Nex.Agent do
     Mix.shell().info("")
 
     # Show pre-evolution state
-    signals = Nex.Agent.Evolution.read_signals(workspace: target.workspace)
-    Mix.shell().info("Pending signals: #{length(signals)}")
+    signals = Nex.Agent.Evolution.recent_signals(workspace: target.workspace)
+    Mix.shell().info("Recent signal observations: #{length(signals)}")
 
     Enum.each(signals, fn s ->
-      Mix.shell().info("  [#{Map.get(s, "source", "?")}] #{Map.get(s, "signal", "")}")
+      attrs = Map.get(s, "attrs_summary", %{})
+      Mix.shell().info("  [#{Map.get(attrs, "source", "?")}] #{Map.get(attrs, "signal", "")}")
     end)
 
     soul_path = Path.join(target.workspace, "SOUL.md")
@@ -214,30 +215,20 @@ defmodule Mix.Tasks.Nex.Agent do
            config_path: target.config_path
          ) do
       {:ok, result} ->
-        Mix.shell().info("Evolution cycle completed!")
-        Mix.shell().info("  Soul updates: #{result.soul_updates}")
-        Mix.shell().info("  Memory updates: #{result.memory_updates}")
-        Mix.shell().info("  Skill drafts: #{result.skill_candidates}")
+        Mix.shell().info("Evolution cycle #{result.status}!")
+        Mix.shell().info("  Evidence count: #{result.evidence_count}")
+        Mix.shell().info("  Pattern count: #{result.pattern_count}")
+        Mix.shell().info("  Candidate count: #{result.candidate_count}")
+        Mix.shell().info("")
+        Mix.shell().info("SOUL.md bytes: #{soul_before} → #{file_size(soul_path)}")
+        Mix.shell().info("MEMORY.md bytes: #{memory_before} → #{file_size(memory_path)}")
         Mix.shell().info("")
 
-        soul_after = file_size(soul_path)
-        memory_after = file_size(memory_path)
-
-        if soul_after > soul_before do
-          Mix.shell().info("SOUL.md changed (#{soul_before} → #{soul_after} bytes):")
-          Mix.shell().info(File.read!(soul_path))
-        else
-          Mix.shell().info("SOUL.md unchanged.")
-        end
-
-        Mix.shell().info("")
-
-        if memory_after > memory_before do
-          Mix.shell().info("MEMORY.md changed (#{memory_before} → #{memory_after} bytes):")
-          Mix.shell().info(File.read!(memory_path))
-        else
-          Mix.shell().info("MEMORY.md unchanged.")
-        end
+        Enum.each(result.candidates, fn candidate ->
+          Mix.shell().info(
+            "  [#{candidate["kind"]}] #{candidate["summary"]} evidence=#{Enum.join(candidate["evidence_ids"], ",")}"
+          )
+        end)
 
         Mix.shell().info("")
 
@@ -250,7 +241,7 @@ defmodule Mix.Tasks.Nex.Agent do
           events
           |> Enum.take(10)
           |> Enum.each(fn e ->
-            Mix.shell().info("  [#{Map.get(e, "timestamp", "?")}] #{Map.get(e, "event", "?")}")
+            Mix.shell().info("  [#{Map.get(e, "timestamp", "?")}] #{Map.get(e, "tag", "?")}")
           end)
         end
 

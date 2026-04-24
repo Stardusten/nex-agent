@@ -48,8 +48,8 @@ defmodule Nex.Agent.MessageToolTest do
              MapSet.new([
                "executor_status",
                "interrupt_session",
-               "list_dir",
                "memory_status",
+               "observe",
                "read",
                "skill_discover",
                "skill_get",
@@ -216,7 +216,12 @@ defmodule Nex.Agent.MessageToolTest do
     assert Keyword.get(multipart_body, :image_type) == "message"
 
     posts = collect_http_posts([])
-    {url2, body2} = Enum.find(posts, fn {url, body} -> url =~ "/im/v1/messages" and body["msg_type"] == "image" end)
+
+    {url2, body2} =
+      Enum.find(posts, fn {url, body} ->
+        url =~ "/im/v1/messages" and body["msg_type"] == "image"
+      end)
+
     assert url2 =~ "/im/v1/messages"
     assert body2["receive_id"] == "ou_sync_img"
     assert body2["msg_type"] == "image"
@@ -290,6 +295,7 @@ defmodule Nex.Agent.MessageToolTest do
     assert url1 =~ "/auth/v3/tenant_access_token/internal"
 
     posts = collect_http_posts([])
+
     {url2, body2} =
       Enum.find(posts, fn {url, body} ->
         url =~ "/im/v1/messages" and body["msg_type"] == "interactive"

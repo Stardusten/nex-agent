@@ -67,7 +67,7 @@ defmodule Nex.Agent.Runtime do
       prompt_builder:
         Keyword.get(opts, :prompt_builder, &ContextBuilder.build_system_prompt_with_diagnostics/1),
       tool_definitions_builder:
-        Keyword.get(opts, :tool_definitions_builder, &ToolRegistry.definitions/1),
+        Keyword.get(opts, :tool_definitions_builder, &ToolRegistry.definitions/2),
       skills_builder: Keyword.get(opts, :skills_builder, &Skills.always_instructions/1)
     }
 
@@ -141,12 +141,30 @@ defmodule Nex.Agent.Runtime do
            call_prompt_builder(prompt_builder(opts, state), [
              Keyword.put(opts, :workspace, workspace)
            ]),
-         {:ok, definitions_all} <- call_builder(tool_definitions_builder(opts, state), [:all]),
+         {:ok, definitions_all} <-
+           call_tool_definitions_builder(
+             tool_definitions_builder(opts, state),
+             :all,
+             tool_definition_opts(config, workspace, :all)
+           ),
          {:ok, definitions_follow_up} <-
-           call_builder(tool_definitions_builder(opts, state), [:follow_up]),
+           call_tool_definitions_builder(
+             tool_definitions_builder(opts, state),
+             :follow_up,
+             tool_definition_opts(config, workspace, :follow_up)
+           ),
          {:ok, definitions_subagent} <-
-           call_builder(tool_definitions_builder(opts, state), [:subagent]),
-         {:ok, definitions_cron} <- call_builder(tool_definitions_builder(opts, state), [:cron]),
+           call_tool_definitions_builder(
+             tool_definitions_builder(opts, state),
+             :subagent,
+             tool_definition_opts(config, workspace, :subagent)
+           ),
+         {:ok, definitions_cron} <-
+           call_tool_definitions_builder(
+             tool_definitions_builder(opts, state),
+             :cron,
+             tool_definition_opts(config, workspace, :cron)
+           ),
          {:ok, always_instructions} <-
            call_builder(skills_builder(opts, state), [Keyword.put(opts, :workspace, workspace)]) do
       prompt_data = %{
@@ -225,6 +243,18 @@ defmodule Nex.Agent.Runtime do
     e -> {:error, e}
   catch
     kind, reason -> {:error, {kind, reason}}
+  end
+
+  defp call_tool_definitions_builder(fun, filter, definition_opts) when is_function(fun, 2) do
+    call_builder(fun, [filter, definition_opts])
+  end
+
+  defp call_tool_definitions_builder(fun, filter, _definition_opts) when is_function(fun, 1) do
+    call_builder(fun, [filter])
+  end
+
+  defp tool_definition_opts(config, workspace, surface) do
+    [config: config, workspace: workspace, surface: surface]
   end
 
   defp config_loader(opts, state), do: Keyword.get(opts, :config_loader, state.config_loader)

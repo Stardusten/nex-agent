@@ -40,6 +40,23 @@ defmodule Nex.Agent.Admin.Event do
     }
   end
 
+  @spec from_observation(map()) :: t()
+  def from_observation(observation) when is_map(observation) do
+    kind = Map.get(observation, "tag", "runtime.event")
+    payload = Map.get(observation, "attrs_summary") || Map.get(observation, "attrs") || %{}
+
+    %__MODULE__{
+      topic: topic_for_kind(kind),
+      kind: kind,
+      timestamp: Map.get(observation, "timestamp", now_iso()),
+      summary: summary_for(kind, payload),
+      payload:
+        observation
+        |> Map.take(["id", "level", "tag", "context", "attrs_summary"])
+        |> Map.put_new("attrs_summary", stringify_keys(payload))
+    }
+  end
+
   @spec to_map(t()) :: map()
   def to_map(%__MODULE__{} = event) do
     %{
@@ -62,20 +79,38 @@ defmodule Nex.Agent.Admin.Event do
   @spec summary_for(String.t(), map()) :: String.t()
   def summary_for(kind, payload) when is_binary(kind) and is_map(payload) do
     case kind do
-      "evolution.cycle_started" ->
+      "evolution.cycle.started" ->
         "Evolution cycle started"
 
-      "evolution.cycle_completed" ->
+      "evolution.cycle.completed" ->
         "Evolution cycle completed"
 
-      "evolution.soul_updated" ->
-        "SOUL updated"
+      "evolution.cycle.skipped" ->
+        "Evolution cycle skipped"
 
-      "evolution.memory_updated" ->
-        "MEMORY updated"
+      "evolution.cycle.failed" ->
+        "Evolution cycle failed"
 
-      "evolution.skill_drafted" ->
-        "Skill drafted: #{value(payload, "name", "unknown")}"
+      "evolution.candidate.proposed" ->
+        "Evolution candidate: #{value(payload, "summary", "unknown")}"
+
+      "evolution.candidate.approved" ->
+        "Evolution candidate approved: #{value(payload, "candidate_id", "unknown")}"
+
+      "evolution.candidate.rejected" ->
+        "Evolution candidate rejected: #{value(payload, "candidate_id", "unknown")}"
+
+      "evolution.candidate.realization.generated" ->
+        "Evolution realization generated: #{value(payload, "candidate_id", "unknown")}"
+
+      "evolution.candidate.apply.completed" ->
+        "Evolution candidate applied: #{value(payload, "candidate_id", "unknown")}"
+
+      "evolution.candidate.apply.failed" ->
+        "Evolution candidate failed: #{value(payload, "candidate_id", "unknown")}"
+
+      "evolution.pattern.detected" ->
+        "Evolution pattern detected: #{value(payload, "tag", "unknown")}"
 
       "skill.published" ->
         "Skill published: #{value(payload, "name", "unknown")}"

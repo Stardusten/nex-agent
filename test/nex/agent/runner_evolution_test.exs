@@ -20,6 +20,28 @@ defmodule Nex.Agent.Test.MalformedTool do
   def execute(_args, _ctx), do: %{success: false, output: 0}
 end
 
+defmodule Nex.Agent.Test.SecretFailTool do
+  @behaviour Nex.Agent.Tool.Behaviour
+
+  def name, do: "secret_fail_tool"
+  def description, do: "Fails while receiving secret-like args"
+  def category, do: :base
+
+  def definition do
+    %{
+      name: name(),
+      description: description(),
+      parameters: %{
+        type: "object",
+        properties: %{},
+        required: []
+      }
+    }
+  end
+
+  def execute(_args, _ctx), do: {:error, "forced failure"}
+end
+
 defmodule Nex.Agent.RunnerEvolutionTest do
   use ExUnit.Case, async: false
 
@@ -35,7 +57,7 @@ defmodule Nex.Agent.RunnerEvolutionTest do
     Skills
   }
 
-  alias Nex.Agent.SelfHealing.EventStore
+  alias Nex.Agent.ControlPlane.Query, as: ControlPlaneQuery
 
   setup do
     workspace =
@@ -215,7 +237,19 @@ defmodule Nex.Agent.RunnerEvolutionTest do
 
     run_id = hd(events)["run_id"]
 
-    assert Enum.map(events, & &1["type"]) == [
+    request_events =
+      Enum.filter(events, fn event ->
+        event["type"] in [
+          "request_started",
+          "llm_request",
+          "llm_response",
+          "request_completed"
+        ]
+      end)
+
+    assert Enum.any?(events, &(&1["type"] == "runner.run.started"))
+
+    assert Enum.map(request_events, & &1["type"]) == [
              "request_started",
              "llm_request",
              "llm_response",
@@ -223,11 +257,11 @@ defmodule Nex.Agent.RunnerEvolutionTest do
            ]
 
     assert Enum.all?(events, &(&1["run_id"] == run_id))
-    assert Enum.at(events, 2)["content"] == "ok"
-    assert Enum.at(events, 3)["result"] == "ok"
+    assert Enum.at(request_events, 2)["content_summary"] == "ok"
+    assert Enum.at(request_events, 3)["result_summary"] == "ok"
   end
 
-  test "runner records llm.call.failed self-healing event on final LLM failure", %{
+  test "runner records runner.llm.call.failed control-plane observation on final LLM failure", %{
     workspace: workspace
   } do
     llm_client = fn _messages, _opts -> {:error, :timeout} end
@@ -241,14 +275,53 @@ defmodule Nex.Agent.RunnerEvolutionTest do
                run_id: "run_self_healing_llm"
              )
 
-    assert [event] = EventStore.recent(5, workspace: workspace)
-    assert event["name"] == "llm.call.failed"
-    assert event["run_id"] == "run_self_healing_llm"
-    assert event["actor"]["component"] == "runner"
-    assert event["decision"]["action"] in ["record_only", "reflect_candidate"]
+    assert [event] = control_plane_logs(workspace, tag: "runner.llm.call.failed")
+    assert event["tag"] == "runner.llm.call.failed"
+    assert event["context"]["run_id"] == "run_self_healing_llm"
+    assert event["attrs"]["actor"]["component"] == "runner"
+    assert event["attrs"]["evidence"]["error_text"] =~ "timeout"
   end
 
-  test "runner records tool.call.failed self-healing event for tool errors", %{
+  test "runner records run and llm lifecycle observations on successful runs", %{
+    workspace: workspace
+  } do
+    llm_client = fn _messages, _opts ->
+      {:ok, %{content: "ok", finish_reason: "stop", tool_calls: []}}
+    end
+
+    assert {:ok, "ok", _session} =
+             Runner.run(Session.new("runner-lifecycle"), "hello",
+               llm_stream_client: stream_client_from_response(llm_client),
+               workspace: workspace,
+               skip_consolidation: true,
+               run_id: "run_lifecycle_success",
+               session_key: "session:lifecycle",
+               channel: "telegram",
+               chat_id: "chat-lifecycle"
+             )
+
+    tags =
+      workspace
+      |> control_plane_logs(run_id: "run_lifecycle_success")
+      |> Enum.map(& &1["tag"])
+
+    assert "runner.run.started" in tags
+    assert "runner.llm.call.started" in tags
+    assert "runner.llm.call.finished" in tags
+    assert "runner.run.finished" in tags
+
+    assert [finished] =
+             control_plane_logs(workspace,
+               tag: "runner.llm.call.finished",
+               run_id: "run_lifecycle_success"
+             )
+
+    assert finished["attrs"]["finish_reason"] == "stop"
+    assert finished["attrs"]["tool_call_count"] == 0
+    refute inspect(finished) =~ "cancel_ref"
+  end
+
+  test "runner records runner.tool.call.failed control-plane observation for tool errors", %{
     workspace: workspace
   } do
     {:ok, counter} = Agent.start_link(fn -> 0 end)
@@ -283,12 +356,77 @@ defmodule Nex.Agent.RunnerEvolutionTest do
                run_id: "run_self_healing_tool"
              )
 
-    assert [event] = EventStore.recent(5, workspace: workspace)
-    assert event["name"] == "tool.call.failed"
-    assert event["run_id"] == "run_self_healing_tool"
-    assert event["actor"]["tool"] == "missing_tool"
-    assert event["evidence"]["error_text"] =~ "Unknown tool"
-    assert is_map(event["decision"])
+    assert [event] = control_plane_logs(workspace, tag: "runner.tool.call.failed")
+    assert event["tag"] == "runner.tool.call.failed"
+    assert event["context"]["run_id"] == "run_self_healing_tool"
+    assert event["attrs"]["actor"]["tool"] == "missing_tool"
+    assert event["attrs"]["evidence"]["error_text"] =~ "Unknown tool"
+
+    tags =
+      workspace
+      |> control_plane_logs(run_id: "run_self_healing_tool")
+      |> Enum.map(& &1["tag"])
+
+    assert "runner.tool.batch.started" in tags
+    assert "runner.tool.batch.finished" in tags
+    assert "runner.tool.call.started" in tags
+    assert "runner.tool.call.failed" in tags
+
+    assert Enum.count(tags, &(&1 == "runner.tool.call.failed")) == 1
+  end
+
+  test "runner failed tool evidence uses redacted bounded args summary", %{workspace: workspace} do
+    Nex.Agent.Tool.Registry.register(Nex.Agent.Test.SecretFailTool)
+    wait_for_registry_tool("secret_fail_tool", Nex.Agent.Test.SecretFailTool)
+
+    on_exit(fn ->
+      Nex.Agent.Tool.Registry.unregister("secret_fail_tool")
+      Nex.Agent.Tool.Registry.list()
+    end)
+
+    secret = "sk-runner-secret"
+    command = "echo token=#{secret}"
+
+    llm_client = fn messages, _opts ->
+      if Enum.any?(messages, &(&1["role"] == "tool" and &1["name"] == "secret_fail_tool")) do
+        {:ok, %{content: "done", finish_reason: nil, tool_calls: []}}
+      else
+        {:ok,
+         %{
+           content: "",
+           finish_reason: nil,
+           tool_calls: [
+             %{
+               id: "call_secret_fail",
+               function: %{
+                 name: "secret_fail_tool",
+                 arguments: %{"command" => command}
+               }
+             }
+           ]
+         }}
+      end
+    end
+
+    assert {:ok, "done", _session} =
+             Runner.run(Session.new("runner-secret-tool-failure"), "trigger secret failure",
+               llm_stream_client: stream_client_from_response(llm_client),
+               workspace: workspace,
+               skip_consolidation: true,
+               run_id: "run_secret_tool_failure"
+             )
+
+    assert [event] =
+             control_plane_logs(workspace,
+               tag: "runner.tool.call.failed",
+               run_id: "run_secret_tool_failure"
+             )
+
+    evidence_summary = event["attrs"]["evidence"]["args_summary"]
+    assert is_binary(evidence_summary)
+    assert String.length(evidence_summary) <= 1000
+    assert evidence_summary =~ "[REDACTED]"
+    refute inspect(event) =~ secret
   end
 
   test "runner records tool results and reuses run_id for skill runtime summaries", %{
@@ -991,6 +1129,30 @@ defmodule Nex.Agent.RunnerEvolutionTest do
     else
       Process.sleep(25)
       wait_for_value(fun, predicate, attempts - 1)
+    end
+  end
+
+  defp control_plane_logs(workspace, filters) do
+    filters
+    |> Map.new()
+    |> ControlPlaneQuery.query(workspace: workspace)
+    |> case do
+      {:ok, %{"observations" => observations}} -> observations
+      {:ok, %{observations: observations}} -> observations
+      {:ok, observations} when is_list(observations) -> observations
+      observations when is_list(observations) -> observations
+    end
+  end
+
+  defp wait_for_registry_tool(name, module, attempts \\ 20)
+  defp wait_for_registry_tool(_name, _module, 0), do: :ok
+
+  defp wait_for_registry_tool(name, module, attempts) do
+    if Nex.Agent.Tool.Registry.get(name) == module do
+      :ok
+    else
+      Process.sleep(10)
+      wait_for_registry_tool(name, module, attempts - 1)
     end
   end
 

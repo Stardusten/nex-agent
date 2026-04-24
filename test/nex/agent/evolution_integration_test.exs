@@ -1,30 +1,23 @@
 defmodule Nex.Agent.EvolutionIntegrationTest do
-  @moduledoc """
-  End-to-end integration test for the evolution closed loop:
-
-    User conversation → Runner records signals → Memory consolidation triggers evolution
-    → LLM reflection → SOUL.md / MEMORY.md / Skills updated → Audit trail written
-
-  Uses mock LLM throughout, no network required.
-  """
+  @moduledoc false
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{Bus, Evolution, Memory, Runner, Session, Skills}
+  alias Nex.Agent.{Bus, Evolution, Runner, Session, Skills}
+  alias Nex.Agent.ControlPlane.{Log, Query, Store}
+  alias Nex.Agent.Tool.{EvolutionCandidate, Reflect}
+  require Log
 
   setup do
     workspace =
       Path.join(System.tmp_dir!(), "nex-evo-integ-#{System.unique_integer([:positive])}")
 
-    for dir <- ~w(memory skills audit sessions) do
+    for dir <- ~w(memory skills sessions) do
       File.mkdir_p!(Path.join(workspace, dir))
     end
 
-    File.write!(
-      Path.join(workspace, "SOUL.md"),
-      "# Soul\n\n## Values\n- Be helpful\n- Be concise\n"
-    )
-
-    File.write!(Path.join(workspace, "memory/MEMORY.md"), "")
+    File.write!(Path.join(workspace, "SOUL.md"), "# Soul\n\n- Be helpful\n- Be concise\n")
+    File.write!(Path.join(workspace, "USER.md"), "# USER\n- likes structured output\n")
+    File.write!(Path.join(workspace, "memory/MEMORY.md"), "# Memory\n")
     File.write!(Path.join(workspace, "memory/HISTORY.md"), "")
 
     Application.put_env(:nex_agent, :workspace_path, workspace)
@@ -47,92 +40,103 @@ defmodule Nex.Agent.EvolutionIntegrationTest do
 
     on_exit(fn ->
       Application.delete_env(:nex_agent, :workspace_path)
-      # Small delay to let any async evolution tasks finish before cleanup
-      Process.sleep(200)
+      Process.sleep(100)
       File.rm_rf(workspace)
     end)
 
     {:ok, workspace: workspace}
   end
 
-  test "full closed loop: corrections → signals → evolution → soul/memory/skill updates", %{
+  test "runner signals become ControlPlane evidence and evolution emits candidate observations", %{
     workspace: workspace
   } do
-    # ──────────────────────────────────────────────────────────
-    # Step 1: Simulate several conversations where the user
-    #         corrects the agent. This should record signals.
-    # ──────────────────────────────────────────────────────────
+    write_budget(workspace, 60)
 
     llm_client = fn _messages, _opts ->
       {:ok, %{content: "好的", finish_reason: nil, tool_calls: []}}
     end
 
-    # "不对" and "应该" are in @user_correction_terms
     correction_prompts = [
       "不对，应该用 JSON 格式返回",
       "改成 snake_case 命名",
       "actually use PostgreSQL not MySQL"
     ]
 
-    _final_session =
-      Enum.reduce(correction_prompts, Session.new("evo-integ"), fn prompt, session ->
-        {:ok, _result, updated} =
-          Runner.run(session, prompt,
-            llm_stream_client: stream_client_from_response(llm_client),
-            workspace: workspace,
-            skip_consolidation: true
-          )
+    Enum.reduce(correction_prompts, Session.new("evo-integ"), fn prompt, session ->
+      {:ok, _result, updated} =
+        Runner.run(session, prompt,
+          llm_stream_client: stream_client_from_response(llm_client),
+          workspace: workspace,
+          skip_consolidation: true
+        )
 
-        updated
-      end)
+      updated
+    end)
 
-    # Verify: signals were recorded
-    signals = Evolution.read_signals(workspace: workspace)
-    assert length(signals) >= 2, "Expected at least 2 correction signals, got #{length(signals)}"
+    signals = Evolution.recent_signals(workspace: workspace)
+    assert length(signals) >= 2
 
-    # Verify signals contain correction info before evolution
-    assert Enum.any?(signals, fn s ->
-             s["source"] == "runner" and String.contains?(s["signal"], "correction")
+    assert Enum.any?(signals, fn signal ->
+             signal["attrs_summary"]["source"] == "runner"
            end)
 
-    # Verify signal content will be visible to the evolution LLM
-    signals_text =
-      signals
-      |> Enum.map(fn s -> Map.get(s, "signal", "") end)
-      |> Enum.join(" ")
+    assert {:ok, _} =
+             Log.error(
+               "runner.tool.call.failed",
+               %{"tool_name" => "bash", "reason_type" => "exit_status"},
+               workspace: workspace,
+               run_id: "run-evo"
+             )
 
-    assert signals_text =~ "correction"
+    assert {:ok, _} =
+             Log.error(
+               "runner.tool.call.failed",
+               %{"tool_name" => "bash", "reason_type" => "exit_status"},
+               workspace: workspace,
+               run_id: "run-evo"
+             )
 
-    # ──────────────────────────────────────────────────────────
-    # Step 2: Run evolution cycle with a mock LLM that returns
-    #         soul updates, memory updates, and a skill draft.
-    # ──────────────────────────────────────────────────────────
+    assert {:ok, _} =
+             Log.warning(
+               "http.request.failed",
+               %{"reason_type" => "timeout"},
+               workspace: workspace,
+               run_id: "run-evo"
+             )
+
+    soul_before = File.read!(Path.join(workspace, "SOUL.md"))
+    memory_before = File.read!(Path.join(workspace, "memory/MEMORY.md"))
+    skill_dirs_before = Path.wildcard(Path.join(workspace, "skills/*"))
+    parent = self()
 
     evolution_llm = fn messages, _opts ->
-      # Verify the evolution prompt contains context sections
       user_msg = Enum.find(messages, &(&1["role"] == "user"))
-      assert user_msg["content"] =~ "Accumulated Signals"
+      prompt = user_msg["content"]
+      send(parent, {:prompt, prompt})
+
+      evidence_ids =
+        Query.query(%{"limit" => 50}, workspace: workspace)
+        |> Enum.map(& &1["id"])
+        |> Enum.take(3)
 
       {:ok,
        %{
-         "observations" =>
-           "User corrected output format 3 times. Consistent preference for JSON and snake_case.",
-         "soul_updates" => [
-           "Default to JSON format for structured output unless user specifies otherwise",
-           "Use snake_case naming in all code generation"
-         ],
-         "memory_updates" => [
-           "User prefers PostgreSQL over MySQL for database projects."
-         ],
-         "skill_candidates" => [
+         "observations" => "Repeated tool failures plus correction signals suggest targeted code follow-up.",
+         "candidates" => [
            %{
-             "name" => "format_json_output",
-             "description" => "Format tool results as JSON",
-             "content" => "When returning structured data, always wrap in ```json blocks."
+             "kind" => "code_hint",
+             "summary" => "Harden repeated tool failure handling",
+             "rationale" => "The same tool failure recurred and user correction signals followed.",
+             "evidence_ids" => evidence_ids,
+             "risk" => "medium"
+           },
+           %{
+             "kind" => "memory_candidate",
+             "summary" => "Review whether JSON output preference belongs in durable memory",
+             "rationale" => "User corrections repeatedly mentioned JSON output.",
+             "evidence_ids" => Enum.map(signals, & &1["id"]) |> Enum.take(2),
+             "risk" => "low"
            }
-         ],
-         "code_upgrade_hints" => [
-           "Consider adding a default output format config to Runner"
          ]
        }}
     end
@@ -144,171 +148,134 @@ defmodule Nex.Agent.EvolutionIntegrationTest do
         llm_call_fun: evolution_llm
       )
 
-    assert result.soul_updates == 2
-    assert result.memory_updates == 1
-    assert result.skill_candidates == 1
+    assert result.status == :completed
+    assert result.budget_mode == :normal
+    assert result.candidate_count == 2
+    assert Enum.all?(result.candidates, &(&1["requires_owner_approval"] == true))
 
-    # ──────────────────────────────────────────────────────────
-    # Step 3: Verify all downstream effects
-    # ──────────────────────────────────────────────────────────
+    assert_receive {:prompt, prompt}, 500
+    assert prompt =~ "\"trigger\": \"manual\""
+    assert prompt =~ "\"budget\""
+    assert prompt =~ "\"patterns\""
+    assert prompt =~ "\"candidate_history\""
 
-    # 3a. SOUL.md was updated with new principles
-    soul = File.read!(Path.join(workspace, "SOUL.md"))
-    assert soul =~ "Evolved Principles"
-    assert soul =~ "JSON format"
-    assert soul =~ "snake_case"
-    # Original values preserved
-    assert soul =~ "Be helpful"
-    assert soul =~ "Be concise"
+    assert File.read!(Path.join(workspace, "SOUL.md")) == soul_before
+    assert File.read!(Path.join(workspace, "memory/MEMORY.md")) == memory_before
+    assert Path.wildcard(Path.join(workspace, "skills/*")) == skill_dirs_before
 
-    # 3b. MEMORY.md was updated with new fact
-    memory = Memory.read_long_term(workspace: workspace)
-    assert memory =~ "PostgreSQL"
-
-    # 3c. Skill draft was created
-    skill_path = Path.join(workspace, "skills/format_json_output/SKILL.md")
-    assert File.exists?(skill_path), "Draft skill file should exist"
-    skill_content = File.read!(skill_path)
-    assert skill_content =~ "status: draft"
-    assert skill_content =~ "json blocks"
-
-    # 3d. Audit trail has evolution events
     events = Evolution.recent_events(workspace: workspace)
-    event_types = Enum.map(events, & &1["event"])
-    assert "evolution.cycle_started" in event_types
-    assert "evolution.cycle_completed" in event_types
-    assert "evolution.soul_updated" in event_types
-    assert "evolution.memory_updated" in event_types
-    assert "evolution.skill_drafted" in event_types
-    assert "evolution.code_hint" in event_types
+    tags = Enum.map(events, & &1["tag"])
+    assert "evolution.cycle.started" in tags
+    assert "evolution.cycle.completed" in tags
+    assert "evolution.candidate.proposed" in tags
 
-    completed_event = Enum.find(events, &(&1["event"] == "evolution.cycle_completed"))
-    assert completed_event["payload"]["trigger"] == "manual"
-    assert completed_event["payload"]["profile"] == "routine"
+    candidate_observations =
+      Query.query(%{"tag" => "evolution.candidate.proposed", "limit" => 10}, workspace: workspace)
 
-    # 3e. Signals were consumed (cleared after cycle)
-    assert Evolution.read_signals(workspace: workspace) == []
-
-    # ──────────────────────────────────────────────────────────
-    # Step 4: Verify idempotency — running again with same
-    #         updates should not duplicate.
-    # ──────────────────────────────────────────────────────────
-
-    {:ok, result2} =
-      Evolution.run_evolution_cycle(
-        workspace: workspace,
-        trigger: :manual,
-        llm_call_fun: evolution_llm
-      )
-
-    # Soul principles already exist → should be 0 (dedup works)
-    assert result2.soul_updates == 0
-
-    # SOUL.md should NOT have duplicate "Evolved Principles" sections
-    soul_after = File.read!(Path.join(workspace, "SOUL.md"))
-
-    assert length(String.split(soul_after, "Evolved Principles")) == 2,
-           "Should have exactly one 'Evolved Principles' section, not duplicates"
+    assert length(candidate_observations) == 2
+    assert Enum.all?(candidate_observations, fn observation ->
+             attrs = observation["attrs"]
+             is_list(attrs["evidence_ids"]) and attrs["requires_owner_approval"] == true
+           end)
   end
 
-  test "consolidation counter triggers evolution at threshold", %{workspace: workspace} do
-    # Simulate 4 consolidations — should not trigger
-    for _ <- 1..4 do
-      refute Evolution.maybe_trigger_after_consolidation(workspace: workspace)
-    end
+  test "reflect tool reports recent signals and candidate history from ControlPlane", %{
+    workspace: workspace
+  } do
+    write_budget(workspace, 10)
 
-    # 5th consolidation triggers
-    assert Evolution.maybe_trigger_after_consolidation(workspace: workspace)
+    Evolution.record_signal(%{source: "runner", signal: "User corrected format"}, workspace: workspace)
 
-    # Wait briefly for the async task to start (it will fail due to no API key, that's fine)
-    Process.sleep(100)
+    assert {:ok, _} =
+             Log.error(
+               "runner.tool.call.failed",
+               %{"tool_name" => "bash", "reason_type" => "exit_status"},
+               workspace: workspace
+             )
 
-    # Counter continues
-    for _ <- 1..4 do
-      refute Evolution.maybe_trigger_after_consolidation(workspace: workspace)
-    end
+    assert {:ok, _} =
+             Log.error(
+               "runner.tool.call.failed",
+               %{"tool_name" => "bash", "reason_type" => "exit_status"},
+               workspace: workspace
+             )
 
-    # 10th consolidation triggers again
-    assert Evolution.maybe_trigger_after_consolidation(workspace: workspace)
-  end
+    assert {:ok, result} = Evolution.run_evolution_cycle(workspace: workspace)
+    assert result.candidate_count == 1
 
-  test "Memory.consolidate hooks into evolution counter", %{workspace: workspace} do
-    counter_path = Path.join(workspace, "memory/.evolution_counter")
-
-    # Clear counter
-    File.rm(counter_path)
-
-    session = %Session{
-      key: "evo-consolidation-test",
-      messages: [
-        %{"role" => "user", "content" => "hello", "timestamp" => "2026-03-20T10:00:00Z"},
-        %{"role" => "assistant", "content" => "hi there", "timestamp" => "2026-03-20T10:01:00Z"}
-      ],
-      created_at: DateTime.utc_now(),
-      updated_at: DateTime.utc_now(),
-      metadata: %{},
-      last_consolidated: 0
-    }
-
-    mock_llm_call = fn _messages, _opts ->
-      {:ok,
-       %{
-         "history_entry" => "[2026-03-20 10:00] Test conversation.",
-         "memory_update" => "# Memory\nTest fact.\n"
-       }}
-    end
-
-    {:ok, _updated} =
-      Memory.consolidate(session, :anthropic, "test-model",
-        workspace: workspace,
-        archive_all: true,
-        llm_call_fun: mock_llm_call
-      )
-
-    # Counter should have been incremented
-    assert File.read!(counter_path) |> String.trim() == "1"
-
-    # History should be written
-    history = File.read!(Path.join(workspace, "memory/HISTORY.md"))
-    assert history =~ "Test conversation"
-  end
-
-  test "reflect tool evolution_status works end-to-end", %{workspace: workspace} do
-    # Record some signals
-    Evolution.record_signal(
-      %{source: "runner", signal: "User corrected format"},
-      workspace: workspace
-    )
-
-    # Run a cycle to generate audit events
-    mock_llm = fn _messages, _opts ->
-      {:ok, %{"observations" => "Minor patterns."}}
-    end
-
-    Evolution.run_evolution_cycle(
-      workspace: workspace,
-      trigger: :manual,
-      llm_call_fun: mock_llm
-    )
-
-    # Record a new signal after cycle
-    Evolution.record_signal(
-      %{source: "test", signal: "New signal after cycle"},
-      workspace: workspace
-    )
-
-    # Call reflect tool
-    ctx = %{workspace: workspace}
-    {:ok, status} = Nex.Agent.Tool.Reflect.execute(%{"action" => "evolution_status"}, ctx)
-
+    {:ok, status} = Reflect.execute(%{"action" => "evolution_status"}, %{workspace: workspace})
     assert status =~ "Evolution Status"
-    assert status =~ "evolution.cycle"
-    assert status =~ "1 pending signal"
+    assert status =~ "evolution.candidate.proposed"
+    assert status =~ "recent signal observation"
 
-    # Check evolution_history
-    {:ok, history} = Nex.Agent.Tool.Reflect.execute(%{"action" => "evolution_history"}, ctx)
+    {:ok, history} = Reflect.execute(%{"action" => "evolution_history"}, %{workspace: workspace})
+    assert history =~ "evolution.candidate.proposed"
     assert history =~ "Cycle Completed"
   end
+
+  test "approved non-code candidates realize and apply through deterministic tool lanes", %{
+    workspace: workspace
+  } do
+    assert {:ok, _} =
+             Log.info(
+               "evolution.candidate.proposed",
+               %{
+                 "id" => "cand_memory_apply",
+                 "kind" => "memory_candidate",
+                 "summary" => "Remember JSON output preference",
+                 "rationale" => "User repeatedly requested JSON output.",
+                 "evidence_ids" => ["obs_1"],
+                 "risk" => "low",
+                 "requires_owner_approval" => true,
+                 "created_at" => Store.timestamp()
+               },
+               workspace: workspace
+             )
+
+    assert {:ok, approved} =
+             EvolutionCandidate.execute(
+               %{"action" => "approve", "candidate_id" => "cand_memory_apply"},
+               %{workspace: workspace}
+             )
+
+    assert approved["apply"]["status"] == "applied"
+    assert File.read!(Path.join(workspace, "memory/MEMORY.md")) =~ "Remember JSON output preference"
+
+    assert {:ok, candidate} = Evolution.candidate("cand_memory_apply", workspace: workspace)
+    assert candidate["status"] == "applied"
+
+    tags =
+      Query.query(%{"tag_prefix" => "evolution.candidate.", "limit" => 20}, workspace: workspace)
+      |> Enum.map(& &1["tag"])
+
+    assert "evolution.candidate.approved" in tags
+    assert "evolution.candidate.realization.generated" in tags
+    assert "evolution.candidate.apply.started" in tags
+    assert "evolution.candidate.apply.completed" in tags
+  end
+
+  defp write_budget(workspace, current) do
+    path = Store.budget_path(workspace: workspace)
+    File.mkdir_p!(Path.dirname(path))
+
+    File.write!(
+      path,
+      Jason.encode!(%{
+        "capacity" => 100,
+        "current" => current,
+        "mode" => mode_for_current(current),
+        "refill_rate" => 10,
+        "last_refilled_at" =>
+          DateTime.utc_now() |> DateTime.add(1, :hour) |> DateTime.to_iso8601(),
+        "spent_today" => 0
+      })
+    )
+  end
+
+  defp mode_for_current(0), do: "sleep"
+  defp mode_for_current(current) when current < 20, do: "low"
+  defp mode_for_current(current) when current < 80, do: "normal"
+  defp mode_for_current(_current), do: "deep"
 
   defp stream_client_from_response(fun) when is_function(fun, 2) do
     fn messages, opts, callback ->
@@ -333,21 +300,8 @@ defmodule Nex.Agent.EvolutionIntegrationTest do
   defp emit_mock_stream_response(callback, response) do
     content = Map.get(response, :content) || Map.get(response, "content") || ""
 
-    case render_mock_content(content) do
-      "" -> :ok
-      text -> callback.({:delta, text})
+    if content != "" do
+      callback.({:delta, content})
     end
-
-    tool_calls = Map.get(response, :tool_calls) || Map.get(response, "tool_calls") || []
-
-    if tool_calls != [] do
-      callback.({:tool_calls, tool_calls})
-    end
-
-    callback.({:done, %{finish_reason: nil, usage: nil, model: nil}})
   end
-
-  defp render_mock_content(nil), do: ""
-  defp render_mock_content(text) when is_binary(text), do: text
-  defp render_mock_content(text), do: inspect(text, printable_limit: 500, limit: 50)
 end

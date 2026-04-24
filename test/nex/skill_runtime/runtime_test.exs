@@ -414,7 +414,8 @@ defmodule Nex.SkillRuntimeTest do
       |> RequestTrace.read_trace(workspace: workspace, request_trace: %{"enabled" => true})
       |> Enum.find(&(&1["type"] == "request_started"))
 
-    assert started["selected_packages"] == []
+    assert started["selected_package_count"] == 0
+    assert started["selected_package_names"] == []
   end
 
   defp fake_http_get(skill_md, script, entry) do

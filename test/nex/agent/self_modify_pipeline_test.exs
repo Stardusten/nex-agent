@@ -2,8 +2,8 @@ defmodule Nex.Agent.SelfModifyPipelineTest do
   use ExUnit.Case, async: false
 
   alias Nex.Agent.{CodeUpgrade, HotReload}
+  alias Nex.Agent.ControlPlane.Query, as: ControlPlaneQuery
   alias Nex.Agent.SelfUpdate.{Deployer, ReleaseStore}
-  alias Nex.Agent.SelfHealing.EventStore
   alias Nex.Agent.Tool.Registry
 
   @tmp_prefix "nex-selfmod-test"
@@ -116,6 +116,14 @@ defmodule Nex.Agent.SelfModifyPipelineTest do
              release["tests"],
              &(Map.get(&1, "path") == target.test_path or Map.get(&1, :path) == target.test_path)
            )
+
+    assert [started] = control_plane_logs(tag: "self_update.deploy.started")
+    assert started["attrs"]["phase"] == "self_update.deploy"
+
+    assert [finished] = control_plane_logs(tag: "self_update.deploy.finished")
+    assert finished["attrs"]["release_id"] == release_id
+    assert finished["attrs"]["result_status"] == "ok"
+    assert Path.relative_to(target.source_path, @repo_root) in finished["attrs"]["changed_files"]
   end
 
   test "self_update status surfaces current release and related test paths", %{targets: targets} do
@@ -195,10 +203,15 @@ defmodule Nex.Agent.SelfModifyPipelineTest do
     assert error =~ "Syntax check failed"
     assert File.read!(target.source_path) =~ "def value( do"
 
-    assert [event] = EventStore.recent(5)
-    assert event["name"] == "self_update.deploy.failed"
-    assert event["classifier"]["deploy_phase"] == "syntax"
-    assert event["evidence"]["self_update_error_summary"] =~ "Syntax check failed"
+    assert [event] = control_plane_logs(tag: "self_update.deploy.failed")
+    assert event["tag"] == "self_update.deploy.failed"
+    assert event["attrs"]["phase"] == "self_update.deploy"
+    assert event["attrs"]["result_status"] == "failed"
+    assert event["attrs"]["reason_type"] == "syntax"
+    assert event["attrs"]["classifier"]["deploy_phase"] == "syntax"
+    assert event["attrs"]["evidence"]["self_update_error_summary"] =~ "Syntax check failed"
+
+    assert [_started] = control_plane_logs(tag: "self_update.deploy.started")
   end
 
   test "self_update deploy restores tracked file after compile failure", %{targets: targets} do
@@ -559,6 +572,18 @@ defmodule Nex.Agent.SelfModifyPipelineTest do
       File.write!(target.source_path, target.original_source)
       File.write!(target.test_path, target.original_test)
     end)
+  end
+
+  defp control_plane_logs(filters) do
+    filters
+    |> Map.new()
+    |> ControlPlaneQuery.query()
+    |> case do
+      {:ok, %{"observations" => observations}} -> observations
+      {:ok, %{observations: observations}} -> observations
+      {:ok, observations} when is_list(observations) -> observations
+      observations when is_list(observations) -> observations
+    end
   end
 
   defp tracked_source_path(base) do

@@ -154,6 +154,7 @@ defmodule Nex.Agent.Tool.ToolList do
         "memory_status" -> ["memory"]
         "memory_rebuild" -> ["memory"]
         "memory_write" -> ["memory"]
+        "observe" -> ["tool"]
         "skill_discover" -> ["skill"]
         "skill_get" -> ["skill"]
         "skill_capture" -> ["skill"]
@@ -167,6 +168,7 @@ defmodule Nex.Agent.Tool.ToolList do
         "executor_dispatch" -> ["tool"]
         "executor_status" -> ["tool"]
         "reflect" -> ["code"]
+        "evolution_candidate" -> ["tool"]
         "self_update" -> ["code"]
         _ -> ["tool"]
       end

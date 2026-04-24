@@ -5,7 +5,6 @@ defmodule Nex.Agent.Admin do
 
   alias Nex.Agent.{
     Admin.Event,
-    Audit,
     Bus,
     CodeUpgrade,
     Config,
@@ -13,7 +12,6 @@ defmodule Nex.Agent.Admin do
     Evolution,
     Gateway,
     Heartbeat,
-    RequestTrace,
     SelfUpdate,
     Session,
     SessionManager,
@@ -22,8 +20,10 @@ defmodule Nex.Agent.Admin do
     Workspace
   }
 
+  alias Nex.Agent.ControlPlane.{Log, Query}
   alias Nex.Agent.Tool.{CustomTools, Registry}
   alias Nex.SkillRuntime.Store
+  require Log
 
   @event_topic :admin_events
   @max_preview_lines 120
@@ -66,13 +66,22 @@ defmodule Nex.Agent.Admin do
     |> publish_event()
   end
 
+  @spec publish_observation(map()) :: :ok
+  def publish_observation(observation) when is_map(observation) do
+    observation
+    |> Query.observation_summary()
+    |> Event.from_observation()
+    |> publish_event()
+  end
+
   @spec recent_events(keyword()) :: [map()]
   def recent_events(opts \\ []) do
     limit = Keyword.get(opts, :limit, 20)
 
-    Audit.recent(Keyword.put(workspace_opts(opts), :limit, limit))
-    |> Enum.map(&Event.from_audit_entry/1)
-    |> Enum.map(&Event.to_map/1)
+    opts
+    |> workspace_opts()
+    |> Keyword.put(:limit, limit)
+    |> Query.recent_events()
   end
 
   @spec overview_state(keyword()) :: map()
@@ -80,7 +89,8 @@ defmodule Nex.Agent.Admin do
     %{
       runtime: runtime_state(opts),
       recent_events: recent_events(limit: 12, workspace: workspace(opts)),
-      pending_signals: Evolution.read_signals(workspace_opts(opts)),
+      recent_signals: Evolution.recent_signals(workspace_opts(opts)),
+      recent_candidates: Evolution.recent_candidates(workspace_opts(opts)) |> Enum.take(8),
       skills: skills_summary(opts),
       tasks: tasks_summary(opts),
       recent_sessions: Enum.take(list_sessions(opts), 6),
@@ -96,9 +106,11 @@ defmodule Nex.Agent.Admin do
     %{
       workspace: workspace,
       recent_events:
-        Audit.recent(Keyword.put(workspace_opts(opts), :limit, 60))
-        |> Enum.filter(&String.starts_with?(Map.get(&1, "event", ""), "evolution.")),
-      pending_signals: Evolution.read_signals(workspace_opts(opts)),
+        Query.recent_events(
+          Keyword.merge(workspace_opts(opts), limit: 60, tag_prefix: "evolution.")
+        ),
+      recent_signals: Evolution.recent_signals(workspace_opts(opts)),
+      recent_candidates: Evolution.recent_candidates(workspace_opts(opts)) |> Enum.take(20),
       soul_preview: file_preview(Path.join(workspace, "SOUL.md")),
       user_preview: file_preview(Path.join(workspace, "USER.md"), 40),
       memory_preview:
@@ -138,11 +150,12 @@ defmodule Nex.Agent.Admin do
       user_preview: file_preview(Path.join(workspace, "USER.md"), 60),
       memory_bytes: file_size(Path.join(memory_dir, "MEMORY.md")),
       recent_events:
-        Audit.recent(Keyword.put(workspace_opts(opts), :limit, 20))
+        Query.recent_events(Keyword.put(workspace_opts(opts), :limit, 80))
         |> Enum.filter(fn entry ->
-          event = Map.get(entry, "event", "")
-          String.starts_with?(event, "memory.") or String.starts_with?(event, "evolution.memory_")
+          tag = Map.get(entry, "tag", "")
+          String.starts_with?(tag, "memory.") or String.starts_with?(tag, "evolution.memory_")
         end)
+        |> Enum.take(20)
     }
   end
 
@@ -253,8 +266,7 @@ defmodule Nex.Agent.Admin do
       deploy_warning: deploy_error,
       releases: releases_for(selected_name),
       recent_events:
-        Audit.recent(Keyword.put(workspace_opts(opts), :limit, 30))
-        |> Enum.filter(&String.starts_with?(Map.get(&1, "event", ""), "code."))
+        Query.recent_events(Keyword.merge(workspace_opts(opts), limit: 30, tag_prefix: "code."))
     }
   end
 
@@ -314,7 +326,7 @@ defmodule Nex.Agent.Admin do
 
     case result do
       {:ok, payload} ->
-        Audit.append(
+        Log.info(
           "memory.consolidated",
           Map.merge(payload, %{"session_key" => session_key}),
           workspace_opts(opts)
@@ -338,11 +350,7 @@ defmodule Nex.Agent.Admin do
     with :ok <- Session.save(session, workspace_opts(opts)) do
       SessionManager.invalidate(session_key, workspace_opts(opts))
 
-      Audit.append(
-        "session.reset",
-        %{"session_key" => session_key},
-        workspace_opts(opts)
-      )
+      Log.info("session.reset", %{"session_key" => session_key}, workspace_opts(opts))
 
       :ok
     end
@@ -351,7 +359,7 @@ defmodule Nex.Agent.Admin do
   @spec publish_draft_skill(String.t(), keyword()) :: {:ok, map()} | {:error, String.t()}
   def publish_draft_skill(name, opts \\ []) when is_binary(name) do
     with {:ok, skill} <- Skills.publish_draft(name, workspace_opts(opts)) do
-      Audit.append(
+      Log.info(
         "skill.published",
         %{
           "name" => name,
@@ -382,7 +390,7 @@ defmodule Nex.Agent.Admin do
     result = Gateway.start()
 
     if result == :ok do
-      Audit.append("runtime.gateway_started", %{}, [])
+      Log.info("runtime.gateway_started", %{}, [])
     end
 
     result
@@ -391,7 +399,7 @@ defmodule Nex.Agent.Admin do
   @spec stop_gateway() :: :ok
   def stop_gateway do
     result = Gateway.stop()
-    Audit.append("runtime.gateway_stopped", %{}, [])
+    Log.info("runtime.gateway_stopped", %{}, [])
     result
   end
 
@@ -408,12 +416,11 @@ defmodule Nex.Agent.Admin do
           {:error, error}
 
         payload ->
-          Audit.append(
+          Log.info(
             "code.rollback",
             %{
               "module" => module_name,
-              "release_id" => payload.release_id,
-              "workspace" => workspace(opts)
+              "release_id" => payload.release_id
             },
             workspace_opts(opts)
           )
@@ -462,8 +469,7 @@ defmodule Nex.Agent.Admin do
     %{
       modules: length(code_modules()),
       recent_events:
-        Audit.recent(Keyword.put(workspace_opts(opts), :limit, 8))
-        |> Enum.filter(&String.starts_with?(Map.get(&1, "event", ""), "code."))
+        Query.recent_events(Keyword.merge(workspace_opts(opts), limit: 8, tag_prefix: "code."))
     }
   end
 
@@ -491,7 +497,14 @@ defmodule Nex.Agent.Admin do
         href: "/memory",
         summary: "项目事实、长期经验与上下文",
         detail:
-          "#{length(Evolution.read_signals(workspace_opts(opts)))} 个 pending signals · #{file_size(Path.join(Workspace.memory_dir(workspace: workspace), "MEMORY.md"))} bytes"
+          "#{length(Evolution.recent_signals(workspace_opts(opts)))} recent signal observations · #{file_size(Path.join(Workspace.memory_dir(workspace: workspace), "MEMORY.md"))} bytes"
+      },
+      %{
+        key: "EVOLUTION",
+        href: "/memory",
+        summary: "候选动作、审批状态与执行生命周期",
+        detail:
+          "#{length(Evolution.recent_candidates(workspace_opts(opts)))} derived candidates · #{length(Query.recent_events(Keyword.merge(workspace_opts(opts), limit: 60, tag_prefix: "evolution.candidate.")))} lifecycle events"
       },
       %{
         key: "SKILL",
@@ -704,7 +717,8 @@ defmodule Nex.Agent.Admin do
 
         cond do
           not CodeUpgrade.code_layer_file?(path) ->
-            {:error, "Only repo CODE-layer modules under lib/nex/agent can be deployed via self_update: #{module_name}"}
+            {:error,
+             "Only repo CODE-layer modules under lib/nex/agent can be deployed via self_update: #{module_name}"}
 
           CodeUpgrade.protected_module?(module) ->
             {:error, "Protected module cannot be deployed via self_update: #{module_name}"}
@@ -802,238 +816,12 @@ defmodule Nex.Agent.Admin do
 
   defp list_request_traces(opts) do
     opts
-    |> RequestTrace.list_paths()
-    |> Enum.map(&request_trace_summary(&1, opts))
-    |> Enum.reject(&is_nil/1)
-  end
-
-  defp request_trace_summary(path, opts) do
-    events = RequestTrace.read_trace(path, opts)
-    started = Enum.find(events, &(&1["type"] == "request_started")) || %{}
-    completed = Enum.find(events, &(&1["type"] == "request_completed")) || %{}
-    tool_activity = trace_tool_activity(events)
-
-    if events == [] or (started == %{} and completed == %{}) do
-      nil
-    else
-      %{
-        run_id: started["run_id"] || completed["run_id"] || Path.basename(path, ".jsonl"),
-        prompt: truncate_text(started["prompt"], 140),
-        inserted_at: started["inserted_at"] || completed["inserted_at"],
-        status: completed["status"] || "running",
-        result: truncate_text(completed["result"], 200),
-        tool_count: Enum.count(events, &(&1["type"] == "tool_result")),
-        llm_rounds: Enum.count(events, &(&1["type"] == "llm_response")),
-        selected_packages: started["selected_packages"] || [],
-        used_tools: trace_used_tools(tool_activity),
-        skill_call_count: Enum.count(tool_activity, &trace_skill_tool?/1)
-      }
-    end
+    |> Query.recent_run_trace_summaries()
   end
 
   defp request_trace_detail(run_id, opts) do
-    events = RequestTrace.read_trace(run_id, opts)
-
-    if events == [] do
-      nil
-    else
-      started = Enum.find(events, &(&1["type"] == "request_started")) || %{}
-      completed = Enum.find(events, &(&1["type"] == "request_completed")) || %{}
-      tool_activity = trace_tool_activity(events)
-      llm_turns = trace_llm_turns(events)
-
-      %{
-        run_id: run_id,
-        prompt: started["prompt"],
-        channel: started["channel"],
-        chat_id: started["chat_id"],
-        inserted_at: started["inserted_at"] || completed["inserted_at"],
-        status: completed["status"] || "running",
-        result: completed["result"],
-        selected_packages: started["selected_packages"] || [],
-        runtime_system_messages: started["runtime_system_messages"] || [],
-        events: events,
-        available_tools: trace_available_tools(events),
-        tool_activity: tool_activity,
-        used_tools: trace_used_tools(tool_activity),
-        llm_turns: llm_turns,
-        tool_count: Enum.count(events, &(&1["type"] == "tool_result")),
-        llm_rounds: Enum.count(llm_turns),
-        path: RequestTrace.trace_path(run_id, opts)
-      }
-    end
+    Query.run_trace_detail(run_id, opts)
   end
-
-  defp trace_available_tools(events) do
-    events
-    |> Enum.filter(&(&1["type"] == "llm_request"))
-    |> Enum.flat_map(&(Map.get(&1, "tools", []) || []))
-    |> Enum.map(&normalize_trace_tool_definition/1)
-    |> Enum.reject(&(is_nil(&1.name) or &1.name == ""))
-    |> Enum.uniq_by(& &1.name)
-  end
-
-  defp trace_tool_activity(events) do
-    calls =
-      events
-      |> Enum.filter(&(&1["type"] == "llm_response"))
-      |> Enum.flat_map(&trace_tool_calls_from_response/1)
-
-    results =
-      events
-      |> Enum.filter(&(&1["type"] == "tool_result"))
-      |> Enum.map(&normalize_trace_tool_result/1)
-
-    results_by_id =
-      Map.new(results, fn result ->
-        {result.tool_call_id || "result:#{result.name}:#{result.inserted_at}", result}
-      end)
-
-    matched_result_keys =
-      calls
-      |> Enum.map(fn call ->
-        result = Map.get(results_by_id, call.tool_call_id)
-
-        {
-          %{
-            tool_call_id: call.tool_call_id,
-            name: call.name,
-            kind: call.kind,
-            iteration: call.iteration,
-            inserted_at: call.inserted_at,
-            arguments: call.arguments,
-            result: result && result.content,
-            result_inserted_at: result && result.inserted_at
-          },
-          result && (result.tool_call_id || "result:#{result.name}:#{result.inserted_at}")
-        }
-      end)
-
-    unmatched_results =
-      results
-      |> Enum.reject(fn result ->
-        key = result.tool_call_id || "result:#{result.name}:#{result.inserted_at}"
-        Enum.any?(matched_result_keys, fn {_activity, matched_key} -> matched_key == key end)
-      end)
-      |> Enum.map(fn result ->
-        %{
-          tool_call_id: result.tool_call_id,
-          name: result.name,
-          kind: if(trace_skill_tool_name?(result.name), do: :skill, else: :tool),
-          iteration: nil,
-          inserted_at: result.inserted_at,
-          arguments: nil,
-          result: result.content,
-          result_inserted_at: result.inserted_at
-        }
-      end)
-
-    matched_result_keys
-    |> Enum.map(&elem(&1, 0))
-    |> Kernel.++(unmatched_results)
-  end
-
-  defp trace_llm_turns(events) do
-    requests_by_iteration =
-      events
-      |> Enum.filter(&(&1["type"] == "llm_request"))
-      |> Map.new(fn event -> {Map.get(event, "iteration"), event} end)
-
-    responses_by_iteration =
-      events
-      |> Enum.filter(&(&1["type"] == "llm_response"))
-      |> Map.new(fn event -> {Map.get(event, "iteration"), event} end)
-
-    request_iterations = Map.keys(requests_by_iteration)
-    response_iterations = Map.keys(responses_by_iteration)
-
-    request_iterations
-    |> Kernel.++(response_iterations)
-    |> Enum.reject(&is_nil/1)
-    |> Enum.uniq()
-    |> Enum.sort()
-    |> Enum.map(fn iteration ->
-      request = Map.get(requests_by_iteration, iteration, %{})
-      response = Map.get(responses_by_iteration, iteration, %{})
-
-      %{
-        iteration: iteration,
-        inserted_at: Map.get(request, "inserted_at") || Map.get(response, "inserted_at"),
-        message_count: length(Map.get(request, "messages", []) || []),
-        available_tool_names:
-          request
-          |> Map.get("tools", [])
-          |> Enum.map(fn tool -> Map.get(tool, "name") || Map.get(tool, :name) end)
-          |> Enum.reject(&is_nil/1)
-          |> Enum.uniq(),
-        tool_choice: Map.get(request, "tool_choice"),
-        content: Map.get(response, "content"),
-        tool_calls: trace_tool_calls_from_response(response),
-        finish_reason: Map.get(response, "finish_reason"),
-        duration_ms: Map.get(response, "duration_ms"),
-        request: request,
-        response: response
-      }
-    end)
-  end
-
-  defp trace_used_tools(activity) do
-    activity
-    |> Enum.map(& &1.name)
-    |> Enum.reject(&(is_nil(&1) or &1 == ""))
-    |> Enum.uniq()
-  end
-
-  defp trace_tool_calls_from_response(response) when is_map(response) do
-    response
-    |> Map.get("tool_calls", [])
-    |> Enum.map(fn tool_call ->
-      function = Map.get(tool_call, "function") || Map.get(tool_call, :function) || %{}
-
-      name =
-        Map.get(tool_call, "name") || Map.get(tool_call, :name) || Map.get(function, "name") ||
-          Map.get(function, :name)
-
-      arguments =
-        Map.get(tool_call, "arguments") || Map.get(tool_call, :arguments) ||
-          Map.get(function, "arguments") || Map.get(function, :arguments)
-
-      %{
-        tool_call_id: Map.get(tool_call, "id") || Map.get(tool_call, :id),
-        name: name,
-        kind: if(trace_skill_tool_name?(name), do: :skill, else: :tool),
-        arguments: arguments,
-        iteration: Map.get(response, "iteration"),
-        inserted_at: Map.get(response, "inserted_at")
-      }
-    end)
-  end
-
-  defp trace_tool_calls_from_response(_response), do: []
-
-  defp normalize_trace_tool_result(event) do
-    %{
-      tool_call_id: Map.get(event, "tool_call_id"),
-      name: Map.get(event, "tool"),
-      content: Map.get(event, "content"),
-      inserted_at: Map.get(event, "inserted_at")
-    }
-  end
-
-  defp normalize_trace_tool_definition(tool) do
-    %{
-      name: Map.get(tool, "name") || Map.get(tool, :name),
-      description: Map.get(tool, "description") || Map.get(tool, :description),
-      parameters: Map.get(tool, "parameters") || Map.get(tool, :parameters) || %{}
-    }
-  end
-
-  defp trace_skill_tool?(activity), do: trace_skill_tool_name?(activity && activity.name)
-
-  defp trace_skill_tool_name?(name) when is_binary(name),
-    do: String.starts_with?(name, "skill_run__")
-
-  defp trace_skill_tool_name?(_name), do: false
 
   defp decode_runtime_run_lines(path) do
     case File.read(path) do

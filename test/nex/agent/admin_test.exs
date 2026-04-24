@@ -1,16 +1,21 @@
 defmodule Nex.Agent.AdminTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{Admin, Audit, Bus, CodeUpgrade, RequestTrace, Session, Skills, Workspace}
+  alias Nex.Agent.{Admin, Audit, Bus, CodeUpgrade, Session, Skills, Workspace}
+  alias Nex.Agent.ControlPlane.Log
   alias Nex.Agent.SelfUpdate.ReleaseStore
   alias Nex.Agent.Tool.CustomTools
+  require Log
 
   setup do
     workspace =
       Path.join(System.tmp_dir!(), "nex-agent-admin-#{System.unique_integer([:positive])}")
 
     Workspace.ensure!(workspace: workspace)
-    repo_root = Path.join(System.tmp_dir!(), "nex-agent-admin-repo-#{System.unique_integer([:positive])}")
+
+    repo_root =
+      Path.join(System.tmp_dir!(), "nex-agent-admin-repo-#{System.unique_integer([:positive])}")
+
     previous_repo_root = Application.get_env(:nex_agent, :repo_root)
     Application.put_env(:nex_agent, :repo_root, repo_root)
     File.mkdir_p!(repo_root)
@@ -133,46 +138,33 @@ defmodule Nex.Agent.AdminTest do
   test "runtime_state exposes request trace summaries and selected trace detail", %{
     workspace: workspace
   } do
-    trace_opts = [workspace: workspace, request_trace: %{"dir" => "audit/request_traces"}]
-    trace_path = RequestTrace.trace_path("run_trace_admin", trace_opts)
-    File.mkdir_p!(Path.dirname(trace_path))
+    Log.info("runner.run.started", %{},
+      workspace: workspace,
+      run_id: "run_trace_admin",
+      channel: "telegram",
+      chat_id: "123"
+    )
 
-    File.write!(
-      trace_path,
-      [
-        Jason.encode!(%{
-          "type" => "request_started",
-          "run_id" => "run_trace_admin",
-          "prompt" => "show me trace",
-          "channel" => "telegram",
-          "chat_id" => "123",
-          "selected_packages" => [%{"name" => "agent-browser"}],
-          "inserted_at" => "2026-03-30T12:00:00Z"
-        }),
-        "{bad json}",
-        Jason.encode!(%{
-          "type" => "llm_response",
-          "run_id" => "run_trace_admin",
-          "iteration" => 1,
-          "content" => "ok",
-          "inserted_at" => "2026-03-30T12:00:01Z"
-        }),
-        Jason.encode!(%{
-          "type" => "tool_result",
-          "run_id" => "run_trace_admin",
-          "tool" => "list_dir",
-          "content" => "done",
-          "inserted_at" => "2026-03-30T12:00:02Z"
-        }),
-        Jason.encode!(%{
-          "type" => "request_completed",
-          "run_id" => "run_trace_admin",
-          "status" => "completed",
-          "result" => "final answer",
-          "inserted_at" => "2026-03-30T12:00:03Z"
-        })
-      ]
-      |> Enum.join("\n")
+    Log.info(
+      "runner.llm.call.finished",
+      %{"iteration" => 1, "duration_ms" => 10},
+      workspace: workspace,
+      run_id: "run_trace_admin"
+    )
+
+    Log.info(
+      "runner.tool.call.finished",
+      %{"tool_name" => "list_dir", "result_status" => "ok"},
+      workspace: workspace,
+      run_id: "run_trace_admin",
+      tool_call_id: "tool-1"
+    )
+
+    Log.info(
+      "runner.run.finished",
+      %{"result_status" => "ok"},
+      workspace: workspace,
+      run_id: "run_trace_admin"
     )
 
     state =
@@ -185,18 +177,8 @@ defmodule Nex.Agent.AdminTest do
     assert state.request_trace_config["enabled"] == false
     assert length(state.recent_request_traces) == 1
 
-    assert hd(state.recent_request_traces) == %{
-             run_id: "run_trace_admin",
-             prompt: "show me trace",
-             inserted_at: "2026-03-30T12:00:00Z",
-             status: "completed",
-             result: "final answer",
-             tool_count: 1,
-             llm_rounds: 1,
-             selected_packages: [%{"name" => "agent-browser"}],
-             used_tools: ["list_dir"],
-             skill_call_count: 0
-           }
+    assert %{run_id: "run_trace_admin", status: "completed", tool_count: 1, llm_rounds: 1} =
+             hd(state.recent_request_traces)
 
     assert state.selected_request_trace.run_id == "run_trace_admin"
     assert state.selected_request_trace.channel == "telegram"
@@ -209,6 +191,7 @@ defmodule Nex.Agent.AdminTest do
     assert length(state.selected_request_trace.tool_activity) == 1
     assert hd(state.selected_request_trace.tool_activity).name == "list_dir"
     assert length(state.selected_request_trace.llm_turns) == 1
+    assert state.selected_request_trace.tags["runner.run.finished"] == 1
   end
 
   test "console-facing admin states keep the key fields used by panels", %{workspace: workspace} do
@@ -234,15 +217,55 @@ defmodule Nex.Agent.AdminTest do
     memory_state = Admin.memory_state(workspace: workspace)
     sessions_state = Admin.sessions_state(workspace: workspace)
 
-    assert length(overview_state.pending_signals) == 1
-    assert length(evolution_state.pending_signals) == 1
+    assert length(overview_state.recent_signals) == 1
+    assert length(evolution_state.recent_signals) == 1
+    assert is_list(overview_state.recent_candidates)
+    assert is_list(evolution_state.recent_candidates)
     assert memory_state.memory_preview =~ "# MEMORY"
     assert memory_state.memory_bytes > 0
     assert sessions_state.selected_session.last_consolidated == 0
     assert sessions_state.selected_session.unconsolidated_messages == 2
   end
 
-  test "audit append broadcasts normalized admin event", %{workspace: workspace} do
+  test "evolution_state derives candidate lifecycle from control plane observations", %{workspace: workspace} do
+    assert {:ok, _} =
+             Log.info(
+               "evolution.candidate.proposed",
+               %{
+                 "id" => "cand_admin",
+                 "kind" => "memory_candidate",
+                 "summary" => "Remember JSON preference",
+                 "rationale" => "Repeated corrections asked for JSON",
+                 "evidence_ids" => ["obs_1"],
+                 "risk" => "low",
+                 "requires_owner_approval" => true,
+                 "created_at" => "2026-04-24T10:00:00Z"
+               },
+               workspace: workspace
+             )
+
+    assert {:ok, _} =
+             Log.info(
+               "evolution.candidate.approved",
+               %{"candidate_id" => "cand_admin", "mode" => "apply"},
+               workspace: workspace
+             )
+
+    assert {:ok, _} =
+             Log.info(
+               "evolution.candidate.apply.completed",
+               %{"candidate_id" => "cand_admin", "result_summary" => "Memory append saved."},
+               workspace: workspace
+             )
+
+    state = Admin.evolution_state(workspace: workspace)
+
+    assert [%{"candidate_id" => "cand_admin", "status" => "applied"}] = state.recent_candidates
+  end
+
+  test "audit compatibility wrapper broadcasts control-plane observation summary", %{
+    workspace: workspace
+  } do
     assert :ok = Admin.subscribe_events(self())
 
     assert :ok =
@@ -252,7 +275,8 @@ defmodule Nex.Agent.AdminTest do
     assert event["topic"] == "runtime"
     assert event["kind"] == "runtime.gateway_started"
     assert event["summary"] == "Gateway started"
-    assert event["payload"] == %{"source" => "test"}
+    assert event["payload"]["tag"] == "runtime.gateway_started"
+    assert event["payload"]["attrs_summary"] == %{"source" => "test"}
   end
 
   test "code upgrade source path resolves project source files" do
@@ -330,7 +354,13 @@ defmodule Nex.Agent.AdminTest do
         "parent_release_id" => nil,
         "timestamp" => "2026-04-24T10:00:00Z",
         "reason" => "admin test",
-        "files" => [%{"path" => Path.relative_to(path, CodeUpgrade.repo_root()), "before_sha" => "a", "after_sha" => "b"}],
+        "files" => [
+          %{
+            "path" => Path.relative_to(path, CodeUpgrade.repo_root()),
+            "before_sha" => "a",
+            "after_sha" => "b"
+          }
+        ],
         "modules" => ["Nex.Agent.Admin"],
         "tests" => [],
         "status" => "deployed"
