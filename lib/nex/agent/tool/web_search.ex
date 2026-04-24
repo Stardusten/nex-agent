@@ -1,13 +1,16 @@
 defmodule Nex.Agent.Tool.WebSearch do
   @moduledoc """
-  Web Search Tool - Search the web using DuckDuckGo Instant Answer API (free, no API key required)
+  Web Search Tool - Search the web using DuckDuckGo (free, no API key required)
   """
 
   @behaviour Nex.Agent.Tool.Behaviour
 
+  alias Nex.Agent.Config
   alias Nex.Agent.HTTP
+  alias Nex.Agent.Tool.Backends.OpenAICodex
 
-  @ddg_url "https://api.duckduckgo.com"
+  @ddg_api_url "https://api.duckduckgo.com"
+  @ddg_html_url "https://html.duckduckgo.com/html/"
 
   def name, do: "web_search"
   def description, do: "Search the web. Returns titles, URLs, and snippets."
@@ -56,14 +59,33 @@ defmodule Nex.Agent.Tool.WebSearch do
   end
 
   def execute(%{"query" => query, "count" => count}, opts) when is_integer(count) do
-    do_search(query, count, request_fun(opts), cancel_ref(opts))
+    execute_with_backend(query, count, opts)
   end
 
   def execute(%{"query" => query}, opts) do
-    do_search(query, 5, request_fun(opts), cancel_ref(opts))
+    execute_with_backend(query, 5, opts)
   end
 
-  defp do_search(query, count, http_get, cancel_ref) do
+  defp execute_with_backend(query, count, opts) do
+    capability = capability_config(opts)
+
+    case Map.get(capability, "backend", "auto") do
+      "openai_codex" ->
+        OpenAICodex.web_search(query, count, normalize_ctx(opts), capability)
+
+      "auto" ->
+        if codex_backend_supported?(opts) do
+          OpenAICodex.web_search(query, count, normalize_ctx(opts), capability)
+        else
+          do_search(query, count, request_fun(opts), cancel_ref(opts), observe_context(opts))
+        end
+
+      _ ->
+        do_search(query, count, request_fun(opts), cancel_ref(opts), observe_context(opts))
+    end
+  end
+
+  defp do_search(query, count, http_get, cancel_ref, observe_context) do
     params = %{
       "q" => query,
       "format" => "json",
@@ -75,13 +97,41 @@ defmodule Nex.Agent.Tool.WebSearch do
     req_opts =
       [params: params, redirect: true]
       |> maybe_put_cancel_ref(cancel_ref)
-      |> HTTP.maybe_add_proxy(@ddg_url)
+      |> maybe_put_observe_context(observe_context)
+      |> HTTP.maybe_add_proxy(@ddg_api_url)
 
-    case http_get.(@ddg_url, req_opts) do
+    case http_get.(@ddg_api_url, req_opts) do
       {:ok, %{status: 200, body: body}} ->
         body = if is_binary(body), do: Jason.decode!(body), else: body
         results = parse_results(body)
-        {:ok, results}
+
+        if empty_results?(results) do
+          search_html(query, count, http_get, cancel_ref, observe_context)
+        else
+          {:ok, results}
+        end
+
+      {:ok, %{status: status, body: body}} ->
+        {:ok, %{error: "Search failed with status #{status}: #{inspect(body)}"}}
+
+      {:error, reason} ->
+        case search_html(query, count, http_get, cancel_ref, observe_context) do
+          {:ok, results} when is_binary(results) -> {:ok, results}
+          _ -> {:ok, %{error: "Search failed: #{inspect(reason)}"}}
+        end
+    end
+  end
+
+  defp search_html(query, count, http_get, cancel_ref, observe_context) do
+    req_opts =
+      [params: %{"q" => query}, redirect: true]
+      |> maybe_put_cancel_ref(cancel_ref)
+      |> maybe_put_observe_context(observe_context)
+      |> HTTP.maybe_add_proxy(@ddg_html_url)
+
+    case http_get.(@ddg_html_url, req_opts) do
+      {:ok, %{status: 200, body: body}} when is_binary(body) ->
+        {:ok, parse_html_results(body, count)}
 
       {:ok, %{status: status, body: body}} ->
         {:ok, %{error: "Search failed with status #{status}: #{inspect(body)}"}}
@@ -108,6 +158,64 @@ defmodule Nex.Agent.Tool.WebSearch do
     end
   end
 
+  defp empty_results?("No results found."), do: true
+  defp empty_results?(""), do: true
+  defp empty_results?(_), do: false
+
+  defp parse_html_results(body, count) do
+    ~r/<a\b[^>]*class="[^"]*\bresult__a\b[^"]*"[^>]*href="([^"]+)"[^>]*>(.*?)<\/a>/si
+    |> Regex.scan(body)
+    |> Enum.map(fn [_match, href, title] ->
+      {clean_html(title), decode_ddg_href(href)}
+    end)
+    |> Enum.reject(fn {title, url} -> title == "" or url == "" end)
+    |> Enum.uniq_by(fn {_title, url} -> url end)
+    |> Enum.take(count)
+    |> Enum.map_join("\n---\n", fn {title, url} -> "#{title}\n#{url}\n" end)
+    |> case do
+      "" -> "No results found."
+      formatted -> formatted
+    end
+  end
+
+  defp clean_html(value) do
+    value
+    |> String.replace(~r/<[^>]*>/, "")
+    |> html_unescape()
+    |> String.replace(~r/\s+/, " ")
+    |> String.trim()
+  end
+
+  defp decode_ddg_href(href) do
+    href = html_unescape(href)
+
+    href
+    |> URI.parse()
+    |> case do
+      %URI{query: query} when is_binary(query) ->
+        query
+        |> URI.decode_query()
+        |> Map.get("uddg", href)
+
+      _ ->
+        href
+    end
+    |> normalize_url()
+  end
+
+  defp normalize_url("//" <> rest), do: "https://" <> rest
+  defp normalize_url(url), do: url
+
+  defp html_unescape(value) do
+    value
+    |> String.replace("&amp;", "&")
+    |> String.replace("&quot;", "\"")
+    |> String.replace("&#39;", "'")
+    |> String.replace("&apos;", "'")
+    |> String.replace("&lt;", "<")
+    |> String.replace("&gt;", ">")
+  end
+
   defp request_fun(%{http_get: http_get}) when is_function(http_get, 2), do: http_get
 
   defp request_fun(opts) when is_list(opts),
@@ -120,4 +228,55 @@ defmodule Nex.Agent.Tool.WebSearch do
   defp cancel_ref(_opts), do: nil
   defp maybe_put_cancel_ref(opts, nil), do: opts
   defp maybe_put_cancel_ref(opts, cancel_ref), do: Keyword.put(opts, :cancel_ref, cancel_ref)
+
+  defp observe_context(opts) when is_map(opts) do
+    Map.take(opts, [:workspace, :run_id, :session_key, :channel, :chat_id, :tool_call_id])
+  end
+
+  defp observe_context(_opts), do: %{}
+
+  defp maybe_put_observe_context(opts, context) when context == %{}, do: opts
+  defp maybe_put_observe_context(opts, context), do: Keyword.put(opts, :observe_context, context)
+
+  defp capability_config(opts) when is_map(opts) do
+    case Map.get(opts, :config) || Map.get(opts, "config") do
+      %Config{} = config -> Config.web_search_capability(config)
+      _ -> Config.web_search_capability(nil)
+    end
+  end
+
+  defp capability_config(opts) when is_list(opts) do
+    case Keyword.get(opts, :config) do
+      %Config{} = config -> Config.web_search_capability(config)
+      _ -> Config.web_search_capability(nil)
+    end
+  end
+
+  defp capability_config(_opts), do: Config.web_search_capability(nil)
+
+  defp codex_backend_supported?(opts) when is_map(opts) do
+    configured_backend = Map.get(capability_config(opts), "backend", "auto")
+    provider = Map.get(opts, :provider) || Map.get(opts, "provider")
+    base_url = Map.get(opts, :base_url) || Map.get(opts, "base_url")
+
+    configured_backend == "openai_codex" or
+      (configured_backend == "auto" and provider in [:openai_codex, "openai_codex"] and
+         is_binary(base_url) and String.contains?(base_url, "chatgpt.com/backend-api/codex"))
+  end
+
+  defp codex_backend_supported?(opts) when is_list(opts) do
+    configured_backend = Map.get(capability_config(opts), "backend", "auto")
+    provider = Keyword.get(opts, :provider)
+    base_url = Keyword.get(opts, :base_url)
+
+    configured_backend == "openai_codex" or
+      (configured_backend == "auto" and provider == :openai_codex and
+         is_binary(base_url) and String.contains?(base_url, "chatgpt.com/backend-api/codex"))
+  end
+
+  defp codex_backend_supported?(_opts), do: false
+
+  defp normalize_ctx(opts) when is_map(opts), do: opts
+  defp normalize_ctx(opts) when is_list(opts), do: Enum.into(opts, %{})
+  defp normalize_ctx(_opts), do: %{}
 end

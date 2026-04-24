@@ -404,7 +404,7 @@ defmodule Nex.Agent.Onboarding do
     - Personal tasks: `workspace/tasks/tasks.json`
     - Project memory: `workspace/projects/<project>/PROJECT.md`
     - Executor configs and logs: `workspace/executors/`
-    - Audit events: `workspace/audit/events.jsonl`
+    - Runtime observations: query with `observe`; machine facts live under `workspace/control_plane/`
     - Sessions: `workspace/sessions/`
 
     ## Prompt Composition
@@ -440,6 +440,7 @@ defmodule Nex.Agent.Onboarding do
     - Shell and execution: `bash`
     - Communication: `message`
     - Web and retrieval: `web_search`, `web_fetch`
+    - Media generation: `image_generation`
     - Scheduling and background work: `cron`, `spawn_task`, `task`
     - Knowledge capture: `knowledge_capture`
     - Coding executor orchestration: `executor_dispatch`, `executor_status`
@@ -463,10 +464,15 @@ defmodule Nex.Agent.Onboarding do
     Owner/subagent handoff:
     - Subagents may inspect and patch code
     - Only the owner run may use `self_update status`, `self_update deploy`, or `self_update rollback`
-    Self-healing loop:
-    - Runtime records structured failure signals for LLM calls, tool calls, and self_update deploy attempts
-    - In the current minimal loop, self-healing only produces record/hint/reflection candidates
-    - It does not automatically repair code, write memory or skills, or bypass owner-only deploy
+    ControlPlane observation:
+    - Use `observe` for recent runtime facts, failures, metrics, current gauges, and incident evidence
+    - `observe` covers run, LLM, tool, HTTP, and self_update lifecycle observations
+    - ControlPlane observations are the self-observation source of truth; human logs are projections
+    - Budget only controls review/candidate signals and never bypasses owner-only deploy
+    Evolution candidate execution:
+    - Evolution proposes candidates first; owner approval goes through the single `evolution_candidate` tool
+    - Use `evolution_candidate list` / `show` to inspect pending or applied lifecycle
+    - Non-code candidates reuse deterministic write tools; `code_hint` must still flow through `apply_patch` and `self_update`
     For Lark/Feishu business operations beyond chat messaging, use `bash` with external `lark-cli` instead of expecting built-in `feishu_*` tools.
 
     ## Six-Layer Evolution
@@ -514,6 +520,7 @@ defmodule Nex.Agent.Onboarding do
     - Shell and execution: `bash`
     - Communication: `message`
     - Web and retrieval: `web_search`, `web_fetch`
+    - Media generation: `image_generation`
     - Scheduling and background work: `cron`, `spawn_task`, `task`
     - Knowledge capture: `knowledge_capture`
     - Coding executor orchestration: `executor_dispatch`, `executor_status`
@@ -537,7 +544,12 @@ defmodule Nex.Agent.Onboarding do
     - Use `self_update status` for quick preflight and release visibility.
     - Treat `self_update deploy` as quick deploy verification only; strict ship checks are explicit extra work.
     - In owner/subagent workflows, only the owner run may deploy or roll back.
-    - Self-healing records LLM/tool/deploy failure signals, but the minimal loop does not auto-repair code or write memory/skills.
+    - Use `observe` to inspect ControlPlane runtime facts, current owner run gauge, run/LLM/tool/HTTP/self_update lifecycle, failures, metrics, budget, and incident evidence.
+    - When answering busy-session questions about errors, stuck progress, backend state, logs, or incidents, check `observe summary` or `observe incident` before claiming what happened.
+    - `/status` is the deterministic quick view for the current owner run plus recent ControlPlane warning/error evidence.
+    - Budget only controls review/candidate signals; it does not auto-repair code, write memory/skills, or deploy.
+    - `evolution_candidate` is the single owner-facing candidate execution lane. Use it to list/show/approve/reject evolution candidates.
+    - `code_hint` approval may produce a patch proposal, but runtime activation still requires `self_update deploy`.
     - If a built-in memory tool directly matches the user request, call it instead of reading source files first.
 
     ## Workspace Extension Model

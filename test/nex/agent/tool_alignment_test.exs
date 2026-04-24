@@ -24,7 +24,8 @@ defmodule Nex.Agent.ToolAlignmentTest do
   use ExUnit.Case, async: false
 
   alias Nex.Agent.{Runner, Session, Skills}
-  alias Nex.Agent.Tool.{Registry, SkillDiscover, SkillGet, SoulUpdate, ToolList}
+  alias Nex.Agent.Runtime.Snapshot
+  alias Nex.Agent.Tool.{EvolutionCandidate, Registry, SkillDiscover, SkillGet, SoulUpdate, ToolList}
   alias Nex.SkillRuntime
 
   setup do
@@ -91,6 +92,7 @@ defmodule Nex.Agent.ToolAlignmentTest do
     assert skill_get["layers"] == ["skill"]
     assert skill_capture["layers"] == ["skill"]
     assert tool_create["layers"] == ["tool"]
+    assert Enum.find(builtins, &(&1["name"] == "evolution_candidate"))["layers"] == ["tool"]
     refute Enum.any?(builtins, &(&1["name"] == "skill_list"))
     refute Enum.any?(builtins, &(&1["name"] == "skill_read"))
     refute Enum.any?(builtins, &(&1["name"] == "skill_create"))
@@ -155,6 +157,7 @@ defmodule Nex.Agent.ToolAlignmentTest do
     assert "skill_discover" in names
     assert "skill_get" in names
     assert "reflect" in names
+    refute "evolution_candidate" in names
     refute "skill_list" in names
     refute "skill_read" in names
     refute "skill_create" in names
@@ -175,8 +178,10 @@ defmodule Nex.Agent.ToolAlignmentTest do
     reflect = Enum.find(Registry.definitions(:subagent), &(&1["name"] == "reflect"))
     action_enum = get_in(reflect, ["input_schema", :properties, :action, :enum])
 
-    assert Enum.sort(action_enum) == Enum.sort(~w(source versions introspect list_modules))
-    refute "trigger_evolution" in action_enum
+    assert "source" in action_enum
+    assert "versions" in action_enum
+    assert "introspect" in action_enum
+    assert "list_modules" in action_enum
   end
 
   test "follow-up tool surface keeps read-only discovery path without patch mutation" do
@@ -186,7 +191,125 @@ defmodule Nex.Agent.ToolAlignmentTest do
 
     assert "read" in names
     assert "find" in names
+    assert "observe" in names
+    assert Enum.count(names, &(&1 == "web_search")) == 1
     refute "apply_patch" in names
+    refute "evolution_candidate" in names
+  end
+
+  test "web_search stays a single function tool name on official codex backend" do
+    config =
+      %Nex.Agent.Config{
+        Nex.Agent.Config.default()
+        | provider: "openai-codex",
+          tools: %{"web_search" => %{"strategy" => "auto", "mode" => "live"}}
+      }
+
+    definitions =
+      Registry.definitions(:follow_up,
+        config: config,
+        provider: :openai_codex,
+        base_url: "https://chatgpt.com/backend-api/codex"
+      )
+
+    assert Enum.count(definitions, &(&1["name"] == "web_search")) == 1
+
+    assert Enum.any?(definitions, fn tool ->
+             tool["name"] == "web_search" and is_map(tool["input_schema"])
+           end)
+  end
+
+  test "image_generation is exposed as a single function tool on official codex backend" do
+    config =
+      %Nex.Agent.Config{
+        Nex.Agent.Config.default()
+        | provider: "openai-codex",
+          tools: %{"image_generation" => %{"strategy" => "auto", "output_format" => "png"}}
+      }
+
+    definitions =
+      Registry.definitions(:all,
+        config: config,
+        provider: :openai_codex,
+        base_url: "https://chatgpt.com/backend-api/codex"
+      )
+
+    assert Enum.count(definitions, &(&1["name"] == "image_generation")) == 1
+
+    assert Enum.any?(definitions, fn tool ->
+             tool["name"] == "image_generation" and is_map(tool["input_schema"])
+           end)
+  end
+
+  test "runner re-resolves provider-sensitive tool definitions for per-turn provider overrides", %{
+    workspace: workspace
+  } do
+    codex_config =
+      %Nex.Agent.Config{
+        Nex.Agent.Config.default()
+        | provider: "openai-codex",
+          tools: %{"web_search" => %{"strategy" => "auto", "mode" => "live"}}
+      }
+
+    snapshot = %Snapshot{
+      version: 1,
+      workspace: workspace,
+      config: codex_config,
+      prompt: %{system_prompt: "", diagnostics: [], hash: "test"},
+      commands: %{definitions: [], hash: "test"},
+      skills: %{always_instructions: "", hash: "test"},
+      changed_paths: [],
+      channels: %{},
+      tools: %{
+        definitions_all:
+          Registry.definitions(:all,
+            config: codex_config,
+            provider: :openai_codex,
+            base_url: "https://chatgpt.com/backend-api/codex"
+          ),
+        definitions_follow_up: [],
+        definitions_subagent: [],
+        definitions_cron: [],
+        hash: "test"
+      }
+    }
+
+    parent = self()
+
+    llm_client = fn _messages, opts ->
+      send(parent, {:tools, Keyword.get(opts, :tools, [])})
+      {:ok, %{content: "ok", finish_reason: nil, tool_calls: []}}
+    end
+
+    assert {:ok, "ok", _session} =
+             Runner.run(Session.new("provider-override"), "search for docs",
+               llm_stream_client: stream_client_from_response(llm_client),
+               workspace: workspace,
+               runtime_snapshot: snapshot,
+               provider: :anthropic,
+               skip_consolidation: true
+             )
+
+    assert_receive {:tools, tools}
+
+    web_search = Enum.find(tools, &(&1["name"] == "web_search"))
+
+    assert is_map(web_search["input_schema"])
+    refute web_search["type"] == "web_search"
+  end
+
+  test "evolution_candidate tool stays owner-only on the all surface" do
+    all_names = Registry.definitions(:all) |> Enum.map(& &1["name"])
+
+    assert "evolution_candidate" in all_names
+
+    definition = EvolutionCandidate.definition()
+    assert get_in(definition, [:parameters, :properties, :action, :enum]) == [
+             "list",
+             "show",
+             "approve",
+             "reject"
+           ]
   end
 
   test "memory tool descriptions clearly separate consolidate status and rebuild intents" do

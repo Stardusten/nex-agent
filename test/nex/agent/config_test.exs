@@ -151,6 +151,56 @@ defmodule Nex.Agent.ConfigTest do
     assert Config.valid?(config)
   end
 
+  test "web_search capability config is normalized through unified accessor" do
+    config =
+      %Config{
+        Config.default()
+        | tools: %{
+            "web_search" => %{
+              "strategy" => "provider_native",
+              "mode" => "cached",
+              "allowed_domains" => [" example.com ", "example.com", ""],
+              "user_location" => %{
+                "country" => "US",
+                "timezone" => "America/Los_Angeles",
+                "ignored" => "value"
+              }
+            }
+          }
+      }
+
+    assert Config.web_search_capability(config) == %{
+             "strategy" => "provider_native",
+             "backend" => "auto",
+             "mode" => "cached",
+             "allowed_domains" => ["example.com"],
+             "user_location" => %{
+               "country" => "US",
+               "timezone" => "America/Los_Angeles"
+             }
+           }
+  end
+
+  test "image_generation capability config is normalized through unified accessor" do
+    config =
+      %Config{
+        Config.default()
+        | tools: %{
+            "image_generation" => %{
+              "strategy" => "provider_native",
+              "backend" => "openai_codex",
+              "output_format" => "webp"
+            }
+          }
+      }
+
+    assert Config.image_generation_capability(config) == %{
+             "strategy" => "provider_native",
+             "backend" => "openai_codex",
+             "output_format" => "webp"
+           }
+  end
+
   defp signed_token(exp) do
     encode_segment(%{"alg" => "none", "typ" => "JWT"}) <>
       "." <> encode_segment(%{"exp" => exp}) <> ".sig"

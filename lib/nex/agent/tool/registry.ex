@@ -7,7 +7,10 @@ defmodule Nex.Agent.Tool.Registry do
   use GenServer
   require Logger
 
+  alias Nex.Agent.ControlPlane.{Log, Redactor}
   alias Nex.Agent.FollowUp
+  alias Nex.Agent.Tool.{Capability, CapabilityResolver}
+  require Log
 
   @default_tools [
     Nex.Agent.Tool.Read,
@@ -15,8 +18,10 @@ defmodule Nex.Agent.Tool.Registry do
     Nex.Agent.Tool.ApplyPatch,
     Nex.Agent.Tool.Bash,
     Nex.Agent.Tool.WebSearch,
+    Nex.Agent.Tool.ImageGeneration,
     Nex.Agent.Tool.WebFetch,
     Nex.Agent.Tool.Message,
+    Nex.Agent.Tool.Observe,
     Nex.Agent.Tool.Task,
     Nex.Agent.Tool.KnowledgeCapture,
     Nex.Agent.Tool.ExecutorDispatch,
@@ -39,6 +44,7 @@ defmodule Nex.Agent.Tool.Registry do
     Nex.Agent.Tool.SpawnTask,
     Nex.Agent.Tool.SelfUpdate,
     Nex.Agent.Tool.Reflect,
+    Nex.Agent.Tool.EvolutionCandidate,
     Nex.Agent.Tool.Cron
   ]
   @disabled_project_tools [
@@ -73,13 +79,14 @@ defmodule Nex.Agent.Tool.Registry do
   Get tool definitions for LLM.
   Filter: :all | :base | :subagent
   """
-  def definitions(filter \\ :all) do
-    GenServer.call(__MODULE__, {:definitions, filter})
+  def definitions(filter \\ :all, opts \\ []) do
+    GenServer.call(__MODULE__, {:definitions, filter, opts})
   end
 
   @doc "Execute a tool by name."
   def execute(name, args, ctx \\ %{}) do
-    GenServer.call(__MODULE__, {:execute, name, args, ctx}, 120_000)
+    timeout = execute_timeout(ctx)
+    GenServer.call(__MODULE__, {:execute, name, args, ctx, timeout}, timeout + 1_000)
   end
 
   @doc "Cancel active tool tasks for a run."
@@ -121,7 +128,7 @@ defmodule Nex.Agent.Tool.Registry do
       "[Registry] Started with #{map_size(tools)} tools: #{inspect(Map.keys(tools) |> Enum.sort())}"
     )
 
-    {:ok, %{tools: tools, active_runs: %{}}}
+    {:ok, %{tools: tools, active_runs: %{}, active_tasks: %{}}}
   end
 
   @impl true
@@ -175,75 +182,163 @@ defmodule Nex.Agent.Tool.Registry do
   end
 
   @impl true
-  def handle_call({:definitions, filter}, _from, %{tools: tools} = state) do
+  def handle_call({:definitions, filter, opts}, _from, %{tools: tools} = state) do
     defs =
       tools
       |> filter_tools(filter)
       |> Enum.sort_by(fn {name, _module} -> {definition_priority(name), name} end)
       |> Enum.map(fn {name, module} ->
-        def_map = module |> tool_definition(filter) |> normalize_definition()
+        resolution =
+          CapabilityResolver.resolve(
+            module,
+            definition_resolution_opts(opts, filter)
+          )
 
-        %{
-          "name" => get_def_name(def_map) || name,
-          "description" => get_def_description(def_map),
-          "input_schema" => get_def_params(def_map)
-        }
+        resolution
+        |> Capability.llm_definition()
+        |> normalize_tool_definition(name)
       end)
+      |> Enum.reject(&is_nil/1)
 
     {:reply, defs, state}
   end
 
   @impl true
-  def handle_call({:execute, name, args, ctx}, from, %{tools: tools} = state) do
+  def handle_call({:execute, name, args, ctx, timeout}, from, %{tools: tools} = state) do
+    started_at = System.monotonic_time(:millisecond)
+    observe_opts = observe_opts(ctx)
+    attrs = execute_attrs(name, args)
+
     case Map.get(tools, name) do
       nil ->
+        emit_observation(
+          :error,
+          "tool.registry.execute.failed",
+          Map.put(attrs, "result_status", "error"),
+          observe_opts
+        )
+
         {:reply,
          {:error, "Unknown tool: #{name}. [Analyze the error and try a different approach.]"},
          state}
 
       module ->
+        resolution = CapabilityResolver.resolve(module, execute_resolution_opts(ctx))
         run_id = run_id_from_ctx(ctx)
         server = self()
+        emit_observation(:info, "tool.registry.execute.started", attrs, observe_opts)
 
-        {:ok, pid} =
-          Task.Supervisor.start_child(Nex.Agent.TaskSupervisor, fn ->
-            result =
-              try do
-                module.execute(args, ctx)
-              rescue
-                e ->
-                  {:error,
-                   "Tool #{name} crashed: #{Exception.message(e)}. [Analyze the error and try a different approach.]"}
-              catch
-                :exit, {:timeout, _} ->
-                  {:error,
-                   "Tool #{name} timed out. [Analyze the error and try a different approach.]"}
-
-                kind, reason ->
-                  {:error,
-                   "Tool #{name} failed: #{kind} #{inspect(reason)}. [Analyze the error and try a different approach.]"}
-              end
-
-            send(server, {:tool_finished, run_id, self(), from, result})
-          end)
-
-        state =
-          if is_binary(run_id) do
-            put_in(
-              state.active_runs[run_id],
-              track_tool_pid(Map.get(state.active_runs, run_id), pid)
+        case Capability.execution_strategy(resolution) do
+          :disabled ->
+            emit_observation(
+              :error,
+              "tool.registry.execute.failed",
+              attrs
+              |> Map.put("result_status", "error")
+              |> Map.put("reason_type", "disabled"),
+              observe_opts
             )
-          else
-            state
-          end
 
-        {:noreply, state}
+            {:reply,
+             {:error,
+              "Tool #{name} is disabled for the current provider/runtime. [Analyze the error and try a different approach.]"},
+             state}
+
+          :provider_native ->
+            emit_observation(
+              :error,
+              "tool.registry.execute.failed",
+              attrs
+              |> Map.put("result_status", "error")
+              |> Map.put("reason_type", "provider_native"),
+              observe_opts
+            )
+
+            {:reply,
+             {:error,
+              "Tool #{name} is provider-native for the current provider/runtime and cannot run through the local registry. [Analyze the error and try a different approach.]"},
+             state}
+
+          :local ->
+            {:ok, pid} =
+              Task.Supervisor.start_child(Nex.Agent.TaskSupervisor, fn ->
+                result =
+                  try do
+                    module.execute(args, ctx)
+                  rescue
+                    e ->
+                      {:error,
+                       "Tool #{name} crashed: #{Exception.message(e)}. [Analyze the error and try a different approach.]"}
+                  catch
+                    :exit, {:timeout, _} ->
+                      {:error,
+                       "Tool #{name} timed out. [Analyze the error and try a different approach.]"}
+
+                    kind, reason ->
+                      {:error,
+                       "Tool #{name} failed: #{kind} #{inspect(reason)}. [Analyze the error and try a different approach.]"}
+                  end
+
+                send(server, {:tool_finished, run_id, self(), from, result})
+              end)
+
+            monitor_ref = Process.monitor(pid)
+            timer_ref = Process.send_after(self(), {:tool_timeout, pid}, timeout)
+
+            task_meta = %{
+              from: from,
+              run_id: run_id,
+              attrs: attrs,
+              opts: observe_opts,
+              started_at: started_at,
+              monitor_ref: monitor_ref,
+              timer_ref: timer_ref
+            }
+
+            state =
+              state
+              |> put_active_run(run_id, pid)
+              |> put_in([:active_tasks, pid], task_meta)
+
+            {:noreply, state}
+        end
     end
   end
 
   def handle_call({:cancel_run, run_id}, _from, state) do
     pids = Map.get(state.active_runs, run_id, MapSet.new())
-    Enum.each(pids, &Process.exit(&1, :kill))
+
+    state =
+      Enum.reduce(pids, state, fn pid, acc ->
+        case Map.get(acc.active_tasks, pid) do
+          nil ->
+            acc
+
+          meta ->
+            Process.exit(pid, :kill)
+            Process.demonitor(meta.monitor_ref, [:flush])
+            Process.cancel_timer(meta.timer_ref)
+
+            GenServer.reply(
+              meta.from,
+              {:error,
+               "Tool execution cancelled. [Analyze the error and try a different approach.]"}
+            )
+
+            emit_observation(
+              :warning,
+              "tool.registry.execute.cancelled",
+              meta.attrs
+              |> Map.put("duration_ms", duration_since(meta.started_at))
+              |> Map.put("result_status", "cancelled")
+              |> Map.put("reason_type", "cancelled"),
+              meta.opts
+            )
+
+            %{acc | active_tasks: Map.delete(acc.active_tasks, pid)}
+        end
+      end)
+
     {:reply, :ok, %{state | active_runs: Map.delete(state.active_runs, run_id)}}
   end
 
@@ -265,6 +360,14 @@ defmodule Nex.Agent.Tool.Registry do
 
   @impl true
   def handle_info({:tool_finished, run_id, pid, from, result}, state) do
+    meta = Map.get(state.active_tasks, pid)
+
+    if meta do
+      Process.demonitor(meta.monitor_ref, [:flush])
+      Process.cancel_timer(meta.timer_ref)
+      emit_execute_finished(result, meta)
+    end
+
     GenServer.reply(from, result)
 
     active_runs =
@@ -278,7 +381,88 @@ defmodule Nex.Agent.Tool.Registry do
           state.active_runs
       end
 
-    {:noreply, %{state | active_runs: active_runs}}
+    {:noreply,
+     %{state | active_runs: active_runs, active_tasks: Map.delete(state.active_tasks, pid)}}
+  end
+
+  def handle_info({:DOWN, _ref, :process, pid, reason}, state) do
+    case Map.get(state.active_tasks, pid) do
+      nil ->
+        {:noreply, state}
+
+      meta ->
+        Process.cancel_timer(meta.timer_ref)
+
+        GenServer.reply(
+          meta.from,
+          {:error,
+           "Tool execution exited: #{inspect(reason)}. [Analyze the error and try a different approach.]"}
+        )
+
+        emit_observation(
+          :error,
+          "tool.registry.execute.failed",
+          meta.attrs
+          |> Map.put("duration_ms", duration_since(meta.started_at))
+          |> Map.put("result_status", "error")
+          |> Map.put("reason_type", "exit"),
+          meta.opts
+        )
+
+        active_runs =
+          case meta.run_id do
+            run_id when is_binary(run_id) ->
+              state.active_runs
+              |> Map.update(run_id, MapSet.new(), &MapSet.delete(&1, pid))
+              |> drop_empty_run(run_id)
+
+            _ ->
+              state.active_runs
+          end
+
+        {:noreply,
+         %{state | active_runs: active_runs, active_tasks: Map.delete(state.active_tasks, pid)}}
+    end
+  end
+
+  def handle_info({:tool_timeout, pid}, state) do
+    case Map.get(state.active_tasks, pid) do
+      nil ->
+        {:noreply, state}
+
+      meta ->
+        Process.exit(pid, :kill)
+        Process.demonitor(meta.monitor_ref, [:flush])
+
+        GenServer.reply(
+          meta.from,
+          {:error, "Tool execution timed out. [Analyze the error and try a different approach.]"}
+        )
+
+        emit_observation(
+          :error,
+          "tool.registry.execute.timeout",
+          meta.attrs
+          |> Map.put("duration_ms", duration_since(meta.started_at))
+          |> Map.put("result_status", "timeout")
+          |> Map.put("reason_type", "timeout"),
+          meta.opts
+        )
+
+        active_runs =
+          case meta.run_id do
+            run_id when is_binary(run_id) ->
+              state.active_runs
+              |> Map.update(run_id, MapSet.new(), &MapSet.delete(&1, pid))
+              |> drop_empty_run(run_id)
+
+            _ ->
+              state.active_runs
+          end
+
+        {:noreply,
+         %{state | active_runs: active_runs, active_tasks: Map.delete(state.active_tasks, pid)}}
+    end
   end
 
   # Helpers
@@ -300,12 +484,51 @@ defmodule Nex.Agent.Tool.Registry do
     end
   end
 
-  defp tool_definition(module, filter) do
-    if function_exported?(module, :definition, 1) do
-      module.definition(filter)
-    else
-      module.definition()
+  defp definition_resolution_opts(opts, filter) do
+    opts
+    |> List.wrap()
+    |> Keyword.put(:surface, filter)
+  end
+
+  defp execute_resolution_opts(ctx) when is_map(ctx) do
+    []
+    |> maybe_put_ctx_opt(:provider, ctx)
+    |> maybe_put_ctx_opt(:base_url, ctx)
+    |> maybe_put_ctx_opt(:config, ctx)
+    |> maybe_put_ctx_opt(:surface, ctx, :tools_filter)
+  end
+
+  defp execute_resolution_opts(_ctx), do: []
+
+  defp maybe_put_ctx_opt(opts, key, ctx), do: maybe_put_ctx_opt(opts, key, ctx, key)
+
+  defp maybe_put_ctx_opt(opts, key, ctx, ctx_key) do
+    case Map.get(ctx, ctx_key) || Map.get(ctx, Atom.to_string(ctx_key)) do
+      nil -> opts
+      value -> Keyword.put(opts, key, value)
     end
+  end
+
+  defp normalize_tool_definition(nil, _fallback_name), do: nil
+
+  defp normalize_tool_definition(definition, fallback_name) when is_map(definition) do
+    if CapabilityResolver.builtin_tool_definition?(definition) do
+      definition
+      |> stringify_keys()
+      |> Map.put_new("name", fallback_name)
+    else
+      def_map = normalize_definition(definition)
+
+      %{
+        "name" => get_def_name(def_map) || fallback_name,
+        "description" => get_def_description(def_map),
+        "input_schema" => get_def_params(def_map)
+      }
+    end
+  end
+
+  defp stringify_keys(map) when is_map(map) do
+    Map.new(map, fn {key, value} -> {to_string(key), value} end)
   end
 
   # Scan repo tool directory for modules not in @default_tools.
@@ -539,6 +762,22 @@ defmodule Nex.Agent.Tool.Registry do
     Map.get(ctx, :run_id) || Map.get(ctx, "run_id")
   end
 
+  defp execute_timeout(ctx) when is_map(ctx) do
+    case Map.get(ctx, :timeout) || Map.get(ctx, "timeout") || Map.get(ctx, :timeout_ms) ||
+           Map.get(ctx, "timeout_ms") do
+      timeout when is_integer(timeout) and timeout > 0 -> timeout
+      _ -> 120_000
+    end
+  end
+
+  defp execute_timeout(_ctx), do: 120_000
+
+  defp put_active_run(state, run_id, pid) when is_binary(run_id) do
+    put_in(state.active_runs[run_id], track_tool_pid(Map.get(state.active_runs, run_id), pid))
+  end
+
+  defp put_active_run(state, _run_id, _pid), do: state
+
   defp track_tool_pid(nil, pid), do: MapSet.new([pid])
   defp track_tool_pid(%MapSet{} = pids, pid), do: MapSet.put(pids, pid)
 
@@ -550,5 +789,103 @@ defmodule Nex.Agent.Tool.Registry do
       _ ->
         active_runs
     end
+  end
+
+  defp emit_execute_finished({:ok, _result}, meta) do
+    emit_observation(
+      :info,
+      "tool.registry.execute.finished",
+      meta.attrs
+      |> Map.put("duration_ms", duration_since(meta.started_at))
+      |> Map.put("result_status", "ok"),
+      meta.opts
+    )
+  end
+
+  defp emit_execute_finished({:error, reason}, meta) do
+    emit_observation(
+      :error,
+      "tool.registry.execute.failed",
+      meta.attrs
+      |> Map.put("duration_ms", duration_since(meta.started_at))
+      |> Map.put("result_status", "error")
+      |> Map.put("reason_type", reason_type(reason))
+      |> Map.put("error_summary", error_summary(reason)),
+      meta.opts
+    )
+  end
+
+  defp emit_execute_finished(_result, meta) do
+    emit_observation(
+      :info,
+      "tool.registry.execute.finished",
+      meta.attrs
+      |> Map.put("duration_ms", duration_since(meta.started_at))
+      |> Map.put("result_status", "ok"),
+      meta.opts
+    )
+  end
+
+  defp execute_attrs(name, args) do
+    %{
+      "tool_name" => to_string(name),
+      "args_summary" => args_summary(args)
+    }
+  end
+
+  defp observe_opts(ctx) when is_map(ctx) do
+    []
+    |> put_ctx_opt(:workspace, ctx)
+    |> put_ctx_opt(:run_id, ctx)
+    |> put_ctx_opt(:session_key, ctx)
+    |> put_ctx_opt(:channel, ctx)
+    |> put_ctx_opt(:chat_id, ctx)
+    |> put_ctx_opt(:tool_call_id, ctx)
+    |> put_ctx_opt(:trace_id, ctx)
+  end
+
+  defp observe_opts(_ctx), do: []
+
+  defp put_ctx_opt(opts, key, ctx) do
+    case Map.get(ctx, key) || Map.get(ctx, Atom.to_string(key)) do
+      nil -> opts
+      value -> Keyword.put(opts, key, value)
+    end
+  end
+
+  defp emit_observation(level, tag, attrs, opts) do
+    case level do
+      :info -> Log.info(tag, attrs, opts)
+      :warning -> Log.warning(tag, attrs, opts)
+      :error -> Log.error(tag, attrs, opts)
+    end
+
+    :ok
+  rescue
+    e ->
+      Logger.warning("[Registry] control-plane log #{tag} crashed: #{Exception.message(e)}")
+      :ok
+  end
+
+  defp duration_since(started_at), do: System.monotonic_time(:millisecond) - started_at
+
+  defp reason_type(reason) when is_binary(reason) do
+    cond do
+      String.contains?(reason, "timed out") -> "timeout"
+      String.contains?(reason, "crashed") -> "exception"
+      true -> "error"
+    end
+  end
+
+  defp reason_type(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp reason_type(_reason), do: "error"
+
+  defp error_summary(reason), do: reason |> to_string() |> String.slice(0, 1000)
+
+  defp args_summary(args) do
+    args
+    |> Redactor.redact()
+    |> inspect(limit: 20, printable_limit: 1000)
+    |> String.slice(0, 1000)
   end
 end

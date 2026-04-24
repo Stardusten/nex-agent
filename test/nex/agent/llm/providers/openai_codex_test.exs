@@ -1,8 +1,10 @@
 defmodule Nex.Agent.LLM.Providers.OpenAICodexTest do
   use ExUnit.Case, async: false
 
+  alias Nex.Agent.Config
   alias Nex.Agent.LLM.ProviderProfile
   alias Nex.Agent.LLM.Providers.OpenAICodex.Stream
+  alias Nex.Agent.Tool.{Capability, CapabilityResolver, ImageGeneration, WebSearch}
   alias ReqLLM.Message
 
   test "adapter selects Codex stream only for OAuth mode" do
@@ -116,10 +118,152 @@ defmodule Nex.Agent.LLM.Providers.OpenAICodexTest do
     assert body["tool_choice"] == %{"type" => "function", "name" => "save_memory"}
   end
 
+  test "OAuth request body keeps resolver-emitted web_search as function tool contract" do
+    model =
+      ReqLLM.model!(%{
+        id: "gpt-5.5",
+        provider: :openai,
+        base_url: "https://chatgpt.com/backend-api/codex"
+      })
+
+    context = ReqLLM.Context.new([ReqLLM.Context.user("find recent Elixir release notes")])
+
+    web_search_tool =
+      CapabilityResolver.resolve(WebSearch,
+        config: %Config{
+          Config.default()
+          | provider: "openai-codex",
+            tools: %{"web_search" => %{"strategy" => "auto", "mode" => "live"}}
+        },
+        provider: :openai_codex,
+        base_url: "https://chatgpt.com/backend-api/codex"
+      )
+      |> Capability.llm_definition()
+
+    assert {:ok, request} =
+             Stream.attach_stream(
+               model,
+               context,
+               [
+                 base_url: "https://chatgpt.com/backend-api/codex",
+                 provider_options: [
+                   auth_mode: :oauth,
+                   access_token: "oauth-access-token",
+                   instructions: "You are a coding assistant."
+                 ],
+                 tools: [web_search_tool]
+               ],
+               ReqLLM.Finch
+             )
+
+    body = request.body |> IO.iodata_to_binary() |> Jason.decode!()
+
+    assert Enum.any?(body["tools"], fn tool ->
+             tool["type"] == "function" and tool["name"] == "web_search"
+           end)
+  end
+
+  test "OAuth request body keeps resolver-emitted image_generation as function tool contract" do
+    model =
+      ReqLLM.model!(%{
+        id: "gpt-5.5",
+        provider: :openai,
+        base_url: "https://chatgpt.com/backend-api/codex"
+      })
+
+    context = ReqLLM.Context.new([ReqLLM.Context.user("generate a lighthouse watercolor")])
+
+    image_generation_tool =
+      CapabilityResolver.resolve(ImageGeneration,
+        config: %Config{
+          Config.default()
+          | provider: "openai-codex",
+            tools: %{"image_generation" => %{"strategy" => "auto", "output_format" => "webp"}}
+        },
+        provider: :openai_codex,
+        base_url: "https://chatgpt.com/backend-api/codex"
+      )
+      |> Capability.llm_definition()
+
+    assert {:ok, request} =
+             Stream.attach_stream(
+               model,
+               context,
+               [
+                 base_url: "https://chatgpt.com/backend-api/codex",
+                 provider_options: [
+                   auth_mode: :oauth,
+                   access_token: "oauth-access-token",
+                   instructions: "You are a coding assistant."
+                 ],
+                 tools: [image_generation_tool]
+               ],
+               ReqLLM.Finch
+             )
+
+    body = request.body |> IO.iodata_to_binary() |> Jason.decode!()
+
+    assert Enum.any?(body["tools"], fn tool ->
+             tool["type"] == "function" and tool["name"] == "image_generation"
+           end)
+  end
+
+  test "ProviderProfile.default_api_key(:openai_codex) resolves through Codex facade" do
+    tmp_dir =
+      Path.join(System.tmp_dir!(), "nex-agent-codex-profile-#{System.unique_integer([:positive])}")
+
+    auth_path = Path.join([tmp_dir, "auth.json"])
+    previous_home = System.get_env("CODEX_HOME")
+    previous_token = System.get_env("OPENAI_CODEX_ACCESS_TOKEN")
+
+    on_exit(fn ->
+      File.rm_rf!(tmp_dir)
+
+      if previous_home do
+        System.put_env("CODEX_HOME", previous_home)
+      else
+        System.delete_env("CODEX_HOME")
+      end
+
+      if previous_token do
+        System.put_env("OPENAI_CODEX_ACCESS_TOKEN", previous_token)
+      else
+        System.delete_env("OPENAI_CODEX_ACCESS_TOKEN")
+      end
+    end)
+
+    System.put_env("CODEX_HOME", tmp_dir)
+    System.delete_env("OPENAI_CODEX_ACCESS_TOKEN")
+    File.mkdir_p!(tmp_dir)
+
+    File.write!(
+      auth_path,
+      Jason.encode!(%{
+        "tokens" => %{
+          "access_token" => signed_token(System.system_time(:second) + 3600),
+          "refresh_token" => "refresh-token"
+        }
+      })
+    )
+
+    assert is_binary(ProviderProfile.default_api_key(:openai_codex))
+  end
+
   defp function_target(fun) when is_function(fun) do
     {:module, module} = :erlang.fun_info(fun, :module)
     {:name, name} = :erlang.fun_info(fun, :name)
     {:arity, arity} = :erlang.fun_info(fun, :arity)
     {module, name, arity}
+  end
+
+  defp signed_token(exp) do
+    encode_segment(%{"alg" => "none", "typ" => "JWT"}) <>
+      "." <> encode_segment(%{"exp" => exp}) <> ".sig"
+  end
+
+  defp encode_segment(map) do
+    map
+    |> Jason.encode!()
+    |> Base.url_encode64(padding: false)
   end
 end

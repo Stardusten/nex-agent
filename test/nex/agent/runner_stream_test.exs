@@ -440,6 +440,72 @@ defmodule Nex.Agent.RunnerStreamTest do
     assert List.last(session.messages)["content"] == "hello world"
   end
 
+  test "runner persists generated images from response metadata and returns artifact paths" do
+    parent = self()
+
+    workspace =
+      Path.join(
+        System.tmp_dir!(),
+        "nex-agent-runner-image-generation-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(Path.join(workspace, "memory"))
+    File.write!(Path.join(workspace, "AGENTS.md"), "# AGENTS\n")
+    File.write!(Path.join(workspace, "SOUL.md"), "# SOUL\n")
+    File.write!(Path.join(workspace, "USER.md"), "# USER\n")
+    File.write!(Path.join(workspace, "TOOLS.md"), "# TOOLS\n")
+    File.write!(Path.join(workspace, "memory/MEMORY.md"), "# Memory\n")
+
+    on_exit(fn -> File.rm_rf!(workspace) end)
+
+    stream_sink = fn event ->
+      send(parent, {:stream_event, event})
+      :ok
+    end
+
+    llm_stream_client = fn _messages, _opts, callback ->
+      callback.(
+        {:done,
+         %{
+           finish_reason: "stop",
+           usage: %{tool_usage: %{image_generation: %{count: 1, unit: :call}}},
+           model: "gpt-5.3-codex",
+           generated_images: [
+             %{
+               "result" => Base.encode64(tiny_png_bytes()),
+               "mime_type" => "image/png",
+               "revised_prompt" => "A lighthouse watercolor"
+             }
+           ]
+         }}
+      )
+
+      :ok
+    end
+
+    assert {:ok, %Result{handled?: true, status: :ok} = result, session} =
+             Runner.run(Session.new("stream:image-generation"), "generate image",
+               workspace: workspace,
+               provider: :openai_codex,
+               model: "gpt-5.3-codex",
+               base_url: "https://chatgpt.com/backend-api/codex",
+               skip_consolidation: true,
+               skip_skills: true,
+               stream_sink: stream_sink,
+               llm_stream_client: llm_stream_client
+             )
+
+    assert [{:text, text}, :finish] = collect_stream_events([])
+    assert text =~ "Generated images:"
+
+    [generated] = result.metadata[:generated_images]
+    assert File.exists?(generated["path"])
+    assert generated["mime_type"] == "image/png"
+    assert generated["revised_prompt"] == "A lighthouse watercolor"
+    assert result.final_content =~ generated["path"]
+    assert List.last(session.messages)["content"] =~ generated["path"]
+  end
+
   defp collect_stream_events(acc) do
     receive do
       {:stream_event, event} ->
@@ -468,4 +534,10 @@ defmodule Nex.Agent.RunnerStreamTest do
   defp render_mock_content(nil), do: ""
   defp render_mock_content(text) when is_binary(text), do: text
   defp render_mock_content(text), do: inspect(text, printable_limit: 500, limit: 50)
+
+  defp tiny_png_bytes do
+    <<137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0,
+      1, 8, 6, 0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 11, 73, 68, 65, 84, 120, 156, 99, 96,
+      0, 2, 0, 0, 5, 0, 1, 122, 94, 171, 63, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130>>
+  end
 end

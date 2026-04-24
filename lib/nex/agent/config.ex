@@ -4,6 +4,7 @@ defmodule Nex.Agent.Config do
   """
 
   alias Nex.Agent.Auth.Codex
+  alias Nex.Agent.LLM.ProviderProfile
 
   @channel_names ~w(feishu discord)
 
@@ -256,6 +257,62 @@ defmodule Nex.Agent.Config do
       _ ->
         nil
     end
+  end
+
+  @doc """
+  Get normalized capability configuration for `web_search`.
+  """
+  @spec web_search_capability(t() | nil) :: map()
+  def web_search_capability(%__MODULE__{tools: tools}) when is_map(tools) do
+    raw =
+      case Map.get(tools, "web_search") do
+        %{} = capability -> capability
+        _ -> %{}
+      end
+
+    %{
+      "strategy" => normalize_web_search_strategy(Map.get(raw, "strategy")),
+      "backend" => normalize_web_search_backend(Map.get(raw, "backend")),
+      "mode" => normalize_web_search_mode(Map.get(raw, "mode")),
+      "allowed_domains" => normalize_allowed_domains(Map.get(raw, "allowed_domains")),
+      "user_location" => normalize_user_location(Map.get(raw, "user_location"))
+    }
+  end
+
+  def web_search_capability(_config) do
+    %{
+      "strategy" => "auto",
+      "backend" => "auto",
+      "mode" => "live",
+      "allowed_domains" => [],
+      "user_location" => nil
+    }
+  end
+
+  @doc """
+  Get normalized capability configuration for `image_generation`.
+  """
+  @spec image_generation_capability(t() | nil) :: map()
+  def image_generation_capability(%__MODULE__{tools: tools}) when is_map(tools) do
+    raw =
+      case Map.get(tools, "image_generation") do
+        %{} = capability -> capability
+        _ -> %{}
+      end
+
+    %{
+      "strategy" => normalize_image_generation_strategy(Map.get(raw, "strategy")),
+      "backend" => normalize_image_generation_backend(Map.get(raw, "backend")),
+      "output_format" => normalize_image_generation_output_format(Map.get(raw, "output_format"))
+    }
+  end
+
+  def image_generation_capability(_config) do
+    %{
+      "strategy" => "auto",
+      "backend" => "auto",
+      "output_format" => "png"
+    }
   end
 
   @doc """
@@ -517,47 +574,78 @@ defmodule Nex.Agent.Config do
   defp provider_env_api_key("anthropic"), do: System.get_env("ANTHROPIC_API_KEY")
   defp provider_env_api_key("openai"), do: System.get_env("OPENAI_API_KEY")
 
-  defp provider_env_api_key("openai-codex") do
-    case System.get_env("OPENAI_CODEX_ACCESS_TOKEN") do
-      token when is_binary(token) and token != "" ->
-        token
+  defp provider_env_api_key("openai-codex"),
+    do: ProviderProfile.default_api_key(:openai_codex)
 
-      _ ->
-        case Codex.resolve_access_token() do
-          {:ok, token} -> token
-          _ -> nil
-        end
-    end
-  end
-
-  defp provider_env_api_key("openai-codex-custom") do
-    case System.get_env("OPENAI_CODEX_API_KEY") do
-      key when is_binary(key) and key != "" ->
-        key
-
-      _ ->
-        case Codex.resolve_custom_api_key() do
-          {:ok, key} -> key
-          _ -> nil
-        end
-    end
-  end
+  defp provider_env_api_key("openai-codex-custom"),
+    do: ProviderProfile.default_api_key(:openai_codex_custom)
 
   defp provider_env_api_key("ollama"), do: nil
   defp provider_env_api_key(_), do: nil
 
-  defp provider_default_base_url("openai-codex"), do: Codex.default_base_url()
+  defp provider_default_base_url("openai-codex"),
+    do: ProviderProfile.default_base_url(:openai_codex)
 
-  defp provider_default_base_url("openai-codex-custom") do
-    case Codex.resolve_custom_base_url() do
-      {:ok, url} -> url
-      _ -> nil
-    end
-  end
+  defp provider_default_base_url("openai-codex-custom"),
+    do: ProviderProfile.default_base_url(:openai_codex_custom)
 
   defp provider_default_base_url("openrouter"), do: "https://openrouter.ai/api/v1"
   defp provider_default_base_url("ollama"), do: "http://localhost:11434"
   defp provider_default_base_url(_), do: nil
+
+  defp normalize_web_search_strategy("provider_native"), do: "provider_native"
+  defp normalize_web_search_strategy("local"), do: "local"
+  defp normalize_web_search_strategy(_), do: "auto"
+
+  defp normalize_web_search_backend("duckduckgo"), do: "duckduckgo"
+  defp normalize_web_search_backend("openai_codex"), do: "openai_codex"
+  defp normalize_web_search_backend(_), do: "auto"
+
+  defp normalize_image_generation_strategy("provider_native"), do: "provider_native"
+  defp normalize_image_generation_strategy("disabled"), do: "disabled"
+  defp normalize_image_generation_strategy(_), do: "auto"
+
+  defp normalize_image_generation_backend("openai_codex"), do: "openai_codex"
+  defp normalize_image_generation_backend(_), do: "auto"
+
+  defp normalize_web_search_mode("cached"), do: "cached"
+  defp normalize_web_search_mode("disabled"), do: "disabled"
+  defp normalize_web_search_mode(_), do: "live"
+
+  defp normalize_image_generation_output_format("jpeg"), do: "jpeg"
+  defp normalize_image_generation_output_format("webp"), do: "webp"
+  defp normalize_image_generation_output_format(_), do: "png"
+
+  defp normalize_allowed_domains(domains) when is_list(domains) do
+    domains
+    |> Enum.map(&to_string/1)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
+  end
+
+  defp normalize_allowed_domains(_domains), do: []
+
+  defp normalize_user_location(%{} = location) do
+    normalized =
+      location
+      |> Enum.reduce(%{}, fn {key, value}, acc ->
+        key = to_string(key)
+
+        if key in ["country", "region", "city", "timezone"] do
+          case value |> to_string() |> String.trim() do
+            "" -> acc
+            normalized_value -> Map.put(acc, key, normalized_value)
+          end
+        else
+          acc
+        end
+      end)
+
+    if map_size(normalized) == 0, do: nil, else: normalized
+  end
+
+  defp normalize_user_location(_location), do: nil
 
   defp feishu_valid?(%__MODULE__{} = config) do
     if feishu_enabled?(config) do
@@ -609,10 +697,7 @@ defmodule Nex.Agent.Config do
   end
 
   defp default_request_trace do
-    %{
-      "enabled" => false,
-      "dir" => "audit/request_traces"
-    }
+    %{"enabled" => false}
   end
 
   defp default_gateway do

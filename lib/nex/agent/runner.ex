@@ -6,15 +6,18 @@ defmodule Nex.Agent.Runner do
   alias Nex.Agent.{
     Bus,
     ContextBuilder,
+    Evolution,
     RunControl,
     MemoryUpdater,
-    RequestTrace,
     Session,
     Stream.Result
   }
 
-  alias Nex.Agent.SelfHealing.Router, as: SelfHealingRouter
+  alias Nex.Agent.ControlPlane.Log, as: ControlPlaneLog
+  alias Nex.Agent.ControlPlane.Redactor
+  require ControlPlaneLog
   alias Nex.Agent.Runtime.Snapshot
+  alias Nex.Agent.Tool.CapabilityResolver
   alias Nex.Agent.Tool.Registry, as: ToolRegistry
   alias Nex.SkillRuntime
 
@@ -62,16 +65,6 @@ defmodule Nex.Agent.Runner do
 
     run_id = Keyword.get(opts, :run_id, generate_run_id())
     cancel_ref = Keyword.get(opts, :cancel_ref, make_ref())
-    request_trace_config = RequestTrace.config(opts)
-
-    Logger.info("[Runner] Starting provider=#{provider} model=#{model}")
-
-    Logger.info(
-      "[Runner] Run context run_id=#{run_id} workspace=#{workspace || "-"} " <>
-        "channel=#{Keyword.get(opts, :channel) || "-"} chat_id=#{Keyword.get(opts, :chat_id) || "-"} " <>
-        "base_url=#{Keyword.get(opts, :base_url) || "-"} api_key_present=#{value_present?(Keyword.get(opts, :api_key))} " <>
-        "request_trace_enabled=#{request_trace_config["enabled"] == true}"
-    )
 
     opts =
       opts
@@ -82,7 +75,6 @@ defmodule Nex.Agent.Runner do
       |> Keyword.put(:cancel_ref, cancel_ref)
       |> maybe_put_opt(:runtime_snapshot, runtime_snapshot)
       |> maybe_put_opt(:runtime_version, runtime_snapshot && runtime_snapshot.version)
-      |> Keyword.put(:request_trace, request_trace_config)
       |> Keyword.put(:skill_runtime, SkillRuntime.config(opts))
       |> Keyword.put_new(:_evolution_signals, default_evolution_signals())
 
@@ -99,6 +91,9 @@ defmodule Nex.Agent.Runner do
     chat_id = Keyword.get(opts, :chat_id, "default")
     media = Keyword.get(opts, :media)
 
+    run_started_at = System.monotonic_time(:millisecond)
+    emit_runner_lifecycle(:info, "runner.run.started", runner_run_attrs(opts, %{}), opts)
+
     trace_request_started(prompt, channel, chat_id, prepared_run, runtime_system_messages, opts)
 
     messages =
@@ -114,17 +109,33 @@ defmodule Nex.Agent.Runner do
     session =
       Session.add_message(session, "user", prompt, project: Keyword.get(opts, :project))
 
-    Logger.info(
-      "[Runner] LLM request prepared run_id=#{run_id} history=#{length(history)} " <>
-        "messages=#{length(messages)} message_stats=#{message_stats_log(messages)} " <>
-        "runtime_system_messages=#{length(runtime_system_messages)} " <>
-        "selected_skill_packages=#{length(prepared_run.selected_packages)}"
+    emit_runner_lifecycle(
+      :info,
+      "runner.llm.request.prepared",
+      %{
+        "history_message_count" => length(history),
+        "message_count" => length(messages),
+        "message_stats" => message_stats_log(messages),
+        "runtime_system_message_count" => length(runtime_system_messages),
+        "selected_skill_package_count" => length(prepared_run.selected_packages)
+      },
+      opts
     )
 
     opts = Keyword.put(opts, :skill_runtime_prepared_run, prepared_run)
 
     case run_loop(session, messages, 0, max_iterations, opts) do
       {:ok, result, final_session} ->
+        emit_runner_lifecycle(
+          :info,
+          "runner.run.finished",
+          runner_run_attrs(opts, %{
+            "duration_ms" => duration_since(run_started_at),
+            "result_status" => "ok"
+          }),
+          opts
+        )
+
         final_session =
           finalize_skill_runtime_run(
             final_session,
@@ -141,6 +152,18 @@ defmodule Nex.Agent.Runner do
          finalize_evolution_turn(final_session, initial_message_count, prompt, workspace, opts)}
 
       {:error, reason, final_session} ->
+        emit_runner_lifecycle(
+          :error,
+          "runner.run.failed",
+          runner_run_attrs(opts, %{
+            "duration_ms" => duration_since(run_started_at),
+            "result_status" => result_status_from_reason(reason),
+            "reason_type" => reason_type(reason),
+            "error_summary" => error_summary(reason)
+          }),
+          opts
+        )
+
         final_session =
           finalize_skill_runtime_run(
             final_session,
@@ -185,9 +208,47 @@ defmodule Nex.Agent.Runner do
       |> Map.put("pending_skill_nudge", next_skill_nudge(session, signals))
 
     session = put_evolution_metadata(session, metadata)
+    maybe_record_runtime_evolution_signal(signals, prompt, workspace)
     maybe_enqueue_memory_refresh(session, workspace, opts)
     session
   end
+
+  defp maybe_record_runtime_evolution_signal(
+         %{correction_hint: true} = signals,
+         prompt,
+         workspace
+       ) do
+    Evolution.record_signal(
+      %{
+        source: :runner,
+        signal: "user correction observed: #{String.slice(prompt, 0, 200)}",
+        context: %{
+          tool_call_count: signals.tool_call_count,
+          tool_errors: signals.tool_errors,
+          used_tools: signals.used_tools
+        }
+      },
+      workspace: workspace
+    )
+  end
+
+  defp maybe_record_runtime_evolution_signal(%{tool_errors: errors} = signals, _prompt, workspace)
+       when errors > 0 do
+    Evolution.record_signal(
+      %{
+        source: :runner,
+        signal: "tool error observed during run",
+        context: %{
+          tool_call_count: signals.tool_call_count,
+          tool_errors: signals.tool_errors,
+          used_tools: signals.used_tools
+        }
+      },
+      workspace: workspace
+    )
+  end
+
+  defp maybe_record_runtime_evolution_signal(_signals, _prompt, _workspace), do: :ok
 
   defp prepare_skill_runtime_turn(session, prompt, runtime_system_messages, opts) do
     if Keyword.get(opts, :skip_skills, false) do
@@ -215,7 +276,13 @@ defmodule Nex.Agent.Runner do
            prepared_run}
 
         {:error, reason} ->
-          Logger.warning("[Runner] SkillRuntime prepare_run failed: #{reason}")
+          emit_runner_lifecycle(
+            :warning,
+            "runner.skill_runtime.prepare_failed",
+            %{"reason_type" => "error", "error_summary" => to_string(reason)},
+            opts
+          )
+
           {session, runtime_system_messages, %Nex.SkillRuntime.PreparedRun{}}
       end
     end
@@ -283,17 +350,35 @@ defmodule Nex.Agent.Runner do
 
   defp run_loop(session, messages, iteration, max_iterations, opts) do
     iter_start = System.monotonic_time(:millisecond)
-    Logger.info("[Runner] === Iteration #{iteration + 1}/#{max_iterations} started ===")
+
+    emit_runner_lifecycle(
+      :info,
+      "runner.iteration.started",
+      %{"iteration" => iteration + 1, "max_iterations" => max_iterations},
+      opts
+    )
 
     if cancelled?(opts) do
       {:error, stream_result(:error, opts, nil, %{error: :cancelled}), session}
     else
       if iteration >= max_iterations do
-        Logger.warning("[Runner] Max iterations reached (#{max_iterations})")
+        emit_runner_lifecycle(
+          :warning,
+          "runner.iteration.max_reached",
+          %{
+            "iteration" => iteration + 1,
+            "max_iterations" => max_iterations,
+            "result_status" => "error",
+            "reason_type" => "max_iterations_exceeded"
+          },
+          opts
+        )
+
         {:error, :max_iterations_exceeded, session}
       else
-        # Time the LLM call
         llm_start = System.monotonic_time(:millisecond)
+        llm_attrs = llm_call_attrs(opts, iteration, max_iterations)
+        emit_runner_lifecycle(:info, "runner.llm.call.started", llm_attrs, opts)
 
         llm_result =
           try do
@@ -304,16 +389,13 @@ defmodule Nex.Agent.Runner do
             )
           rescue
             e ->
-              Logger.error("[Runner] LLM call crashed: #{Exception.message(e)}")
               {:error, "LLM call failed: #{Exception.message(e)}"}
           catch
             kind, reason ->
-              Logger.error("[Runner] LLM call crashed: #{kind} #{inspect(reason)}")
               {:error, "LLM call failed: #{kind} #{inspect(reason)}"}
           end
 
         llm_duration = System.monotonic_time(:millisecond) - llm_start
-        Logger.info("[Runner] LLM call took #{llm_duration}ms")
 
         case llm_result do
           {:ok, response} ->
@@ -328,24 +410,41 @@ defmodule Nex.Agent.Runner do
 
             if finish_reason == "error" do
               # Nanobot parity: keep the user turn, but never persist the assistant error response.
-              Logger.error("[Runner] LLM returned error finish_reason")
               iter_total = System.monotonic_time(:millisecond) - iter_start
-
-              Logger.info(
-                "[Runner] === Iteration #{iteration + 1} finished in #{iter_total}ms (error) ==="
-              )
 
               reason = "LLM returned an error"
 
-              emit_self_healing_event("llm.call.failed", opts, %{
+              emit_control_plane_failure("runner.llm.call.failed", opts, %{
+                "provider" => Keyword.get(opts, :provider) |> to_string(),
+                "model" => Keyword.get(opts, :model) |> to_string(),
+                "iteration" => iteration + 1,
+                "max_iterations" => max_iterations,
+                "duration_ms" => llm_duration,
+                "tool_call_count" => tool_call_count(tool_calls),
+                "finish_reason" => "error",
+                "result_status" => "error",
+                "reason_type" => "finish_reason_error",
+                "error_summary" => reason,
                 "actor" => llm_actor(opts),
                 "classifier" => %{"family" => "llm", "retryable" => false},
                 "evidence" => %{"error_text" => reason}
               })
 
+              emit_iteration_finished(:error, iteration, max_iterations, iter_total, opts)
               emit_stream_error(opts, reason)
               {:error, stream_result(:error, opts, nil, %{error: reason}), session}
             else
+              emit_runner_lifecycle(
+                :info,
+                "runner.llm.call.finished",
+                llm_attrs
+                |> Map.put("duration_ms", llm_duration)
+                |> Map.put("finish_reason", to_string(finish_reason || "stop"))
+                |> Map.put("tool_call_count", tool_call_count(tool_calls))
+                |> Map.put("result_status", "ok"),
+                opts
+              )
+
               opts =
                 if Map.get(response, :streamed_text, false) do
                   Keyword.put(opts, :_llm_text_streamed, true)
@@ -360,6 +459,7 @@ defmodule Nex.Agent.Runner do
                   content,
                   tool_calls,
                   reasoning_content,
+                  response,
                   iteration,
                   max_iterations,
                   _on_progress = nil,
@@ -367,18 +467,22 @@ defmodule Nex.Agent.Runner do
                 )
 
               iter_total = System.monotonic_time(:millisecond) - iter_start
-
-              Logger.info(
-                "[Runner] === Iteration #{iteration + 1} finished in #{iter_total}ms ==="
-              )
+              emit_iteration_finished(:ok, iteration, max_iterations, iter_total, opts)
 
               result
             end
 
           {:error, reason} ->
-            Logger.error("[Runner] LLM call failed: #{inspect(reason)}")
-
-            emit_self_healing_event("llm.call.failed", opts, %{
+            emit_control_plane_failure("runner.llm.call.failed", opts, %{
+              "provider" => Keyword.get(opts, :provider) |> to_string(),
+              "model" => Keyword.get(opts, :model) |> to_string(),
+              "iteration" => iteration + 1,
+              "max_iterations" => max_iterations,
+              "duration_ms" => llm_duration,
+              "tool_call_count" => 0,
+              "result_status" => result_status_from_reason(reason),
+              "reason_type" => reason_type(reason),
+              "error_summary" => error_summary(stream_error_reason(reason)),
               "actor" => llm_actor(opts),
               "classifier" => %{
                 "family" => "llm",
@@ -389,10 +493,7 @@ defmodule Nex.Agent.Runner do
 
             emit_stream_error(opts, stream_error_reason(reason))
             iter_total = System.monotonic_time(:millisecond) - iter_start
-
-            Logger.info(
-              "[Runner] === Iteration #{iteration + 1} finished in #{iter_total}ms (failed) ==="
-            )
+            emit_iteration_finished(:error, iteration, max_iterations, iter_total, opts)
 
             {:error,
              stream_result(:error, opts, stream_error_partial_content(reason), %{
@@ -412,14 +513,13 @@ defmodule Nex.Agent.Runner do
          content,
          tool_calls,
          reasoning_content,
+         _response,
          iteration,
          max_iterations,
          _on_progress,
          opts
        )
        when is_list(tool_calls) and tool_calls != [] do
-    Logger.info("[Runner] LLM requests #{length(tool_calls)} tool call(s)")
-
     if Keyword.get(opts, :_suppress_current_reply_stream, false) do
       tool_call_dicts = normalize_tool_calls(tool_calls)
       emit_stream_tool_call_notice(opts, tool_call_dicts)
@@ -462,8 +562,15 @@ defmodule Nex.Agent.Runner do
       # Detect loop: exact same {tool_name, args} pattern repeated N times consecutively
       if length(tool_history) >= @max_loop_repeats and
            tool_history |> Enum.take(@max_loop_repeats) |> Enum.uniq() |> length() == 1 do
-        Logger.warning(
-          "[Runner] Loop detected: #{inspect(current_signatures)} repeated #{@max_loop_repeats}x, breaking"
+        emit_runner_lifecycle(
+          :warning,
+          "runner.tool.loop_detected",
+          %{
+            "tool_call_count" => length(tool_call_dicts),
+            "repeat_count" => @max_loop_repeats,
+            "signatures_summary" => inspect(current_signatures, limit: 20)
+          },
+          opts
         )
 
         final_content =
@@ -526,7 +633,18 @@ defmodule Nex.Agent.Runner do
                not Keyword.has_key?(opts, :tools_filter) and
                not Keyword.get(opts, :_expanded, false) do
             new_max = min(max_iterations * 2, @max_iterations_hard_limit)
-            Logger.info("[Runner] Auto-expanding max_iterations #{max_iterations} -> #{new_max}")
+
+            emit_runner_lifecycle(
+              :info,
+              "runner.iteration.max_expanded",
+              %{
+                "iteration" => iteration + 1,
+                "previous_max_iterations" => max_iterations,
+                "max_iterations" => new_max
+              },
+              opts
+            )
+
             new_max
           else
             max_iterations
@@ -554,14 +672,35 @@ defmodule Nex.Agent.Runner do
          content,
          _tool_calls,
          reasoning_content,
+         response,
          _iteration,
          _max_iterations,
          _on_progress,
          opts
        ) do
     content_text = render_text(content)
+    generated_images = persist_generated_images(response, opts)
 
-    Logger.info("[Runner] LLM finished: #{String.slice(content_text, 0, 100)}")
+    artifact_notice =
+      case generated_images do
+        [] -> nil
+        images -> render_generated_image_notice(images)
+      end
+
+    effective_text =
+      cond do
+        is_binary(content_text) and String.trim(content_text) != "" and is_binary(artifact_notice) ->
+          content_text <> "\n\n" <> artifact_notice
+
+        is_binary(content_text) and String.trim(content_text) != "" ->
+          content_text
+
+        is_binary(artifact_notice) ->
+          artifact_notice
+
+        true ->
+          content_text
+      end
 
     opts =
       cond do
@@ -573,25 +712,93 @@ defmodule Nex.Agent.Runner do
 
         true ->
           opts
-          |> maybe_stream_text(content_text)
+          |> maybe_stream_text(effective_text)
           |> maybe_finish_stream()
       end
 
     session =
-      Session.add_message(session, "assistant", content_text,
+      Session.add_message(session, "assistant", effective_text,
         reasoning_content: reasoning_content
       )
 
     final_content =
-      if Keyword.get(opts, :_suppress_current_reply_stream, false), do: nil, else: content_text
+      if Keyword.get(opts, :_suppress_current_reply_stream, false), do: nil, else: effective_text
 
     metadata =
-      if Keyword.get(opts, :_suppress_current_reply_stream, false),
-        do: %{message_sent: true},
-        else: %{}
+      if Keyword.get(opts, :_suppress_current_reply_stream, false) do
+        maybe_put_generated_images(%{message_sent: true}, generated_images)
+      else
+        maybe_put_generated_images(%{}, generated_images)
+      end
 
     {:ok, stream_result(:ok, opts, final_content, metadata), session}
   end
+
+  defp persist_generated_images(response, opts) when is_map(response) do
+    response_metadata =
+      Map.get(response, :response_metadata) || Map.get(response, "response_metadata") || %{}
+
+    images =
+      Map.get(response_metadata, :generated_images) ||
+        Map.get(response_metadata, "generated_images") || []
+
+    do_persist_generated_images(images, opts)
+  end
+
+  defp persist_generated_images(_response, _opts), do: []
+
+  defp do_persist_generated_images(images, opts) when is_list(images) do
+    run_id = Keyword.get(opts, :run_id, "run_unknown")
+    out_dir = Path.join([System.tmp_dir!(), "nex-agent-generated-images", run_id])
+    File.mkdir_p!(out_dir)
+
+    images
+    |> Enum.with_index(1)
+    |> Enum.flat_map(fn {image, idx} ->
+      case persist_generated_image(image, out_dir, idx) do
+        {:ok, persisted} -> [persisted]
+        _ -> []
+      end
+    end)
+  end
+
+  defp do_persist_generated_images(_images, _opts), do: []
+
+  defp persist_generated_image(%{"result" => result} = image, out_dir, idx) when is_binary(result) do
+    mime_type = Map.get(image, "mime_type", "image/png")
+    ext = image_extension(mime_type)
+    path = Path.join(out_dir, "image_#{idx}.#{ext}")
+
+    with {:ok, bytes} <- Base.decode64(result),
+         :ok <- File.write(path, bytes) do
+      {:ok,
+       %{
+         "path" => path,
+         "mime_type" => mime_type,
+         "revised_prompt" => Map.get(image, "revised_prompt")
+       }}
+    else
+      _ -> {:error, :persist_failed}
+    end
+  end
+
+  defp persist_generated_image(_image, _out_dir, _idx), do: {:error, :invalid_image}
+
+  defp image_extension("image/jpeg"), do: "jpg"
+  defp image_extension("image/webp"), do: "webp"
+  defp image_extension(_mime_type), do: "png"
+
+  defp render_generated_image_notice(images) when is_list(images) do
+    paths =
+      images
+      |> Enum.map(fn image -> "- " <> Map.get(image, "path", "-") end)
+      |> Enum.join("\n")
+
+    "Generated images:\n" <> paths
+  end
+
+  defp maybe_put_generated_images(metadata, []), do: metadata
+  defp maybe_put_generated_images(metadata, images), do: Map.put(metadata, :generated_images, images)
 
   defp normalize_tool_calls(tool_calls) do
     Enum.map(tool_calls, fn tc ->
@@ -875,9 +1082,16 @@ defmodule Nex.Agent.Runner do
             retries_left > 0 and resumable_stream_error?(reason) ->
               partial_content = stream_error_partial_content(reason)
 
-              Logger.warning(
-                "[Runner] LLM stream interrupted after #{byte_size(partial_content)} bytes, " <>
-                  "retrying with continue prompt in #{llm_retry_delay_ms(opts)}ms: #{inspect(stream_error_reason(reason))}"
+              emit_runner_lifecycle(
+                :warning,
+                "runner.llm.stream_interrupted",
+                %{
+                  "partial_content_bytes" => byte_size(partial_content),
+                  "retry_delay_ms" => llm_retry_delay_ms(opts),
+                  "reason_type" => reason_type(stream_error_reason(reason)),
+                  "error_summary" => error_summary(stream_error_reason(reason))
+                },
+                opts
               )
 
               sleep_with_cancel(llm_retry_delay_ms(opts), opts)
@@ -893,7 +1107,17 @@ defmodule Nex.Agent.Runner do
               |> merge_stream_continue_result(partial_content)
 
             retries_left > 0 and transient_error?(reason) ->
-              Logger.warning("[Runner] LLM transient error, retrying in 2s: #{inspect(reason)}")
+              emit_runner_lifecycle(
+                :warning,
+                "runner.llm.transient_retry",
+                %{
+                  "retry_delay_ms" => llm_retry_delay_ms(opts),
+                  "reason_type" => reason_type(reason),
+                  "error_summary" => error_summary(reason)
+                },
+                opts
+              )
+
               sleep_with_cancel(llm_retry_delay_ms(opts), opts)
               call_llm_with_retry(messages, opts, retries_left - 1)
 
@@ -919,9 +1143,15 @@ defmodule Nex.Agent.Runner do
     error_msg = extract_error_message(reason)
     status = extract_error_status(reason)
 
-    Logger.warning(
-      "[Runner] Recovery analysis run_id=#{Keyword.get(opts, :run_id)} status=#{inspect(status)} " <>
-        "message_count=#{length(messages)} error=#{inspect(String.slice(to_string(error_msg), 0, 300))}"
+    emit_runner_lifecycle(
+      :warning,
+      "runner.llm.recovery.analyzed",
+      %{
+        "status" => status,
+        "message_count" => length(messages),
+        "error_summary" => String.slice(to_string(error_msg), 0, 300)
+      },
+      opts
     )
 
     cond do
@@ -930,8 +1160,14 @@ defmodule Nex.Agent.Runner do
         trimmed = trim_messages(messages)
 
         if length(trimmed) < length(messages) do
-          Logger.warning(
-            "[Runner] Context too long (#{length(messages)} msgs), trimmed to #{length(trimmed)}"
+          emit_runner_lifecycle(
+            :warning,
+            "runner.llm.context_trimmed",
+            %{
+              "message_count" => length(messages),
+              "trimmed_message_count" => length(trimmed)
+            },
+            opts
           )
 
           {:retry, trimmed, opts}
@@ -1117,12 +1353,19 @@ defmodule Nex.Agent.Runner do
 
     opts = Keyword.put(opts, :tools, tools)
 
-    Logger.info(
-      "[Runner] Dispatching LLM call run_id=#{Keyword.get(opts, :run_id)} " <>
-        "iteration=#{Keyword.get(opts, :trace_iteration)} provider=#{Keyword.get(opts, :provider)} " <>
-        "model=#{Keyword.get(opts, :model)} base_url=#{Keyword.get(opts, :base_url) || "-"} " <>
-        "tool_count=#{length(tools)} tool_choice=#{inspect(Keyword.get(opts, :tool_choice))} " <>
-        "message_stats=#{message_stats_log(messages)}"
+    emit_runner_lifecycle(
+      :info,
+      "runner.llm.call.dispatched",
+      %{
+        "iteration" => Keyword.get(opts, :trace_iteration),
+        "provider" => Keyword.get(opts, :provider) |> to_string(),
+        "model" => Keyword.get(opts, :model) |> to_string(),
+        "base_url_present" => Keyword.get(opts, :base_url) not in [nil, ""],
+        "tool_count" => length(tools),
+        "tool_choice_summary" => inspect(Keyword.get(opts, :tool_choice), limit: 20),
+        "message_stats" => message_stats_log(messages)
+      },
+      opts
     )
 
     trace_llm_request(Keyword.get(opts, :trace_iteration), messages, tools, opts)
@@ -1134,6 +1377,20 @@ defmodule Nex.Agent.Runner do
   @valid_tool_name ~r/^[a-zA-Z][a-zA-Z0-9_-]*$/
 
   defp registry_definitions(filter, opts) do
+    if Process.whereis(ToolRegistry) do
+      registry_definitions_from_registry(filter, opts)
+    else
+      snapshot_tool_definitions_for_fallback(filter, opts)
+    end
+  end
+
+  defp registry_definitions_from_registry(filter, opts) do
+    ToolRegistry.definitions(filter, tool_registry_resolution_opts(opts, filter))
+    |> append_ephemeral_tools(filter, opts)
+    |> normalize_tool_definitions()
+  end
+
+  defp snapshot_tool_definitions_for_fallback(filter, opts) do
     runtime_definitions =
       case Keyword.get(opts, :runtime_snapshot) do
         %Snapshot{} = snapshot -> snapshot_tool_definitions(snapshot, filter)
@@ -1142,16 +1399,6 @@ defmodule Nex.Agent.Runner do
 
     if is_list(runtime_definitions) do
       runtime_definitions
-      |> append_ephemeral_tools(filter, opts)
-      |> normalize_tool_definitions()
-    else
-      registry_definitions_from_registry(filter, opts)
-    end
-  end
-
-  defp registry_definitions_from_registry(filter, opts) do
-    if Process.whereis(ToolRegistry) do
-      ToolRegistry.definitions(filter)
       |> append_ephemeral_tools(filter, opts)
       |> normalize_tool_definitions()
     else
@@ -1173,16 +1420,9 @@ defmodule Nex.Agent.Runner do
   defp normalize_tool_definitions(definitions) do
     definitions
     |> Enum.filter(fn tool ->
-      name = tool["name"]
-
-      if valid_tool_name?(name) do
-        true
-      else
-        Logger.warning("[Runner] Dropping tool with invalid name: #{inspect(name)}")
-        false
-      end
+      tool_definition_name(tool) |> valid_tool_name?()
     end)
-    |> Enum.uniq_by(& &1["name"])
+    |> Enum.uniq_by(&tool_definition_name/1)
   end
 
   defp snapshot_tool_definitions(%Snapshot{} = snapshot, :subagent),
@@ -1199,6 +1439,16 @@ defmodule Nex.Agent.Runner do
 
   defp valid_tool_name?(name) when is_binary(name), do: Regex.match?(@valid_tool_name, name)
   defp valid_tool_name?(_), do: false
+
+  defp tool_definition_name(tool) when is_map(tool) do
+    Map.get(tool, "name") ||
+      Map.get(tool, :name) ||
+      if CapabilityResolver.builtin_tool_definition?(tool),
+        do: Map.get(tool, "type") || Map.get(tool, :type),
+        else: nil
+  end
+
+  defp tool_definition_name(_tool), do: nil
 
   defp runtime_system_prompt(%Snapshot{} = snapshot), do: snapshot.prompt.system_prompt
   defp runtime_system_prompt(_), do: nil
@@ -1265,25 +1515,70 @@ defmodule Nex.Agent.Runner do
         {tool_call_id, tool_name, args}
       end)
 
+    batch_started_at = System.monotonic_time(:millisecond)
+
+    emit_runner_lifecycle(
+      :info,
+      "runner.tool.batch.started",
+      %{"tool_call_count" => length(indexed_calls)},
+      opts
+    )
+
     results =
       indexed_calls
       |> Task.async_stream(
         fn {tool_call_id, tool_name, args} ->
+          tool_opts = Keyword.put(opts, :tool_call_id, tool_call_id)
+          call_attrs = tool_call_attrs(tool_name, tool_call_id, args)
+          call_started_at = System.monotonic_time(:millisecond)
+          emit_runner_lifecycle(:info, "runner.tool.call.started", call_attrs, tool_opts)
+
           if cancelled?(opts) do
+            emit_runner_lifecycle(
+              :warning,
+              "runner.tool.task.cancelled",
+              call_attrs
+              |> Map.put("duration_ms", duration_since(call_started_at))
+              |> Map.put("result_status", "cancelled")
+              |> Map.put("reason_type", "cancelled"),
+              tool_opts
+            )
+
             {tool_call_id, tool_name, "Error: cancelled", parse_args(args)}
           else
             parsed_args = parse_args(args)
-            Logger.info("[Runner] Executing tool: #{tool_name}(#{inspect(parsed_args)})")
+
             tool_started_at = System.monotonic_time(:millisecond)
 
-            result = execute_tool(tool_name, parsed_args, ctx)
+            result =
+              execute_tool(tool_name, parsed_args, Map.put(ctx, :tool_call_id, tool_call_id))
+
             truncated = truncate_result(result)
             tool_duration_ms = System.monotonic_time(:millisecond) - tool_started_at
 
-            Logger.info(
-              "[Runner] Tool completed: #{tool_name} duration_ms=#{tool_duration_ms} " <>
-                "result_preview=#{inspect(String.slice(render_text(truncated), 0, 160))}"
-            )
+            result_attrs =
+              call_attrs
+              |> Map.put("duration_ms", tool_duration_ms)
+
+            if String.starts_with?(render_text(truncated), "Error:") do
+              emit_runner_lifecycle(
+                :error,
+                "runner.tool.call.failed",
+                result_attrs
+                |> Map.put("result_status", "error")
+                |> Map.put("reason_type", reason_type(truncated))
+                |> Map.put("error_summary", error_summary(truncated))
+                |> Map.merge(tool_failure_compat_attrs(tool_name, truncated, parsed_args)),
+                tool_opts
+              )
+            else
+              emit_runner_lifecycle(
+                :info,
+                "runner.tool.call.finished",
+                Map.put(result_attrs, "result_status", "ok"),
+                tool_opts
+              )
+            end
 
             {tool_call_id, tool_name, truncated, parsed_args}
           end
@@ -1298,13 +1593,38 @@ defmodule Nex.Agent.Runner do
           result
 
         {{:exit, reason}, {tool_call_id, tool_name, args}} ->
-          Logger.error("[Runner] Tool task exited: #{tool_name} #{inspect(reason)}")
+          tool_opts = Keyword.put(opts, :tool_call_id, tool_call_id)
+
+          attrs =
+            tool_call_attrs(tool_name, tool_call_id, args)
+            |> Map.put("result_status", result_status_from_reason(reason))
+            |> Map.put("reason_type", reason_type(reason))
+            |> Map.put("error_summary", error_summary(reason))
+
+          emit_runner_lifecycle(:error, "runner.tool.task.exited", attrs, tool_opts)
+
+          failure_tag =
+            case reason do
+              :timeout -> "runner.tool.task.timeout"
+              _ -> "runner.tool.call.failed"
+            end
+
+          emit_runner_lifecycle(:error, failure_tag, attrs, tool_opts)
 
           {tool_call_id, tool_name, "Error: tool timed out or crashed (#{inspect(reason)})",
            parse_args(args)}
       end)
 
-    emit_tool_failure_events(results, opts)
+    emit_runner_lifecycle(
+      :info,
+      "runner.tool.batch.finished",
+      %{
+        "tool_call_count" => length(results),
+        "duration_ms" => duration_since(batch_started_at),
+        "result_status" => if(Enum.any?(results, &tool_result_error?/1), do: "error", else: "ok")
+      },
+      opts
+    )
 
     {new_messages, session} =
       Enum.reduce(results, {messages, session}, fn {tool_call_id, tool_name, result, _args},
@@ -1382,30 +1702,22 @@ defmodule Nex.Agent.Runner do
               "Error: #{reason}"
 
             %{content: content} when is_binary(content) ->
-              Logger.warning(
-                "[Runner] Tool #{tool_name} returned non-standard bare map result; coercing to success"
-              )
+              emit_tool_coercion(tool_name, ctx, "bare_content_map")
 
               content
 
             %{error: error} ->
-              Logger.warning(
-                "[Runner] Tool #{tool_name} returned non-standard bare error map; coercing to error"
-              )
+              emit_tool_coercion(tool_name, ctx, "bare_error_map")
 
               "Error: #{error}"
 
             result when is_map(result) ->
-              Logger.warning(
-                "[Runner] Tool #{tool_name} returned non-standard bare map result; coercing to success"
-              )
+              emit_tool_coercion(tool_name, ctx, "bare_map")
 
               Jason.encode!(result, pretty: true)
 
             result ->
-              Logger.warning(
-                "[Runner] Tool #{tool_name} returned non-standard result #{inspect(result, limit: 50)}; coercing to text"
-              )
+              emit_tool_coercion(tool_name, ctx, "non_standard_result")
 
               render_text(result)
           end
@@ -1417,6 +1729,8 @@ defmodule Nex.Agent.Runner do
   end
 
   defp build_tool_ctx(opts) do
+    runtime_snapshot = Keyword.get(opts, :runtime_snapshot)
+
     %{
       channel: Keyword.get(opts, :channel),
       chat_id: Keyword.get(opts, :chat_id),
@@ -1431,6 +1745,8 @@ defmodule Nex.Agent.Runner do
       tools: Keyword.get(opts, :tools, %{}),
       cwd: Keyword.get(opts, :cwd, File.cwd!()),
       workspace: Keyword.get(opts, :workspace),
+      config: runtime_snapshot && runtime_snapshot.config,
+      runtime_snapshot: runtime_snapshot,
       project: Keyword.get(opts, :project),
       metadata: Keyword.get(opts, :metadata, %{}),
       skill_runtime: Keyword.get(opts, :skill_runtime, %{}),
@@ -1438,54 +1754,72 @@ defmodule Nex.Agent.Runner do
     }
   end
 
-  defp emit_tool_failure_events(results, opts) do
-    Enum.each(results, fn {_tool_call_id, tool_name, result, args} ->
-      if String.starts_with?(render_text(result), "Error:") do
-        emit_self_healing_event("tool.call.failed", opts, %{
-          "actor" => %{
-            "component" => "tool",
-            "tool" => tool_name
-          },
-          "classifier" => %{
-            "family" => "tool",
-            "retryable" => tool_error_retryable?(result)
-          },
-          "evidence" => %{
-            "error_text" => render_text(result),
-            "args_summary" => summarize_args(tool_name, args)
-          }
-        })
-      end
-    end)
+  defp tool_registry_resolution_opts(opts, filter) do
+    runtime_snapshot = Keyword.get(opts, :runtime_snapshot)
+
+    []
+    |> maybe_put_opt(:provider, Keyword.get(opts, :provider))
+    |> maybe_put_opt(:base_url, Keyword.get(opts, :base_url))
+    |> maybe_put_opt(:config, runtime_snapshot && runtime_snapshot.config)
+    |> maybe_put_opt(:surface, filter)
   end
 
-  defp emit_self_healing_event(name, opts, attrs) do
-    event =
-      %{
-        "name" => name,
-        "phase" => "runner",
-        "severity" => "error",
-        "run_id" => Keyword.get(opts, :run_id),
-        "session_key" => Keyword.get(opts, :session_key),
-        "workspace" => Keyword.get(opts, :workspace),
-        "actor" => Map.get(attrs, "actor", %{}),
-        "classifier" => Map.get(attrs, "classifier", %{}),
-        "evidence" => Map.get(attrs, "evidence", %{}),
-        "outcome" => nil
-      }
+  defp emit_control_plane_failure(tag, opts, attrs) do
+    attrs =
+      attrs
+      |> Map.put("phase", "runner")
+      |> Map.put("outcome", nil)
 
-    case SelfHealingRouter.record_event(event, workspace: Keyword.get(opts, :workspace)) do
-      {:ok, _event} ->
+    log_opts =
+      []
+      |> put_log_opt(:workspace, Keyword.get(opts, :workspace))
+      |> put_log_opt(:run_id, Keyword.get(opts, :run_id))
+      |> put_log_opt(:session_key, Keyword.get(opts, :session_key))
+
+    case ControlPlaneLog.error(tag, attrs, log_opts) do
+      {:ok, _observation} ->
+        :ok
+
+      :ok ->
         :ok
 
       {:error, reason} ->
-        Logger.warning("[Runner] self-healing event #{name} failed: #{inspect(reason)}")
+        Logger.warning("[Runner] control-plane log #{tag} failed: #{inspect(reason)}")
+
+      other ->
+        Logger.warning("[Runner] control-plane log #{tag} returned: #{inspect(other)}")
     end
   rescue
     e ->
-      Logger.warning("[Runner] self-healing event #{name} crashed: #{Exception.message(e)}")
+      Logger.warning("[Runner] control-plane log #{tag} crashed: #{Exception.message(e)}")
       :ok
   end
+
+  defp emit_tool_coercion(tool_name, ctx, reason_type) do
+    opts =
+      []
+      |> put_log_opt(:workspace, Map.get(ctx, :workspace))
+      |> put_log_opt(:run_id, Map.get(ctx, :run_id))
+      |> put_log_opt(:session_key, Map.get(ctx, :session_key))
+      |> put_log_opt(:channel, Map.get(ctx, :channel))
+      |> put_log_opt(:chat_id, Map.get(ctx, :chat_id))
+      |> put_log_opt(:tool_call_id, Map.get(ctx, :tool_call_id))
+
+    case ControlPlaneLog.warning(
+           "runner.tool.result.coerced",
+           %{"tool_name" => tool_name, "reason_type" => reason_type},
+           opts
+         ) do
+      {:ok, _observation} -> :ok
+      :ok -> :ok
+      _ -> :ok
+    end
+  rescue
+    _ -> :ok
+  end
+
+  defp put_log_opt(opts, _key, nil), do: opts
+  defp put_log_opt(opts, key, value), do: Keyword.put(opts, key, value)
 
   defp llm_actor(opts) do
     %{
@@ -1500,6 +1834,136 @@ defmodule Nex.Agent.Runner do
     |> render_text()
     |> transient_error?()
   end
+
+  defp emit_runner_lifecycle(level, tag, attrs, opts) do
+    case level do
+      :info -> ControlPlaneLog.info(tag, attrs, control_plane_opts(opts))
+      :warning -> ControlPlaneLog.warning(tag, attrs, control_plane_opts(opts))
+      :error -> ControlPlaneLog.error(tag, attrs, control_plane_opts(opts))
+    end
+
+    :ok
+  rescue
+    e ->
+      Logger.warning("[Runner] control-plane log #{tag} crashed: #{Exception.message(e)}")
+      :ok
+  end
+
+  defp emit_iteration_finished(status, iteration, max_iterations, duration_ms, opts) do
+    level = if status == :ok, do: :info, else: :error
+
+    emit_runner_lifecycle(
+      level,
+      "runner.iteration.finished",
+      %{
+        "iteration" => iteration + 1,
+        "max_iterations" => max_iterations,
+        "duration_ms" => duration_ms,
+        "result_status" => to_string(status)
+      },
+      opts
+    )
+  end
+
+  defp control_plane_opts(opts) do
+    []
+    |> put_log_opt(:workspace, Keyword.get(opts, :workspace))
+    |> put_log_opt(:run_id, Keyword.get(opts, :run_id))
+    |> put_log_opt(:session_key, Keyword.get(opts, :session_key))
+    |> put_log_opt(:channel, Keyword.get(opts, :channel))
+    |> put_log_opt(:chat_id, Keyword.get(opts, :chat_id))
+    |> put_log_opt(:tool_call_id, Keyword.get(opts, :tool_call_id))
+  end
+
+  defp runner_run_attrs(opts, extra) do
+    %{
+      "provider" => Keyword.get(opts, :provider) |> to_string(),
+      "model" => Keyword.get(opts, :model) |> to_string(),
+      "max_iterations" => Keyword.get(opts, :max_iterations, @default_max_iterations)
+    }
+    |> Map.merge(extra)
+    |> compact_attrs()
+  end
+
+  defp llm_call_attrs(opts, iteration, max_iterations) do
+    %{
+      "provider" => Keyword.get(opts, :provider) |> to_string(),
+      "model" => Keyword.get(opts, :model) |> to_string(),
+      "iteration" => iteration + 1,
+      "max_iterations" => max_iterations
+    }
+  end
+
+  defp tool_call_attrs(tool_name, tool_call_id, args) do
+    %{
+      "tool_name" => to_string(tool_name),
+      "tool_call_id" => tool_call_id,
+      "args_summary" => args_summary(args)
+    }
+  end
+
+  defp tool_failure_compat_attrs(tool_name, result, args) do
+    args_summary = args_summary(args)
+
+    %{
+      "actor" => %{
+        "component" => "tool",
+        "tool" => tool_name
+      },
+      "classifier" => %{
+        "family" => "tool",
+        "retryable" => tool_error_retryable?(result)
+      },
+      "evidence" => %{
+        "error_text" => render_text(result),
+        "args_summary" => args_summary
+      }
+    }
+  end
+
+  defp tool_result_error?({_tool_call_id, _tool_name, result, _args}) do
+    String.starts_with?(render_text(result), "Error:")
+  end
+
+  defp tool_call_count(tool_calls) when is_list(tool_calls), do: length(tool_calls)
+  defp tool_call_count(_tool_calls), do: 0
+
+  defp result_status_from_reason(:cancelled), do: "cancelled"
+  defp result_status_from_reason(:timeout), do: "timeout"
+
+  defp result_status_from_reason(reason) when is_binary(reason) do
+    cond do
+      String.contains?(String.downcase(reason), "cancel") -> "cancelled"
+      String.contains?(String.downcase(reason), "timeout") -> "timeout"
+      true -> "error"
+    end
+  end
+
+  defp result_status_from_reason(_reason), do: "error"
+
+  defp reason_type(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp reason_type(reason) when is_binary(reason), do: String.slice(reason, 0, 120)
+  defp reason_type(%{__struct__: struct}), do: inspect(struct)
+  defp reason_type({type, _detail}) when is_atom(type), do: Atom.to_string(type)
+  defp reason_type(_reason), do: "error"
+
+  defp error_summary(reason), do: reason |> render_text() |> String.slice(0, 1000)
+
+  defp args_summary(args) do
+    args
+    |> parse_args()
+    |> Redactor.redact()
+    |> inspect(limit: 20, printable_limit: 1000)
+    |> String.slice(0, 1000)
+  end
+
+  defp compact_attrs(attrs) do
+    attrs
+    |> Enum.reject(fn {_key, value} -> value in [nil, ""] end)
+    |> Map.new()
+  end
+
+  defp duration_since(started_at), do: System.monotonic_time(:millisecond) - started_at
 
   defp generate_tool_call_id do
     "call_" <> (:crypto.strong_rand_bytes(12) |> Base.encode16(case: :lower))
@@ -1527,27 +1991,58 @@ defmodule Nex.Agent.Runner do
       ]
       |> maybe_put_opt(:req_llm_stream_text_fun, Keyword.get(opts, :req_llm_stream_text_fun))
 
-    Logger.info(
-      "[Runner] consolidation LLM call: provider=#{provider} model=#{Keyword.get(call_opts, :model)} tool_choice=#{inspect(tool_choice)}"
+    emit_runner_lifecycle(
+      :info,
+      "runner.consolidation.llm.call.started",
+      %{
+        "provider" => to_string(provider),
+        "model" => to_string(Keyword.get(call_opts, :model)),
+        "tool_choice_summary" => inspect(tool_choice, limit: 20)
+      },
+      opts
     )
 
     case call_llm_stream_for_consolidation(messages, call_opts) do
       {:ok, response} ->
-        Logger.info(
-          "[Runner] consolidation LLM response: finish_reason=#{inspect(Map.get(response, :finish_reason))} has_tool_calls=#{is_list(Map.get(response, :tool_calls) || Map.get(response, "tool_calls"))} content_preview=#{inspect(String.slice(to_string(Map.get(response, :content, "")), 0, 100))}"
+        emit_runner_lifecycle(
+          :info,
+          "runner.consolidation.llm.call.finished",
+          %{
+            "finish_reason" => to_string(Map.get(response, :finish_reason) || "stop"),
+            "has_tool_calls" => is_list(Map.get(response, :tool_calls) || Map.get(response, "tool_calls")),
+            "content_summary" => String.slice(to_string(Map.get(response, :content, "")), 0, 100)
+          },
+          opts
         )
 
         extract_tool_call(response)
 
       {:error, err} ->
-        Logger.warning("[Runner] consolidation LLM error: #{inspect(err, limit: 300)}")
+        emit_runner_lifecycle(
+          :warning,
+          "runner.consolidation.llm.call.failed",
+          %{
+            "reason_type" => reason_type(err),
+            "error_summary" => error_summary(err)
+          },
+          opts
+        )
 
         case consolidation_tool_choice_retry_reason(provider, tool_choice, err) do
           nil ->
             {:error, stream_error_reason(err)}
 
           reason ->
-            Logger.warning("[Runner] #{consolidation_tool_choice_retry_message(reason)}")
+            emit_runner_lifecycle(
+              :warning,
+              "runner.consolidation.llm.retry_without_tool_choice",
+              %{
+                "reason_type" => to_string(reason),
+                "error_summary" => consolidation_tool_choice_retry_message(reason)
+              },
+              opts
+            )
+
             retry_opts = Keyword.delete(call_opts, :tool_choice)
 
             case call_llm_stream_for_consolidation(messages, retry_opts) do
@@ -1557,7 +2052,16 @@ defmodule Nex.Agent.Runner do
         end
 
       error ->
-        Logger.error("[Runner] consolidation unexpected error: #{inspect(error, limit: 300)}")
+        emit_runner_lifecycle(
+          :error,
+          "runner.consolidation.llm.unexpected",
+          %{
+            "reason_type" => reason_type(error),
+            "error_summary" => error_summary(error)
+          },
+          opts
+        )
+
         error
     end
   end
@@ -1586,15 +2090,8 @@ defmodule Nex.Agent.Runner do
 
       args = parse_args(args)
 
-      Logger.info("[Runner] extract_tool_call success: keys=#{inspect(Map.keys(args))}")
       {:ok, args}
     else
-      content = Map.get(response, :content, "") |> to_string() |> String.slice(0, 200)
-
-      Logger.warning(
-        "[Runner] extract_tool_call: no tool_calls in response, content=#{inspect(content)}"
-      )
-
       {:error, "No tool call in response"}
     end
   end
@@ -1881,16 +2378,106 @@ defmodule Nex.Agent.Runner do
   end
 
   defp request_trace_event(type, payload, opts) do
-    _ =
-      RequestTrace.append_event(
-        Map.merge(payload, %{
-          "type" => type,
-          "run_id" => Keyword.get(opts, :run_id)
-        }),
-        opts
-      )
+    attrs =
+      Map.merge(request_trace_attrs(type, payload), %{
+        "type" => type,
+        "run_id" => Keyword.get(opts, :run_id),
+        "inserted_at" => DateTime.utc_now() |> DateTime.to_iso8601()
+      })
 
+    _ = ControlPlaneLog.info("request_trace.event.recorded", attrs, opts)
     :ok
+  end
+
+  defp request_trace_attrs("request_started", payload) do
+    %{
+      "prompt_summary" => payload |> Map.get("prompt") |> text_summary(),
+      "channel" => Map.get(payload, "channel"),
+      "chat_id" => Map.get(payload, "chat_id"),
+      "selected_package_count" => length(Map.get(payload, "selected_packages", []) || []),
+      "selected_package_names" =>
+        payload
+        |> Map.get("selected_packages", [])
+        |> Enum.map(&(Map.get(&1, "name") || Map.get(&1, :name)))
+        |> Enum.reject(&is_nil/1),
+      "runtime_system_message_count" =>
+        length(Map.get(payload, "runtime_system_messages", []) || [])
+    }
+  end
+
+  defp request_trace_attrs("llm_request", payload) do
+    tools = Map.get(payload, "tools", []) || []
+
+    %{
+      "iteration" => Map.get(payload, "iteration"),
+      "message_count" => length(Map.get(payload, "messages", []) || []),
+      "tool_count" => length(tools),
+      "available_tool_names" =>
+        tools
+        |> Enum.map(&(Map.get(&1, "name") || Map.get(&1, :name)))
+        |> Enum.reject(&is_nil/1),
+      "tool_choice_summary" => payload |> Map.get("tool_choice") |> inspect_summary()
+    }
+  end
+
+  defp request_trace_attrs("llm_response", payload) do
+    tool_calls = Map.get(payload, "tool_calls", []) || []
+
+    %{
+      "iteration" => Map.get(payload, "iteration"),
+      "content_summary" => payload |> Map.get("content") |> text_summary(),
+      "tool_call_count" => length(tool_calls),
+      "tool_call_names" =>
+        Enum.map(tool_calls, &trace_tool_call_name/1) |> Enum.reject(&is_nil/1),
+      "finish_reason" => Map.get(payload, "finish_reason"),
+      "duration_ms" => Map.get(payload, "duration_ms")
+    }
+  end
+
+  defp request_trace_attrs("tool_result", payload) do
+    %{
+      "tool" => Map.get(payload, "tool"),
+      "tool_call_id" => Map.get(payload, "tool_call_id"),
+      "content_summary" => payload |> Map.get("content") |> text_summary()
+    }
+  end
+
+  defp request_trace_attrs("request_completed", payload) do
+    %{
+      "status" => Map.get(payload, "status"),
+      "result_summary" => payload |> Map.get("result") |> text_summary()
+    }
+  end
+
+  defp request_trace_attrs(_type, payload) do
+    payload
+    |> Map.take(["iteration", "status", "duration_ms", "finish_reason", "tool", "tool_call_id"])
+    |> Map.put("payload_summary", inspect_summary(payload))
+  end
+
+  defp trace_tool_call_name(tool_call) when is_map(tool_call) do
+    function = Map.get(tool_call, "function") || Map.get(tool_call, :function) || %{}
+
+    Map.get(tool_call, "name") || Map.get(tool_call, :name) || Map.get(function, "name") ||
+      Map.get(function, :name)
+  end
+
+  defp trace_tool_call_name(_tool_call), do: nil
+
+  defp text_summary(nil), do: nil
+
+  defp text_summary(value) do
+    value
+    |> render_text()
+    |> String.slice(0, 1000)
+  end
+
+  defp inspect_summary(nil), do: nil
+
+  defp inspect_summary(value) do
+    value
+    |> inspect(pretty: false, limit: 20, printable_limit: 1000)
+    |> String.slice(0, 1000)
   end
 
   defp message_stats_log(messages) when is_list(messages) do
@@ -1919,9 +2506,6 @@ defmodule Nex.Agent.Runner do
       tool_call_messages: tool_call_messages
     })
   end
-
-  defp value_present?(value) when value in [nil, "", []], do: false
-  defp value_present?(_), do: true
 
   defp trace_tool_definition(tool) when is_map(tool) do
     function = Map.get(tool, "function") || Map.get(tool, :function) || %{}
@@ -1953,6 +2537,7 @@ defmodule Nex.Agent.Runner do
       finish_reason: nil,
       usage: nil,
       model: nil,
+      response_metadata: %{},
       error: nil,
       streamed_text: false
     })
@@ -1981,7 +2566,8 @@ defmodule Nex.Agent.Runner do
            tool_calls: Enum.reverse(state.tool_calls),
            finish_reason: state.finish_reason,
            usage: state.usage,
-           model: state.model,
+            model: state.model,
+           response_metadata: state.response_metadata,
            streamed_text: state.streamed_text
          }}
     end
@@ -2028,11 +2614,17 @@ defmodule Nex.Agent.Runner do
   end
 
   defp handle_stream_event(state, {:done, metadata}, _opts, _drain_opts) when is_map(metadata) do
+    response_metadata =
+      metadata
+      |> Map.drop([:finish_reason, :usage, :model, "finish_reason", "usage", "model"])
+      |> Enum.into(%{})
+
     %{
       state
       | finish_reason: Map.get(metadata, :finish_reason) || Map.get(metadata, "finish_reason"),
         usage: Map.get(metadata, :usage) || Map.get(metadata, "usage"),
-        model: Map.get(metadata, :model) || Map.get(metadata, "model")
+        model: Map.get(metadata, :model) || Map.get(metadata, "model"),
+        response_metadata: Map.merge(state.response_metadata || %{}, response_metadata)
     }
   end
 
