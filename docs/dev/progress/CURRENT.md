@@ -157,8 +157,16 @@ Local tool backend selection is now the active contract for tool-backed external
 - `Runner`, `ReqLLM`, and `Tool.Registry` do not expose a second tool lane for these capabilities
 - the aborted Phase 15 provider-native capability plan is historical only; use the 2026-04-25 local-tool backend finding as the current review source
 
+Docs/dev workflow is split into four lanes:
+
+- `designs/` keeps design drafts, alternatives, tradeoffs, and open questions
+- `findings/` keeps settled architecture decisions and technical conclusions
+- `task-plan/` keeps execution-only phase plans with stages, contracts, acceptance checks, and validation commands
+- `progress/` keeps current state and daily execution notes
+
 ## Current Plan Pointer
 
+- [Designs Index](../designs/index.md)
 - [Phase 1 Runtime Reload Foundation](../task-plan/phase1-runtime-reload-foundation.md)
 - [Phase 3 Streaming Delivery Contract](../task-plan/phase3-streaming-delivery-contract.md)
 - [Phase 3A Streaming Architecture Convergence](../task-plan/phase3a-streaming-architecture-convergence.md)

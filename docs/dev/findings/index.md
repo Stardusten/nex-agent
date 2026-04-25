@@ -1,5 +1,7 @@
 # Findings Index
 
+Findings are settled architecture or technical conclusions. Draft design notes and option comparisons live in `../designs/`.
+
 - [2026-04-16 OpenAI Native Computer Use Architecture](./2026-04-16-openai-native-computer-use-architecture.md)
 - [2026-04-16 Runtime Reload Architecture](./2026-04-16-runtime-reload-architecture.md)
 - [2026-04-16 IM Streaming Capabilities And Delivery Contract](./2026-04-16-im-streaming-capabilities.md)

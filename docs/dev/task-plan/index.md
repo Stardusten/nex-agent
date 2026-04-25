@@ -1,5 +1,7 @@
 # Task Plan Index
 
+Task plans are execution documents. Keep product/architecture exploration in `../designs/`, promote settled decisions to `../findings/`, and use task plans only for frozen contracts, stages, acceptance checks, and validation commands.
+
 - [Phase 1 Runtime Reload Foundation](./phase1-runtime-reload-foundation.md)
 - [Phase 2A Dynamic Approval Core](./phase2a-dynamic-approval-core.md)
 - [Phase 2B Approval Platform Parity](./phase2b-approval-platform-parity.md)
