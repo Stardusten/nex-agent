@@ -1,7 +1,7 @@
 defmodule Nex.Agent.MemoryConsolidateTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{Memory, MemoryUpdater, Session, SessionManager, Skills}
+  alias Nex.Agent.{Config, Memory, MemoryUpdater, Session, SessionManager, Skills}
   alias Nex.Agent.Tool.MemoryConsolidate
 
   setup do
@@ -56,6 +56,7 @@ defmodule Nex.Agent.MemoryConsolidateTest do
                    {:ok,
                     %{
                       "status" => "update",
+                      "summary" => "Confirmed durable lesson.",
                       "memory_update" =>
                         "# Long-term Memory\n\n## Workflow Lessons\n- Confirmed durable lesson.\n"
                     }}
@@ -182,6 +183,63 @@ defmodule Nex.Agent.MemoryConsolidateTest do
 
     assert Session.load(key, workspace: workspace).last_consolidated == 1
     assert Memory.read_long_term(workspace: workspace) == "# Long-term Memory\n"
+  end
+
+  test "memory_consolidate uses configured memory_model runtime", %{
+    workspace: workspace,
+    key: key
+  } do
+    :ok =
+      Session.save(
+        %{
+          Session.new(key)
+          | messages: build_messages(2),
+            last_consolidated: 0
+        },
+        workspace: workspace
+      )
+
+    parent = self()
+
+    config =
+      Config.from_map(%{
+        "max_iterations" => 10,
+        "workspace" => workspace,
+        "provider" => %{
+          "providers" => %{
+            "ollama-local" => %{"type" => "ollama", "base_url" => "http://localhost:11434"}
+          }
+        },
+        "model" => %{
+          "default_model" => "default-test",
+          "cheap_model" => "cheap-test",
+          "memory_model" => "memory-test",
+          "models" => %{
+            "default-test" => %{"provider" => "ollama-local", "id" => "default-test"},
+            "cheap-test" => %{"provider" => "ollama-local", "id" => "cheap-test"},
+            "memory-test" => %{"provider" => "ollama-local", "id" => "memory-test"}
+          }
+        }
+      })
+
+    assert {:ok, result} =
+             MemoryConsolidate.execute(
+               %{},
+               %{
+                 workspace: workspace,
+                 session_key: key,
+                 provider: :anthropic,
+                 model: "expensive-test",
+                 config: config,
+                 llm_call_fun: fn _messages, opts ->
+                   send(parent, {:memory_runtime, opts[:provider], opts[:model]})
+                   {:ok, %{"status" => "noop"}}
+                 end
+               }
+             )
+
+    assert result["status"] == "noop"
+    assert_receive {:memory_runtime, :ollama, "memory-test"}
   end
 
   defp start_or_restart_supervised!(child_spec) do

@@ -1,7 +1,7 @@
 defmodule Nex.Agent.MemoryUpdaterTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{Memory, MemoryUpdater, Session, SessionManager, Skills}
+  alias Nex.Agent.{Bus, Memory, MemoryUpdater, Session, SessionManager, Skills}
   alias Nex.Agent.ControlPlane.Query
 
   setup do
@@ -16,6 +16,7 @@ defmodule Nex.Agent.MemoryUpdaterTest do
     Application.put_env(:nex_agent, :workspace_path, workspace)
     Skills.load()
 
+    start_or_restart_supervised!({Bus, name: Bus})
     start_or_restart_supervised!({SessionManager, name: SessionManager})
     start_or_restart_supervised!({MemoryUpdater, name: MemoryUpdater})
 
@@ -43,6 +44,7 @@ defmodule Nex.Agent.MemoryUpdaterTest do
               {:ok,
                %{
                  "status" => "update",
+                 "summary" => "Learned alpha.",
                  "memory_update" =>
                    "# Long-term Memory\n\n## Workflow Lessons\n- Learned alpha.\n"
                }}
@@ -63,6 +65,7 @@ defmodule Nex.Agent.MemoryUpdaterTest do
               {:ok,
                %{
                  "status" => "update",
+                 "summary" => "Learned beta.",
                  "memory_update" =>
                    "# Long-term Memory\n\n## Workflow Lessons\n- Learned alpha.\n- Learned beta.\n"
                }}
@@ -97,6 +100,7 @@ defmodule Nex.Agent.MemoryUpdaterTest do
               {:ok,
                %{
                  "status" => "update",
+                 "summary" => "Captured control-plane lesson.",
                  "memory_update" =>
                    "# Long-term Memory\n\n## Workflow Lessons\n- Captured by control plane.\n"
                }}
@@ -117,6 +121,45 @@ defmodule Nex.Agent.MemoryUpdaterTest do
                "attrs_summary" => %{"result_status" => "ok", "status" => "updated"}
              }
            ] = Query.recent_events(workspace: workspace, tag_prefix: "memory.refresh.job.")
+  end
+
+  test "publishes a user-visible memory notice after an updated refresh", %{workspace: workspace} do
+    topic = {:channel_outbound, "feishu_memory_notice"}
+    Bus.subscribe(topic)
+    on_exit(fn -> if Process.whereis(Bus), do: Bus.unsubscribe(topic) end)
+
+    session =
+      %{
+        Session.new("session:notice")
+        | messages: build_messages("notice"),
+          metadata: %{
+            "memory_refresh_llm_call_fun" => fn _messages, _opts ->
+              {:ok,
+               %{
+                 "status" => "update",
+                 "summary" => "Captured concise reply preference.",
+                 "memory_update" =>
+                   "# Long-term Memory\n\n## User Preferences\n- Likes concise replies.\n"
+               }}
+            end
+          }
+      }
+
+    MemoryUpdater.enqueue(session,
+      workspace: workspace,
+      channel: "feishu_memory_notice",
+      chat_id: "chat-memory",
+      notify_memory_updates: true
+    )
+
+    assert_receive {:bus_message, ^topic, payload}, 1_000
+    assert payload.chat_id == "chat-memory"
+    assert payload.content == "🧠 Memory - Captured concise reply preference."
+    assert payload.metadata["_memory_notice"] == true
+
+    wait_for(fn ->
+      MemoryUpdater.status("session:notice", workspace: workspace)["status"] == "idle"
+    end)
   end
 
   defp start_or_restart_supervised!(child_spec) do
@@ -154,7 +197,7 @@ defmodule Nex.Agent.MemoryUpdaterTest do
     prompt = List.last(messages)["content"]
 
     [_, block] =
-      Regex.run(~r/## Current Long-term Memory\n(.+?)\n\n## Conversation Segment/s, prompt)
+      Regex.run(~r/## Current Long-term Memory\n(.+?)\n\n## Conversation to Process/s, prompt)
 
     String.trim(block)
   end

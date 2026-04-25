@@ -5,6 +5,7 @@ defmodule Nex.Agent.Runner do
 
   alias Nex.Agent.{
     Bus,
+    Config,
     ContextBuilder,
     Evolution,
     RunControl,
@@ -2266,7 +2267,8 @@ defmodule Nex.Agent.Runner do
   end
 
   defp maybe_enqueue_memory_refresh(session, workspace, opts) do
-    if Keyword.get(opts, :skip_consolidation, false) do
+    if Keyword.get(opts, :skip_consolidation, false) or
+         Keyword.get(opts, :schedule_memory_refresh, true) == false do
       :ok
     else
       maybe_enqueue_memory_refresh_now(session, workspace, opts)
@@ -2275,19 +2277,53 @@ defmodule Nex.Agent.Runner do
 
   defp maybe_enqueue_memory_refresh_now(session, workspace, opts) do
     if Process.whereis(MemoryUpdater) do
+      runtime = memory_refresh_runtime(opts)
+
       MemoryUpdater.enqueue(session,
-        provider: Keyword.get(opts, :provider),
-        model: Keyword.get(opts, :model),
-        api_key: Keyword.get(opts, :api_key),
-        base_url: Keyword.get(opts, :base_url),
-        provider_options: Keyword.get(opts, :provider_options, []),
+        provider: runtime.provider,
+        model: runtime.model,
+        api_key: runtime.api_key,
+        base_url: runtime.base_url,
+        provider_options: runtime.provider_options,
         workspace: workspace,
+        channel: Keyword.get(opts, :channel),
+        chat_id: Keyword.get(opts, :chat_id),
+        model_role: runtime.model_role,
+        notify_memory_updates: false,
+        source: "runner_finalize",
         req_llm_stream_text_fun: Keyword.get(opts, :req_llm_stream_text_fun),
         llm_call_fun: Keyword.get(opts, :llm_call_fun)
       )
     end
 
     :ok
+  end
+
+  defp memory_refresh_runtime(opts) do
+    runtime_snapshot = Keyword.get(opts, :runtime_snapshot)
+    config = runtime_snapshot && runtime_snapshot.config
+
+    case config && Config.memory_model_runtime(config) do
+      %{provider: provider, model_id: model} = runtime ->
+        %{
+          provider: provider,
+          model: model,
+          api_key: runtime.api_key,
+          base_url: runtime.base_url,
+          provider_options: runtime.provider_options,
+          model_role: "memory"
+        }
+
+      _ ->
+        %{
+          provider: Keyword.get(opts, :provider),
+          model: Keyword.get(opts, :model),
+          api_key: Keyword.get(opts, :api_key),
+          base_url: Keyword.get(opts, :base_url),
+          provider_options: Keyword.get(opts, :provider_options, []),
+          model_role: "runtime"
+        }
+    end
   end
 
   defp collect_evolution_signals(delta_messages, prompt) do

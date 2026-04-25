@@ -1,7 +1,7 @@
 defmodule Nex.Agent.MemoryWriteTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.Memory
+  alias Nex.Agent.{Bus, Memory}
   alias Nex.Agent.Tool.MemoryWrite
 
   setup do
@@ -11,6 +11,7 @@ defmodule Nex.Agent.MemoryWriteTest do
     File.mkdir_p!(Path.join(workspace, "memory"))
     File.write!(Path.join(workspace, "memory/MEMORY.md"), "# Long-term Memory\n")
     Application.put_env(:nex_agent, :workspace_path, workspace)
+    start_or_restart_supervised!({Bus, name: Bus})
 
     on_exit(fn ->
       Application.delete_env(:nex_agent, :workspace_path)
@@ -60,5 +61,41 @@ defmodule Nex.Agent.MemoryWriteTest do
              )
 
     assert Memory.read_long_term(workspace: workspace) =~ "Deployment: fly.io"
+  end
+
+  test "memory_write publishes notice when a user-visible tool call changes memory", %{
+    workspace: workspace
+  } do
+    topic = {:channel_outbound, "feishu_memory_write"}
+    Bus.subscribe(topic)
+    on_exit(fn -> if Process.whereis(Bus), do: Bus.unsubscribe(topic) end)
+
+    assert {:ok, _} =
+             MemoryWrite.execute(
+               %{
+                 "action" => "append",
+                 "content" => "Project uses OTP supervision."
+               },
+               %{
+                 workspace: workspace,
+                 channel: "feishu_memory_write",
+                 chat_id: "chat-write",
+                 session_key: "feishu_memory_write:chat-write",
+                 provider: :ollama,
+                 model: "local-test"
+               }
+             )
+
+    assert_receive {:bus_message, ^topic, payload}, 1_000
+    assert payload.chat_id == "chat-write"
+    assert payload.content == "🧠 Memory - Project uses OTP supervision."
+    assert payload.metadata["_memory_notice"] == true
+  end
+
+  defp start_or_restart_supervised!(child_spec) do
+    case start_supervised(child_spec) do
+      {:ok, pid} -> pid
+      {:error, {:already_started, pid}} -> pid
+    end
   end
 end

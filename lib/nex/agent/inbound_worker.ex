@@ -208,7 +208,8 @@ defmodule Nex.Agent.InboundWorker do
         payload,
         from_cron,
         from_subagent,
-        state.agent_prompt_fun
+        state.agent_prompt_fun,
+        state.config
       )
 
       {:noreply, maybe_drain_pending(state, key)}
@@ -259,7 +260,8 @@ defmodule Nex.Agent.InboundWorker do
         payload,
         from_cron,
         from_subagent,
-        state.agent_prompt_fun
+        state.agent_prompt_fun,
+        state.config
       )
 
       {:noreply, maybe_drain_pending(state, key)}
@@ -1482,12 +1484,22 @@ defmodule Nex.Agent.InboundWorker do
   defp maybe_put_opt(opts, _key, nil), do: opts
   defp maybe_put_opt(opts, key, value), do: Keyword.put(opts, key, value)
 
-  defp maybe_enqueue_memory_refresh(_agent, _payload, true, _from_subagent, _prompt_fun), do: :ok
-  defp maybe_enqueue_memory_refresh(_agent, _payload, _from_cron, true, _prompt_fun), do: :ok
+  defp maybe_enqueue_memory_refresh(_agent, _payload, true, _from_subagent, _prompt_fun, _config),
+    do: :ok
 
-  defp maybe_enqueue_memory_refresh(%Nex.Agent{} = agent, _payload, false, false, prompt_fun) do
+  defp maybe_enqueue_memory_refresh(_agent, _payload, _from_cron, true, _prompt_fun, _config),
+    do: :ok
+
+  defp maybe_enqueue_memory_refresh(
+         %Nex.Agent{} = agent,
+         payload,
+         false,
+         false,
+         prompt_fun,
+         config
+       ) do
     if memory_refresh_allowed?(agent, prompt_fun) do
-      enqueue_memory_refresh(agent)
+      enqueue_memory_refresh(agent, payload, config)
     end
   end
 
@@ -1512,15 +1524,58 @@ defmodule Nex.Agent.InboundWorker do
 
   defp default_agent_prompt_fun?(_fun), do: false
 
-  defp enqueue_memory_refresh(%Nex.Agent{} = agent) do
+  defp enqueue_memory_refresh(%Nex.Agent{} = agent, payload, config) do
+    runtime = memory_refresh_runtime(config, agent)
+
     MemoryUpdater.enqueue(
       agent.session,
+      provider: runtime.provider,
+      model: runtime.model,
+      api_key: runtime.api_key,
+      base_url: runtime.base_url,
+      provider_options: runtime.provider_options,
+      workspace: agent.workspace,
+      channel: payload.channel,
+      chat_id: payload_chat_id(payload),
+      model_role: runtime.model_role,
+      notify_memory_updates: true,
+      source: "owner_run"
+    )
+  end
+
+  defp memory_refresh_runtime(%Config{} = config, %Nex.Agent{} = agent) do
+    case Config.memory_model_runtime(config) do
+      %{provider: provider, model_id: model} = runtime ->
+        %{
+          provider: provider,
+          model: model,
+          api_key: runtime.api_key,
+          base_url: runtime.base_url,
+          provider_options: runtime.provider_options,
+          model_role: "memory"
+        }
+
+      _ ->
+        %{
+          provider: agent.provider,
+          model: agent.model,
+          api_key: agent.api_key,
+          base_url: agent.base_url,
+          provider_options: agent.provider_options || [],
+          model_role: "runtime"
+        }
+    end
+  end
+
+  defp memory_refresh_runtime(_config, %Nex.Agent{} = agent) do
+    %{
       provider: agent.provider,
       model: agent.model,
       api_key: agent.api_key,
       base_url: agent.base_url,
-      workspace: agent.workspace
-    )
+      provider_options: agent.provider_options || [],
+      model_role: "runtime"
+    }
   end
 
   # Suppress LLM outputs that are clearly not real replies to the user.

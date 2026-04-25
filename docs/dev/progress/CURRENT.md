@@ -157,6 +157,16 @@ Local tool backend selection is now the active contract for tool-backed external
 - `Runner`, `ReqLLM`, and `Tool.Registry` do not expose a second tool lane for these capabilities
 - the aborted Phase 15 provider-native capability plan is historical only; use the 2026-04-25 local-tool backend finding as the current review source
 
+Phase 17 is now implemented as the first memory-system polish step:
+
+- keep the existing file-backed workspace memory model
+- `Config.memory_model_runtime/1` resolves `memory_model -> cheap_model -> default_model`
+- owner-run background refresh, `memory_consolidate`, and `memory_rebuild` use the memory runtime by default
+- `Memory.refresh/4` returns structured result metadata with summary/hash/model details
+- successful user-visible memory writes send a single `🧠 Memory - <summary>` notice
+- `memory.write.changed`, `memory.notice.sent/skipped`, and refresh job observations carry update metadata
+- trigger-frequency changes, ops-based merge, dedupe/staleness, and undo/edit affordances remain deferred
+
 Docs/dev workflow is split into four lanes:
 
 - `designs/` keeps design drafts, alternatives, tradeoffs, and open questions
@@ -192,6 +202,8 @@ Docs/dev workflow is split into four lanes:
 - [Phase 13E Evolution Control Plane Consumption](../task-plan/phase13e-evolution-control-plane-consumption.md)
 - [Phase 14 Owner-Approved Evolution Execution](../task-plan/phase14-owner-approved-evolution-execution.md)
 - [Phase 15 Tool Backend Selection (Aborted)](../task-plan/phase15-provider-native-tool-capability-resolution.md)
+- [Phase 16 Local Advisor Tool](../task-plan/phase16-local-advisor-tool.md)
+- [Phase 17 Memory Refresh Cost And Visibility](../task-plan/phase17-memory-refresh-cost-and-visibility.md)
 - [2026-04-16 IM Inbound Media Architecture](../findings/2026-04-16-im-inbound-media-architecture.md)
 - [2026-04-16 IM Streaming Capabilities And Delivery Contract](../findings/2026-04-16-im-streaming-capabilities.md)
 - [2026-04-16 Streaming Architecture Convergence](../findings/2026-04-16-streaming-architecture-convergence.md)
@@ -199,6 +211,7 @@ Docs/dev workflow is split into four lanes:
 - [2026-04-17 Feishu Streaming Converter Boundary](../findings/2026-04-17-feishu-streaming-converter-boundary.md)
 - [2026-04-16 OpenAI Native Computer Use Architecture](../findings/2026-04-16-openai-native-computer-use-architecture.md)
 - [2026-04-25 Local Tool Backend Selection](../findings/2026-04-25-local-tool-backend-selection.md)
+- [2026-04-25 Memory System Cost, Visibility, And Triggering](../findings/2026-04-25-memory-system-cost-visibility-and-triggering.md)
 
 ## Immediate Next Steps
 
@@ -206,6 +219,7 @@ Docs/dev workflow is split into four lanes:
 2. 真实 gateway/manual 场景检查 runtime reload 后 channel add/remove/change 是否只影响对应 instance。
 3. 用真实 gateway/manual 场景检查 busy 普通消息 follow-up、`/btw`、`/status`、`/stop`、可选 interrupt tool，以及 follow-up 使用 `observe summary` 的实际交互时序。
 4. Phase 7 留存问题仍需后续处理：Finch 连接池泄漏、飞书 `close_streaming_mode` 404、LLM 空返回兜底。
+5. 用真实 gateway/manual 场景检查 Phase 17 memory notice：普通 owner run 后台 refresh 应在最终回复之后发送 `🧠 Memory - <summary>`；cron、follow-up、subagent 不应发送。
 
 ## Reviewer Verification
 

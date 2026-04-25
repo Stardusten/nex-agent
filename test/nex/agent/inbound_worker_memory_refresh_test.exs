@@ -55,6 +55,7 @@ defmodule Nex.Agent.InboundWorkerMemoryRefreshTest do
                 {:ok,
                  %{
                    "status" => "update",
+                   "summary" => "Likes concise replies.",
                    "memory_update" =>
                      "# Long-term Memory\n\n## User Preferences\n- Likes concise replies.\n"
                  }}
@@ -97,6 +98,11 @@ defmodule Nex.Agent.InboundWorkerMemoryRefreshTest do
     wait_for(fn ->
       Memory.read_long_term(workspace: workspace) =~ "Likes concise replies."
     end)
+
+    assert_receive {:bus_message, @feishu_topic, notice}, 1_000
+    assert notice.chat_id == "chat-memory"
+    assert notice.content == "🧠 Memory - Likes concise replies."
+    assert notice.metadata["_memory_notice"] == true
   end
 
   defp default_worker_config do
@@ -122,6 +128,7 @@ defmodule Nex.Agent.InboundWorkerMemoryRefreshTest do
         model: %{
           "default_model" => "local-test",
           "cheap_model" => "local-test",
+          "memory_model" => "local-test",
           "advisor_model" => "local-test",
           "models" => %{"local-test" => %{"provider" => "ollama-local", "id" => "local-test"}}
         }

@@ -66,7 +66,12 @@ defmodule Nex.Agent.MemoryRebuildTest do
             "# Long-term Memory\n\n## Rebuilt Facts\nBatch 1 fact.\nBatch 2 fact.\n"
         end
 
-      {:ok, %{"status" => "update", "memory_update" => memory_update}}
+      {:ok,
+       %{
+         "status" => "update",
+         "summary" => "Rebuilt batch #{batch}.",
+         "memory_update" => memory_update
+       }}
     end
 
     assert {:ok, result} =
@@ -133,6 +138,7 @@ defmodule Nex.Agent.MemoryRebuildTest do
                        {:ok,
                         %{
                           "status" => "update",
+                          "summary" => "Temporary rebuild fact.",
                           "memory_update" =>
                             "# Long-term Memory\n\n## Rebuilt Facts\nTemporary rebuild fact.\n"
                         }}
@@ -182,6 +188,7 @@ defmodule Nex.Agent.MemoryRebuildTest do
                        {:ok,
                         %{
                           "status" => "update",
+                          "summary" => "Batch 1 fact.",
                           "memory_update" =>
                             "# Long-term Memory\n\n## Rebuilt Facts\nBatch 1 fact.\n"
                         }}
@@ -201,6 +208,7 @@ defmodule Nex.Agent.MemoryRebuildTest do
                        {:ok,
                         %{
                           "status" => "update",
+                          "summary" => "Batch 2 fact.",
                           "memory_update" =>
                             "# Long-term Memory\n\n## Rebuilt Facts\nBatch 1 fact.\nBatch 2 fact.\n"
                         }}
@@ -241,7 +249,7 @@ defmodule Nex.Agent.MemoryRebuildTest do
     prompt = List.last(messages)["content"]
 
     [_, block] =
-      Regex.run(~r/## Current Long-term Memory\n(.+?)\n\n## Conversation Segment/s, prompt)
+      Regex.run(~r/## Current Long-term Memory\n(.+?)\n\n## Conversation to Process/s, prompt)
 
     String.trim(block)
   end

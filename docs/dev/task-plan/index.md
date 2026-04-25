@@ -28,3 +28,4 @@ Task plans are execution documents. Keep product/architecture exploration in `..
 - [Phase 13E Evolution Control Plane Consumption](./phase13e-evolution-control-plane-consumption.md)
 - [Phase 14 Owner-Approved Evolution Execution](./phase14-owner-approved-evolution-execution.md)
 - [Phase 16 Local Advisor Tool](./phase16-local-advisor-tool.md)
+- [Phase 17 Memory Refresh Cost And Visibility](./phase17-memory-refresh-cost-and-visibility.md)

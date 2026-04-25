@@ -126,6 +126,7 @@ defmodule Nex.Agent.Config do
       model: %{
         "default_model" => "gpt-4o",
         "cheap_model" => "gpt-4o",
+        "memory_model" => "gpt-4o",
         "advisor_model" => "gpt-4o",
         "models" => %{"gpt-4o" => %{"provider" => "openai", "id" => "gpt-4o"}}
       },
@@ -173,6 +174,11 @@ defmodule Nex.Agent.Config do
 
   @spec cheap_model_runtime(t()) :: model_runtime() | nil
   def cheap_model_runtime(%__MODULE__{} = config), do: model_role(config, :cheap)
+
+  @spec memory_model_runtime(t()) :: model_runtime() | nil
+  def memory_model_runtime(%__MODULE__{} = config) do
+    model_role(config, :memory) || cheap_model_runtime(config) || default_model_runtime(config)
+  end
 
   @spec advisor_model_runtime(t()) :: model_runtime() | nil
   def advisor_model_runtime(%__MODULE__{} = config), do: model_role(config, :advisor)
@@ -587,6 +593,7 @@ defmodule Nex.Agent.Config do
     %{
       "default_model" => normalize_optional_string(Map.get(model, "default_model")),
       "cheap_model" => normalize_optional_string(Map.get(model, "cheap_model")),
+      "memory_model" => normalize_optional_string(Map.get(model, "memory_model")),
       "advisor_model" => normalize_optional_string(Map.get(model, "advisor_model")),
       "models" => normalize_model_entries(Map.get(model, "models"))
     }

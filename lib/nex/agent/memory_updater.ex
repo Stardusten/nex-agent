@@ -4,6 +4,7 @@ defmodule Nex.Agent.MemoryUpdater do
   use GenServer
 
   alias Nex.Agent.{Memory, Session, SessionManager, Workspace}
+  alias Nex.Agent.Memory.Notice
   alias Nex.Agent.ControlPlane.Log
   require Log
 
@@ -18,6 +19,11 @@ defmodule Nex.Agent.MemoryUpdater do
           api_key: String.t() | nil,
           base_url: String.t() | nil,
           provider_options: keyword(),
+          model_role: String.t(),
+          channel: String.t() | nil,
+          chat_id: String.t() | nil,
+          notify_memory_updates: boolean(),
+          source: String.t(),
           req_llm_stream_text_fun: any(),
           llm_call_fun: any()
         }
@@ -135,31 +141,53 @@ defmodule Nex.Agent.MemoryUpdater do
         workspace: job.workspace,
         api_key: job.api_key,
         base_url: job.base_url,
-        provider_options: job.provider_options
+        provider_options: job.provider_options,
+        model_role: job.model_role
       ]
       |> maybe_put(:req_llm_stream_text_fun, job.req_llm_stream_text_fun)
       |> maybe_put(:llm_call_fun, job.llm_call_fun)
 
     case Memory.refresh(job.session, job.provider, job.model, opts) do
-      {:ok, updated_session, status} ->
+      {:ok, updated_session, result} ->
         updated_session
         |> sanitize_session_for_persistence()
         |> SessionManager.save_sync(workspace: job.workspace)
 
-        {:ok, status}
+        notice_result =
+          Notice.maybe_send(result,
+            workspace: job.workspace,
+            session_key: updated_session.key,
+            channel: job.channel,
+            chat_id: job.chat_id,
+            notify: job.notify_memory_updates,
+            source: job.source
+          )
+
+        {:ok, Map.put(result, :notice_status, notice_status(notice_result))}
 
       {:error, reason} ->
         {:error, reason}
     end
   end
 
-  defp log_job_result({workspace, session_key}, {:ok, status}) do
+  defp log_job_result({workspace, session_key}, {:ok, result}) do
     emit_job_observation(
       :info,
       "memory.refresh.job.finished",
       workspace,
       session_key,
-      %{"status" => to_string(status), "result_status" => "ok"}
+      %{
+        "status" => result.status |> to_string(),
+        "result_status" => "ok",
+        "summary" => result.summary,
+        "before_hash" => result.before_hash,
+        "after_hash" => result.after_hash,
+        "memory_bytes" => result.memory_bytes,
+        "model_role" => result.model_role,
+        "provider" => result.provider,
+        "model" => result.model,
+        "notice_status" => Map.get(result, :notice_status)
+      }
     )
   end
 
@@ -213,6 +241,11 @@ defmodule Nex.Agent.MemoryUpdater do
       api_key: Keyword.get(opts, :api_key),
       base_url: Keyword.get(opts, :base_url),
       provider_options: Keyword.get(opts, :provider_options, []),
+      model_role: Keyword.get(opts, :model_role, "memory") |> to_string(),
+      channel: Keyword.get(opts, :channel),
+      chat_id: Keyword.get(opts, :chat_id),
+      notify_memory_updates: Keyword.get(opts, :notify_memory_updates, false) == true,
+      source: Keyword.get(opts, :source, "background_refresh") |> to_string(),
       req_llm_stream_text_fun:
         Keyword.get(opts, :req_llm_stream_text_fun) ||
           Map.get(runtime_metadata, "memory_refresh_req_llm_stream_text_fun"),
@@ -243,4 +276,8 @@ defmodule Nex.Agent.MemoryUpdater do
 
   defp maybe_put(opts, _key, nil), do: opts
   defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
+
+  defp notice_status({:sent, :ok}), do: "sent"
+  defp notice_status({:skipped, reason}), do: "skipped:" <> to_string(reason)
+  defp notice_status(_), do: "unknown"
 end

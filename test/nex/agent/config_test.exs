@@ -38,6 +38,13 @@ defmodule Nex.Agent.ConfigTest do
              model_id: "gpt-5.4",
              provider_key: "openai-codex",
              provider_type: "openai-codex"
+           } = Config.memory_model_runtime(config)
+
+    assert %{
+             model_key: "gpt-5.4",
+             model_id: "gpt-5.4",
+             provider_key: "openai-codex",
+             provider_type: "openai-codex"
            } = Config.advisor_model_runtime(config)
 
     assert Config.default_model_runtime(config).provider_options[:temperature] == 0.2
@@ -50,6 +57,36 @@ defmodule Nex.Agent.ConfigTest do
                "tools_filter" => "subagent"
              }
            } = Config.subagent_profile_config(config)
+  end
+
+  test "memory model falls back to cheap and then default model role" do
+    config =
+      Config.from_map(%{
+        full_config()
+        | "model" => %{
+            "cheap_model" => "hy3-preview",
+            "default_model" => "gpt-5.4",
+            "models" => %{
+              "gpt-5.4" => %{"provider" => "openai-codex", "id" => "gpt-5.4"},
+              "hy3-preview" => %{"provider" => "hy3-tencent", "id" => "hy3-preview"}
+            }
+          }
+      })
+
+    assert %{model_key: "hy3-preview"} = Config.memory_model_runtime(config)
+
+    config =
+      Config.from_map(%{
+        full_config()
+        | "model" => %{
+            "default_model" => "gpt-5.4",
+            "models" => %{
+              "gpt-5.4" => %{"provider" => "openai-codex", "id" => "gpt-5.4"}
+            }
+          }
+      })
+
+    assert %{model_key: "gpt-5.4"} = Config.memory_model_runtime(config)
   end
 
   test "channel instances are keyed by instance id" do
@@ -324,6 +361,7 @@ defmodule Nex.Agent.ConfigTest do
       },
       "model" => %{
         "cheap_model" => "hy3-preview",
+        "memory_model" => "gpt-5.4",
         "default_model" => "hy3-preview",
         "advisor_model" => "gpt-5.4",
         "models" => %{

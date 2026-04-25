@@ -2,6 +2,7 @@ defmodule Nex.Agent do
   @moduledoc false
 
   alias Nex.Agent.{
+    Config,
     MemoryUpdater,
     Onboarding,
     Runner,
@@ -56,7 +57,7 @@ defmodule Nex.Agent do
     :ok = Skills.load()
 
     default_model_runtime =
-      if runtime_config, do: Nex.Agent.Config.default_model_runtime(runtime_config)
+      if runtime_config, do: Config.default_model_runtime(runtime_config)
 
     provider =
       Keyword.get(opts, :provider) ||
@@ -85,7 +86,7 @@ defmodule Nex.Agent do
 
     max_iterations =
       Keyword.get(opts, :max_iterations) ||
-        if(runtime_config, do: Nex.Agent.Config.get_max_iterations(runtime_config), else: 10)
+        if(runtime_config, do: Config.get_max_iterations(runtime_config), else: 10)
 
     cwd = Keyword.get(opts, :cwd, File.cwd!())
     channel = Keyword.get(opts, :channel, "feishu")
@@ -168,7 +169,8 @@ defmodule Nex.Agent do
         channel: channel,
         chat_id: chat_id,
         workspace: workspace,
-        metadata: metadata
+        metadata: metadata,
+        schedule_memory_refresh: schedule_memory_refresh
       ]
       |> maybe_put(:runtime_snapshot, runtime_snapshot)
       |> maybe_put(:runtime_version, runtime_snapshot && runtime_snapshot.version)
@@ -321,15 +323,50 @@ defmodule Nex.Agent do
   defp maybe_enqueue_memory_refresh(_session, _schedule, true, _runner_opts), do: :ok
 
   defp maybe_enqueue_memory_refresh(session, true, false, runner_opts) do
+    runtime = memory_refresh_runtime(runner_opts)
+
     MemoryUpdater.enqueue(
       session,
-      provider: Keyword.get(runner_opts, :provider),
-      model: Keyword.get(runner_opts, :model),
-      api_key: Keyword.get(runner_opts, :api_key),
-      base_url: Keyword.get(runner_opts, :base_url),
+      provider: runtime.provider,
+      model: runtime.model,
+      api_key: runtime.api_key,
+      base_url: runtime.base_url,
+      provider_options: runtime.provider_options,
       workspace: Keyword.get(runner_opts, :workspace),
+      channel: Keyword.get(runner_opts, :channel),
+      chat_id: Keyword.get(runner_opts, :chat_id),
+      model_role: runtime.model_role,
+      notify_memory_updates: true,
+      source: "agent_prompt",
       req_llm_stream_text_fun: Keyword.get(runner_opts, :req_llm_stream_text_fun),
       llm_call_fun: Keyword.get(runner_opts, :llm_call_fun)
     )
+  end
+
+  defp memory_refresh_runtime(runner_opts) do
+    runtime_snapshot = Keyword.get(runner_opts, :runtime_snapshot)
+    config = runtime_snapshot && runtime_snapshot.config
+
+    case config && Config.memory_model_runtime(config) do
+      %{provider: provider, model_id: model} = runtime ->
+        %{
+          provider: provider,
+          model: model,
+          api_key: runtime.api_key,
+          base_url: runtime.base_url,
+          provider_options: runtime.provider_options,
+          model_role: "memory"
+        }
+
+      _ ->
+        %{
+          provider: Keyword.get(runner_opts, :provider),
+          model: Keyword.get(runner_opts, :model),
+          api_key: Keyword.get(runner_opts, :api_key),
+          base_url: Keyword.get(runner_opts, :base_url),
+          provider_options: Keyword.get(runner_opts, :provider_options, []),
+          model_role: "runtime"
+        }
+    end
   end
 end

@@ -145,27 +145,40 @@ defmodule Nex.Agent.Memory do
   @doc """
   Refresh MEMORY.md from unreviewed session messages.
 
-  Returns `{:ok, session, status}` where status is `:noop` or `:updated`.
+  Returns `{:ok, session, result}` where result describes whether MEMORY.md changed.
   """
+  @type refresh_result :: %{
+          status: :noop | :updated,
+          summary: String.t() | nil,
+          before_hash: String.t(),
+          after_hash: String.t(),
+          memory_bytes: non_neg_integer(),
+          model_role: String.t(),
+          provider: String.t(),
+          model: String.t()
+        }
+
   @spec refresh(map(), atom(), String.t(), keyword()) ::
-          {:ok, map(), :noop | :updated} | {:error, term()}
+          {:ok, map(), refresh_result()} | {:error, term()}
   def refresh(session, provider, model, opts \\ []) do
     api_key = Keyword.get(opts, :api_key)
     base_url = Keyword.get(opts, :base_url)
     provider_options = Keyword.get(opts, :provider_options, [])
     workspace = Keyword.get(opts, :workspace)
     memory_opts = workspace_opts(workspace)
+    current_memory = read_long_term(memory_opts)
     pending_messages = pending_memory_messages(session)
 
     if pending_messages == [] do
-      {:ok, session, :noop}
+      {:ok, session,
+       refresh_result(:noop, nil, current_memory, current_memory, provider, model, opts)}
     else
-      current_memory = read_long_term(memory_opts)
       prompt_memory = compact_consolidation_memory(current_memory)
       lines = render_memory_lines(pending_messages)
 
       if lines == [] do
-        {:ok, mark_reviewed(session), :noop}
+        {:ok, mark_reviewed(session),
+         refresh_result(:noop, nil, current_memory, current_memory, provider, model, opts)}
       else
         messages = refresh_messages(prompt_memory, lines)
 
@@ -211,18 +224,57 @@ defmodule Nex.Agent.Memory do
             case normalize_refresh_args(result) do
               {:ok, %{"status" => "noop"} = normalized} ->
                 maybe_append_history_entry(normalized, memory_opts)
-                {:ok, mark_reviewed(session), :noop}
+
+                {:ok, mark_reviewed(session),
+                 refresh_result(:noop, nil, current_memory, current_memory, provider, model, opts)}
 
               {:ok, %{"status" => "update", "memory_update" => update} = normalized} ->
                 maybe_append_history_entry(normalized, memory_opts)
                 update = stringify_result(update)
+                summary = normalize_summary(Map.get(normalized, "summary"))
 
                 if is_binary(update) and String.trim(update) != "" and
                      normalize_memory_body(update) != normalize_memory_body(current_memory) do
                   write_long_term(update, memory_opts)
-                  {:ok, mark_reviewed(session), :updated}
+
+                  result =
+                    refresh_result(
+                      :updated,
+                      summary || "Memory updated.",
+                      current_memory,
+                      update,
+                      provider,
+                      model,
+                      opts
+                    )
+
+                  Log.info(
+                    "memory.write.changed",
+                    %{
+                      "source" => "refresh",
+                      "summary" => result.summary,
+                      "before_hash" => result.before_hash,
+                      "after_hash" => result.after_hash,
+                      "memory_bytes" => result.memory_bytes,
+                      "model_role" => result.model_role,
+                      "provider" => result.provider,
+                      "model" => result.model
+                    },
+                    memory_opts
+                  )
+
+                  {:ok, mark_reviewed(session), result}
                 else
-                  {:ok, mark_reviewed(session), :noop}
+                  {:ok, mark_reviewed(session),
+                   refresh_result(
+                     :noop,
+                     nil,
+                     current_memory,
+                     current_memory,
+                     provider,
+                     model,
+                     opts
+                   )}
                 end
 
               {:error, reason} ->
@@ -261,7 +313,7 @@ defmodule Nex.Agent.Memory do
   @spec consolidate(map(), atom(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def consolidate(session, provider, model, opts \\ []) do
     case refresh(session, provider, model, opts) do
-      {:ok, updated_session, _status} ->
+      {:ok, updated_session, _result} ->
         clear_refresh_failure_count(session, opts)
         Evolution.maybe_trigger_after_consolidation(opts)
         {:ok, updated_session}
@@ -289,6 +341,7 @@ defmodule Nex.Agent.Memory do
     Do not persist one-off requests, temporary investigation notes, raw TODO lists, or transient outputs.
     If nothing durable was learned, return status=noop.
     If updating memory, return the full updated MEMORY.md markdown.
+    If updating memory, include a short user-visible summary of what changed.
     """
 
     [
@@ -440,6 +493,11 @@ defmodule Nex.Agent.Memory do
                 "type" => "string",
                 "description" =>
                   "Full updated MEMORY.md as markdown. Required only when status=update."
+              },
+              "summary" => %{
+                "type" => "string",
+                "description" =>
+                  "Short user-visible summary of the durable memory change. Required when status=update."
               }
             },
             "required" => ["status"]
@@ -548,6 +606,14 @@ defmodule Nex.Agent.Memory do
     end
   end
 
+  @spec hash_content(String.t() | nil) :: String.t()
+  def hash_content(content) do
+    content
+    |> to_string()
+    |> then(&:crypto.hash(:sha256, &1))
+    |> Base.encode16(case: :lower)
+  end
+
   defp maybe_archive_after_refresh_failure(session, reason, opts) do
     if Keyword.get(opts, :archive_all, false) and
          increment_refresh_failure_count(session, opts) >= @raw_archive_failure_threshold do
@@ -593,6 +659,34 @@ defmodule Nex.Agent.Memory do
     |> to_string()
     |> String.replace("\r\n", "\n")
     |> String.trim()
+  end
+
+  defp refresh_result(status, summary, before_memory, after_memory, provider, model, opts) do
+    after_memory = to_string(after_memory || "")
+
+    %{
+      status: status,
+      summary: normalize_summary(summary),
+      before_hash: hash_content(before_memory),
+      after_hash: hash_content(after_memory),
+      memory_bytes: byte_size(after_memory),
+      model_role: opts |> Keyword.get(:model_role, "memory") |> to_string(),
+      provider: to_string(provider),
+      model: to_string(model || "")
+    }
+  end
+
+  defp normalize_summary(nil), do: nil
+
+  defp normalize_summary(summary) do
+    summary
+    |> to_string()
+    |> String.replace(~r/\s+/, " ")
+    |> String.trim()
+    |> case do
+      "" -> nil
+      summary -> String.slice(summary, 0, 180)
+    end
   end
 
   defp mark_reviewed(session) do
@@ -673,8 +767,22 @@ defmodule Nex.Agent.Memory do
             String.trim_trailing(current) <> "\n\n" <> trimmed <> "\n"
         end
 
-      :ok = write_target(target, updated, opts)
-      {:ok, %{target: target, action: "append", content: trimmed}}
+      changed? = normalize_memory_body(updated) != normalize_memory_body(current)
+
+      if changed? do
+        :ok = write_target(target, updated, opts)
+      end
+
+      {:ok,
+       %{
+         target: target,
+         action: "append",
+         content: trimmed,
+         changed: changed?,
+         before_hash: hash_content(current),
+         after_hash: hash_content(updated),
+         memory_bytes: byte_size(updated)
+       }}
     end
   end
 
@@ -682,9 +790,24 @@ defmodule Nex.Agent.Memory do
   defp do_set_memory(_target, "", _opts), do: {:error, "content is required for set"}
 
   defp do_set_memory(target, content, opts) do
+    current = read_target(target, opts)
     updated = String.trim_trailing(content) <> "\n"
-    :ok = write_target(target, updated, opts)
-    {:ok, %{target: target, action: "set"}}
+    changed? = normalize_memory_body(updated) != normalize_memory_body(current)
+
+    if changed? do
+      :ok = write_target(target, updated, opts)
+    end
+
+    {:ok,
+     %{
+       target: target,
+       action: "set",
+       content: String.trim(updated),
+       changed: changed?,
+       before_hash: hash_content(current),
+       after_hash: hash_content(updated),
+       memory_bytes: byte_size(updated)
+     }}
   end
 
   defp tool_choice_for(_provider, name), do: %{type: "tool", name: name}

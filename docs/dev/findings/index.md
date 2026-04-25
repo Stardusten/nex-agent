@@ -15,3 +15,4 @@ Findings are settled architecture or technical conclusions. Draft design notes a
 - [2026-04-24 Self-Evolution User Guide](./2026-04-24-self-evolution-user-guide.md)
 - [2026-04-25 Local Tool Backend Selection](./2026-04-25-local-tool-backend-selection.md)
 - [2026-04-25 Newmsg Literal Boundary](./2026-04-25-newmsg-literal-boundary.md)
+- [2026-04-25 Memory System Cost, Visibility, And Triggering](./2026-04-25-memory-system-cost-visibility-and-triggering.md)

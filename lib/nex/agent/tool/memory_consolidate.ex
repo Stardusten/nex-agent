@@ -3,7 +3,8 @@ defmodule Nex.Agent.Tool.MemoryConsolidate do
 
   @behaviour Nex.Agent.Tool.Behaviour
 
-  alias Nex.Agent.{Memory, MemoryUpdater, Session, SessionManager}
+  alias Nex.Agent.{Config, Memory, MemoryUpdater, Session, SessionManager}
+  alias Nex.Agent.Memory.Notice
 
   @default_model "claude-sonnet-4-20250514"
 
@@ -48,6 +49,7 @@ defmodule Nex.Agent.Tool.MemoryConsolidate do
     model = Map.get(ctx, :model) || Map.get(ctx, "model") || @default_model
     api_key = Map.get(ctx, :api_key) || Map.get(ctx, "api_key")
     base_url = Map.get(ctx, :base_url) || Map.get(ctx, "base_url")
+    provider_options = Map.get(ctx, :provider_options) || Map.get(ctx, "provider_options") || []
     llm_call_fun = Map.get(ctx, :llm_call_fun) || Map.get(ctx, "llm_call_fun")
 
     req_llm_stream_text_fun =
@@ -78,27 +80,41 @@ defmodule Nex.Agent.Tool.MemoryConsolidate do
                workspace
              )}
           else
+            runtime = memory_runtime(ctx, provider, model, api_key, base_url, provider_options)
+
             opts =
               [
-                api_key: api_key,
-                base_url: base_url,
-                workspace: workspace
+                api_key: runtime.api_key,
+                base_url: runtime.base_url,
+                provider_options: runtime.provider_options,
+                workspace: workspace,
+                model_role: runtime.model_role
               ]
               |> maybe_put(:llm_call_fun, llm_call_fun)
               |> maybe_put(:req_llm_stream_text_fun, req_llm_stream_text_fun)
 
-            case Memory.refresh(session, provider, model, opts) do
-              {:ok, updated_session, refresh_status} ->
+            case Memory.refresh(session, runtime.provider, runtime.model, opts) do
+              {:ok, updated_session, refresh_result} ->
                 SessionManager.save_sync(updated_session, workspace: workspace)
+
+                Notice.maybe_send(refresh_result,
+                  workspace: workspace,
+                  session_key: updated_session.key,
+                  channel: Map.get(ctx, :channel) || Map.get(ctx, "channel"),
+                  chat_id: Map.get(ctx, :chat_id) || Map.get(ctx, "chat_id"),
+                  notify: user_visible_context?(ctx),
+                  source: "memory_consolidate_tool"
+                )
 
                 {:ok,
                  result_payload(
                    session_key,
-                   if(refresh_status == :updated, do: "refreshed", else: "noop"),
-                   if(refresh_status == :updated, do: "ok", else: "no_new_memory"),
+                   if(refresh_result.status == :updated, do: "refreshed", else: "noop"),
+                   if(refresh_result.status == :updated, do: "ok", else: "no_new_memory"),
                    session,
                    updated_session,
-                   workspace
+                   workspace,
+                   refresh_result
                  )}
 
               {:error, reason} ->
@@ -109,15 +125,53 @@ defmodule Nex.Agent.Tool.MemoryConsolidate do
     end
   end
 
-  defp result_payload(session_key, status, reason, before_session, after_session, workspace) do
+  defp result_payload(
+         session_key,
+         status,
+         reason,
+         before_session,
+         after_session,
+         workspace,
+         refresh_result \\ nil
+       ) do
     %{
       "session_key" => session_key,
       "status" => status,
       "reason" => reason,
       "last_reviewed_before" => before_session.last_consolidated,
       "last_reviewed_after" => after_session.last_consolidated,
-      "memory_bytes" => byte_size(Memory.read_long_term(workspace: workspace))
+      "memory_bytes" => byte_size(Memory.read_long_term(workspace: workspace)),
+      "summary" => refresh_result && refresh_result.summary,
+      "model_role" => refresh_result && refresh_result.model_role,
+      "provider" => refresh_result && refresh_result.provider,
+      "model" => refresh_result && refresh_result.model
     }
+  end
+
+  defp memory_runtime(ctx, fallback_provider, fallback_model, api_key, base_url, provider_options) do
+    config = Map.get(ctx, :config) || Map.get(ctx, "config")
+
+    case config && Config.memory_model_runtime(config) do
+      %{provider: provider, model_id: model} = runtime ->
+        %{
+          provider: provider,
+          model: model,
+          api_key: runtime.api_key,
+          base_url: runtime.base_url,
+          provider_options: runtime.provider_options,
+          model_role: "memory"
+        }
+
+      _ ->
+        %{
+          provider: fallback_provider,
+          model: fallback_model,
+          api_key: api_key,
+          base_url: base_url,
+          provider_options: provider_options,
+          model_role: "runtime"
+        }
+    end
   end
 
   defp fetch_session(session_key, workspace) do
@@ -147,6 +201,16 @@ defmodule Nex.Agent.Tool.MemoryConsolidate do
 
   defp present?(value) when is_binary(value), do: String.trim(value) != ""
   defp present?(value), do: not is_nil(value)
+
+  defp user_visible_context?(ctx) do
+    metadata = Map.get(ctx, :metadata) || Map.get(ctx, "metadata") || %{}
+    tools_filter = Map.get(ctx, :tools_filter) || Map.get(ctx, "tools_filter")
+
+    not (Map.get(metadata, "_from_cron") == true or
+           Map.get(metadata, "_from_subagent") == true or
+           Map.get(metadata, "_follow_up") == true or
+           tools_filter in [:cron, :follow_up, :subagent])
+  end
 
   defp maybe_put(opts, _key, nil), do: opts
   defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)

@@ -5,7 +5,8 @@ defmodule Nex.Agent.Tool.MemoryRebuild do
 
   @blank_memory "# Long-term Memory\n"
 
-  alias Nex.Agent.{Memory, Session, SessionManager}
+  alias Nex.Agent.{Config, Memory, Session, SessionManager}
+  alias Nex.Agent.Memory.Notice
 
   def name, do: "memory_rebuild"
 
@@ -53,7 +54,13 @@ defmodule Nex.Agent.Tool.MemoryRebuild do
     model = Map.get(ctx, :model) || Map.get(ctx, "model")
     api_key = Map.get(ctx, :api_key) || Map.get(ctx, "api_key")
     base_url = Map.get(ctx, :base_url) || Map.get(ctx, "base_url")
+    provider_options = Map.get(ctx, :provider_options) || Map.get(ctx, "provider_options") || []
     llm_call_fun = Map.get(ctx, :llm_call_fun) || Map.get(ctx, "llm_call_fun")
+
+    req_llm_stream_text_fun =
+      Map.get(ctx, :req_llm_stream_text_fun) || Map.get(ctx, "req_llm_stream_text_fun")
+
+    runtime = memory_runtime(ctx, provider, model, api_key, base_url, provider_options)
 
     batch_messages =
       (Map.get(args, "batch_messages") ||
@@ -69,18 +76,25 @@ defmodule Nex.Agent.Tool.MemoryRebuild do
 
     with {:ok, session_key} <- validate_session_key(session_key),
          {:ok, session} <- fetch_session(session_key, workspace),
-         {:ok, updated_session} <-
+         {:ok, updated_session, rebuild_result} <-
            rebuild_session(
              session,
-             provider,
-             model,
-             api_key,
-             base_url,
+             runtime,
              workspace,
              llm_call_fun,
+             req_llm_stream_text_fun,
              batch_messages
            ) do
       persist_session(updated_session, workspace)
+
+      Notice.maybe_send(rebuild_result,
+        workspace: workspace,
+        session_key: updated_session.key,
+        channel: Map.get(ctx, :channel) || Map.get(ctx, "channel"),
+        chat_id: Map.get(ctx, :chat_id) || Map.get(ctx, "chat_id"),
+        notify: user_visible_context?(ctx),
+        source: "memory_rebuild_tool"
+      )
 
       {:ok,
        %{
@@ -90,41 +104,45 @@ defmodule Nex.Agent.Tool.MemoryRebuild do
          "batch_messages" => batch_messages,
          "last_consolidated_before" => session.last_consolidated,
          "last_consolidated_after" => updated_session.last_consolidated,
-         "memory_bytes" => byte_size(Memory.read_long_term(workspace: workspace))
+         "memory_bytes" => byte_size(Memory.read_long_term(workspace: workspace)),
+         "summary" => rebuild_result.summary,
+         "model_role" => rebuild_result.model_role,
+         "provider" => rebuild_result.provider,
+         "model" => rebuild_result.model
        }}
     end
   end
 
   defp rebuild_session(
          %Session{} = session,
-         provider,
-         model,
-         api_key,
-         base_url,
+         runtime,
          workspace,
          llm_call_fun,
+         req_llm_stream_text_fun,
          batch_size
        ) do
-    model = model || "claude-sonnet-4-20250514"
-
     temp_workspace = rebuild_workspace_path()
+    before_memory = Memory.read_long_term(workspace: workspace)
 
     try do
       :ok = seed_rebuild_workspace(temp_workspace)
 
       case rebuild_batches(
              session,
-             provider,
-             model,
-             api_key,
-             base_url,
+             runtime,
              temp_workspace,
              llm_call_fun,
+             req_llm_stream_text_fun,
              batch_size
            ) do
-        {:ok, _processed} ->
+        {:ok, %{last_result: last_result}} ->
           :ok = promote_rebuild_workspace(temp_workspace, workspace)
-          {:ok, %Session{session | last_consolidated: length(session.messages)}}
+          after_memory = Memory.read_long_term(workspace: workspace)
+
+          rebuild_result =
+            final_rebuild_result(before_memory, after_memory, runtime, last_result)
+
+          {:ok, %Session{session | last_consolidated: length(session.messages)}, rebuild_result}
 
         {:error, reason} ->
           {:error, reason}
@@ -136,37 +154,85 @@ defmodule Nex.Agent.Tool.MemoryRebuild do
 
   defp rebuild_batches(
          %Session{} = session,
-         provider,
-         model,
-         api_key,
-         base_url,
+         runtime,
          temp_workspace,
          llm_call_fun,
+         req_llm_stream_text_fun,
          batch_size
        ) do
     session.messages
     |> Enum.chunk_every(batch_size)
     |> Enum.with_index(1)
-    |> Enum.reduce_while({:ok, 0}, fn {batch, idx}, {:ok, _processed} ->
+    |> Enum.reduce_while({:ok, %{processed: 0, last_result: nil}}, fn {batch, idx},
+                                                                      {:ok, _state} ->
       batch_session = %Session{session | messages: batch, last_consolidated: 0}
 
       opts =
         [
-          api_key: api_key,
-          base_url: base_url,
-          workspace: temp_workspace
+          api_key: runtime.api_key,
+          base_url: runtime.base_url,
+          provider_options: runtime.provider_options,
+          workspace: temp_workspace,
+          model_role: runtime.model_role
         ]
         |> maybe_put(:llm_call_fun, llm_call_fun)
+        |> maybe_put(:req_llm_stream_text_fun, req_llm_stream_text_fun)
 
-      case Memory.refresh(batch_session, provider, model, opts) do
-        {:ok, _updated_batch_session, _status} ->
+      case Memory.refresh(batch_session, runtime.provider, runtime.model, opts) do
+        {:ok, _updated_batch_session, result} ->
           processed = min(idx * batch_size, length(session.messages))
-          {:cont, {:ok, processed}}
+          {:cont, {:ok, %{processed: processed, last_result: result}}}
 
         {:error, reason} ->
           {:halt, {:error, reason}}
       end
     end)
+  end
+
+  defp final_rebuild_result(before_memory, after_memory, runtime, last_result) do
+    status =
+      if String.trim(to_string(before_memory)) == String.trim(to_string(after_memory)) do
+        :noop
+      else
+        :updated
+      end
+
+    %{
+      status: status,
+      summary: (last_result && last_result.summary) || "Memory rebuilt.",
+      before_hash: Memory.hash_content(before_memory),
+      after_hash: Memory.hash_content(after_memory),
+      memory_bytes: byte_size(to_string(after_memory || "")),
+      model_role: runtime.model_role,
+      provider: to_string(runtime.provider),
+      model: to_string(runtime.model || "")
+    }
+  end
+
+  defp memory_runtime(ctx, fallback_provider, fallback_model, api_key, base_url, provider_options) do
+    config = Map.get(ctx, :config) || Map.get(ctx, "config")
+
+    case config && Config.memory_model_runtime(config) do
+      %{provider: provider, model_id: model} = runtime ->
+        %{
+          provider: provider,
+          model: model,
+          api_key: runtime.api_key,
+          base_url: runtime.base_url,
+          provider_options: runtime.provider_options,
+          model_role: "memory"
+        }
+
+      _ ->
+        %{
+          provider: fallback_provider,
+          model: fallback_model || "claude-sonnet-4-20250514",
+          api_key: api_key,
+          base_url: base_url,
+          provider_options: provider_options,
+          model_role: "runtime"
+        }
+    end
   end
 
   defp fetch_session(session_key, workspace) do
@@ -233,6 +299,16 @@ defmodule Nex.Agent.Tool.MemoryRebuild do
 
   defp present?(value) when is_binary(value), do: String.trim(value) != ""
   defp present?(value), do: not is_nil(value)
+
+  defp user_visible_context?(ctx) do
+    metadata = Map.get(ctx, :metadata) || Map.get(ctx, "metadata") || %{}
+    tools_filter = Map.get(ctx, :tools_filter) || Map.get(ctx, "tools_filter")
+
+    not (Map.get(metadata, "_from_cron") == true or
+           Map.get(metadata, "_from_subagent") == true or
+           Map.get(metadata, "_follow_up") == true or
+           tools_filter in [:cron, :follow_up, :subagent])
+  end
 
   defp normalize_batch_size(value) when is_integer(value) and value > 0, do: min(value, 500)
   defp normalize_batch_size(_), do: 120
