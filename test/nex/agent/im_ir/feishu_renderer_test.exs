@@ -44,7 +44,11 @@ defmodule Nex.Agent.IMIR.FeishuRendererTest do
 
     assert card["config"]["wide_screen_mode"] == true
     assert is_list(card["elements"])
-    assert Enum.any?(card["elements"], &match?(%{"tag" => "markdown", "content" => "# Title"}, &1))
+
+    assert Enum.any?(
+             card["elements"],
+             &match?(%{"tag" => "markdown", "content" => "# Title"}, &1)
+           )
   end
 
   test "renderer marks table output as deterministic degradation" do
@@ -61,7 +65,7 @@ defmodule Nex.Agent.IMIR.FeishuRendererTest do
   end
 
   test "renderer keeps new_message as boundary metadata without rendering separator payload" do
-    results = Feishu.render("before\n<newmsg/>\nafter\n")
+    results = Feishu.render("before<newmsg/>after\n")
 
     assert Enum.any?(results, &(&1.new_message? and &1.canonical_text == "<newmsg/>"))
 

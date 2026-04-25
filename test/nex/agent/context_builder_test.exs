@@ -55,8 +55,7 @@ defmodule Nex.Agent.ContextBuilderTest do
 
     assert prompt =~ "## Channel Output Rules"
     assert prompt =~ "`<newmsg/>` is a platform text IR separator"
-    assert prompt =~ "put exactly `<newmsg/>` on its own line"
-    assert prompt =~ "Do not place `<newmsg/>` inside fenced code blocks."
+    assert prompt =~ "Wherever `<newmsg/>` appears"
     assert prompt =~ "Use `<newmsg/>` only when you intentionally want the runtime to split"
   end
 

@@ -55,6 +55,7 @@ defmodule Nex.Agent.IMIR.Parser do
   defp parse_full(text, profile) when is_binary(text) do
     {blocks, state} =
       text
+      |> normalize_new_message_tokens(profile)
       |> String.split("\n", trim: false)
       |> Enum.reduce({[], blank_state()}, fn line, {blocks, state} ->
         consume_line(blocks, state, line, profile)
@@ -64,7 +65,10 @@ defmodule Nex.Agent.IMIR.Parser do
   end
 
   defp parse_lines(text, profile) do
-    {complete_lines, partial_tail} = split_complete_lines(text)
+    {complete_lines, partial_tail} =
+      text
+      |> normalize_new_message_tokens(profile)
+      |> split_complete_lines()
 
     Enum.reduce(complete_lines, {[], partial_tail, blank_state()}, fn line,
                                                                       {blocks, tail, state} ->
@@ -88,13 +92,10 @@ defmodule Nex.Agent.IMIR.Parser do
 
   defp consume_line(blocks, state, line, profile) do
     cond do
-      state.in_code? ->
-        consume_code_line(blocks, state, line)
-
       line == profile[:new_message_token] ->
         blocks =
           blocks
-          |> flush_pending(state)
+          |> finalize_pending(state)
           |> Kernel.++([
             %Block{
               type: :new_message,
@@ -105,6 +106,9 @@ defmodule Nex.Agent.IMIR.Parser do
           ])
 
         {blocks, blank_state()}
+
+      state.in_code? ->
+        consume_code_line(blocks, state, line)
 
       String.starts_with?(line, "```") ->
         {flush_pending(blocks, state),
@@ -306,5 +310,15 @@ defmodule Nex.Agent.IMIR.Parser do
   defp new_message_prefix?(partial_tail, profile) do
     token = profile[:new_message_token] || ""
     partial_tail != "" and String.starts_with?(token, partial_tail)
+  end
+
+  defp normalize_new_message_tokens(text, profile) do
+    token = profile[:new_message_token] || ""
+
+    if token == "" do
+      text
+    else
+      String.replace(text, token, "\n#{token}\n")
+    end
   end
 end

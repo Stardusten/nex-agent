@@ -33,6 +33,11 @@ defmodule Nex.Agent.InboundWorker do
   alias Nex.Agent.Stream.Result
 
   @feishu_stream_flush_ms 500
+  @discord_stream_flush_ms 1000
+  @discord_placeholder_tick_ms 1_000
+  @discord_typing_heartbeat_ms 8_000
+  @discord_status_idle_ms 5_000
+  @discord_status_refresh_ms 10_000
   @empty_message_text "_(Empty Message)_"
 
   defstruct [
@@ -62,7 +67,8 @@ defmodule Nex.Agent.InboundWorker do
   @type active_follow_up_entry :: %{
           pid: pid(),
           workspace: String.t(),
-          session_key: String.t()
+          session_key: String.t(),
+          typing_timer_ref: reference() | nil
         }
 
   @type follow_up_mode :: :busy | :idle
@@ -359,7 +365,7 @@ defmodule Nex.Agent.InboundWorker do
           observe_follow_up_exit(key, entry, reason)
         end
 
-        {:noreply, %{state | active_follow_ups: Map.delete(state.active_follow_ups, key)}}
+        {:noreply, delete_follow_up_task(state, key)}
 
       match = find_active_task_by_pid(state, pid) ->
         {key, %{run_id: run_id, workspace: workspace, session_key: session_key}} = match
@@ -379,7 +385,12 @@ defmodule Nex.Agent.InboundWorker do
             _ -> RunControl.fail_owner(run_id, reason)
           end
 
-        {:noreply, %{state | active_tasks: Map.delete(state.active_tasks, key)}}
+        state =
+          state
+          |> drop_stream_state(stream_key(key, run_id))
+          |> Map.update!(:active_tasks, &Map.delete(&1, key))
+
+        {:noreply, state}
 
       true ->
         {:noreply, state}
@@ -489,6 +500,7 @@ defmodule Nex.Agent.InboundWorker do
       {:ok, {:discord, %DiscordStreamState{} = discord_state}} ->
         case flush_discord_converter(discord_state) do
           {:ok, updated} ->
+            updated = maybe_schedule_discord_status(updated, key)
             {:noreply, put_in(state.stream_states[key], {:discord, updated})}
 
           {:error, reason} ->
@@ -518,7 +530,12 @@ defmodule Nex.Agent.InboundWorker do
         %DiscordStreamState{converter: %{placeholder: true} = converter} = discord_state}} ->
         case DiscordStreamConverter.update_thinking_timer(converter) do
           {:ok, updated_converter} ->
-            timer_ref = Process.send_after(self(), {:discord_thinking_tick, key}, 1_000)
+            timer_ref =
+              Process.send_after(
+                self(),
+                {:discord_thinking_tick, key},
+                @discord_placeholder_tick_ms
+              )
 
             updated = %{
               discord_state
@@ -528,6 +545,83 @@ defmodule Nex.Agent.InboundWorker do
 
             {:noreply, put_in(state.stream_states[key], {:discord, updated})}
         end
+
+      _ ->
+        {:noreply, state}
+    end
+  end
+
+  @impl true
+  def handle_info({:discord_typing_tick, key}, state) do
+    case Map.fetch(state.stream_states, key) do
+      {:ok, {:discord, %DiscordStreamState{converter: converter} = discord_state}} ->
+        discord_state = cancel_discord_typing_timer(discord_state)
+        Discord.trigger_typing(converter.instance_id, converter.chat_id)
+
+        timer_ref =
+          Process.send_after(self(), {:discord_typing_tick, key}, @discord_typing_heartbeat_ms)
+
+        updated = %{discord_state | typing_timer_ref: timer_ref}
+        {:noreply, put_in(state.stream_states[key], {:discord, updated})}
+
+      _ ->
+        {:noreply, state}
+    end
+  end
+
+  @impl true
+  def handle_info({:discord_status_tick, key}, state) do
+    case Map.fetch(state.stream_states, key) do
+      {:ok, {:discord, %DiscordStreamState{converter: converter} = discord_state}} ->
+        discord_state = cancel_discord_status_timer(discord_state)
+
+        if DiscordStreamConverter.active_content?(converter) do
+          case DiscordStreamConverter.refresh_working_status(converter) do
+            {:ok, updated_converter} ->
+              timer_ref =
+                Process.send_after(
+                  self(),
+                  {:discord_status_tick, key},
+                  @discord_status_refresh_ms
+                )
+
+              updated = %{
+                discord_state
+                | converter: updated_converter,
+                  status_timer_ref: timer_ref
+              }
+
+              {:noreply, put_in(state.stream_states[key], {:discord, updated})}
+
+            {:error, reason} ->
+              Logger.warning("[InboundWorker] discord status refresh failed: #{inspect(reason)}")
+              {:noreply, state}
+          end
+        else
+          {:noreply, state}
+        end
+
+      _ ->
+        {:noreply, state}
+    end
+  end
+
+  @impl true
+  def handle_info({:discord_follow_up_typing_tick, key}, state) do
+    case Map.get(state.active_follow_ups, key) do
+      %{session_key: session_key} = entry ->
+        cancel_follow_up_typing_timer(entry)
+        {channel, chat_id} = parse_session_key(session_key)
+        Discord.trigger_typing(channel, chat_id)
+
+        timer_ref =
+          Process.send_after(
+            self(),
+            {:discord_follow_up_typing_tick, key},
+            @discord_typing_heartbeat_ms
+          )
+
+        {:noreply, put_in(state.active_follow_ups[key], %{entry | typing_timer_ref: timer_ref})}
 
       _ ->
         {:noreply, state}
@@ -796,11 +890,13 @@ defmodule Nex.Agent.InboundWorker do
       end)
 
     Process.monitor(pid)
+    typing_timer_ref = start_discord_follow_up_typing_timer(state.config, key, channel, chat_id)
 
     put_in(state.active_follow_ups[key], %{
       pid: pid,
       workspace: workspace,
-      session_key: session_key
+      session_key: session_key,
+      typing_timer_ref: typing_timer_ref
     })
   end
 
@@ -896,6 +992,20 @@ defmodule Nex.Agent.InboundWorker do
     }
   end
 
+  defp start_discord_follow_up_typing_timer(config, key, channel, chat_id) do
+    runtime = Config.channel_runtime(config, channel)
+
+    if Map.get(runtime, "type") == "discord" and Nex.Agent.Channel.Registry.whereis(channel) do
+      Discord.trigger_typing(channel, chat_id)
+
+      Process.send_after(
+        self(),
+        {:discord_follow_up_typing_tick, key},
+        @discord_typing_heartbeat_ms
+      )
+    end
+  end
+
   defp build_stream_sink(parent, key, channel, chat_id, envelope, config) do
     metadata = extract_metadata(envelope)
     channel_runtime = channel_runtime(envelope, channel, config)
@@ -955,7 +1065,19 @@ defmodule Nex.Agent.InboundWorker do
           {:ok, converter} = DiscordStreamConverter.start(channel, chat_id, metadata)
 
           # Start 1s thinking timer for "🤔 Thinking... (Ns)" updates
-          thinking_timer_ref = Process.send_after(parent, {:discord_thinking_tick, key}, 1_000)
+          thinking_timer_ref =
+            Process.send_after(
+              parent,
+              {:discord_thinking_tick, key},
+              @discord_placeholder_tick_ms
+            )
+
+          typing_timer_ref =
+            Process.send_after(
+              parent,
+              {:discord_typing_tick, key},
+              @discord_typing_heartbeat_ms
+            )
 
           send(
             parent,
@@ -963,7 +1085,8 @@ defmodule Nex.Agent.InboundWorker do
              {:discord,
               %DiscordStreamState{
                 converter: converter,
-                thinking_timer_ref: thinking_timer_ref
+                thinking_timer_ref: thinking_timer_ref,
+                typing_timer_ref: typing_timer_ref
               }}}
           )
 
@@ -1497,6 +1620,8 @@ defmodule Nex.Agent.InboundWorker do
       {:ok, {:discord, %DiscordStreamState{} = discord_state}} ->
         discord_state = cancel_discord_flush(discord_state)
         discord_state = cancel_discord_thinking_timer(discord_state)
+        discord_state = cancel_discord_typing_timer(discord_state)
+        discord_state = cancel_discord_status_timer(discord_state)
 
         case flush_discord_converter(discord_state) do
           {:ok, %DiscordStreamState{converter: flushed_converter}} ->
@@ -1887,6 +2012,18 @@ defmodule Nex.Agent.InboundWorker do
   end
 
   defp drop_stream_state(state, key) do
+    case Map.get(state.stream_states, key) do
+      {:discord, %DiscordStreamState{} = discord_state} ->
+        discord_state
+        |> cancel_discord_flush()
+        |> cancel_discord_thinking_timer()
+        |> cancel_discord_typing_timer()
+        |> cancel_discord_status_timer()
+
+      _ ->
+        :ok
+    end
+
     %{state | stream_states: Map.delete(state.stream_states, key)}
   end
 
@@ -1914,7 +2051,8 @@ defmodule Nex.Agent.InboundWorker do
       %{pid: pid} when pid == requester_pid ->
         state
 
-      %{pid: pid} ->
+      %{pid: pid} = entry ->
+        cancel_follow_up_typing_timer(entry)
         if Process.alive?(pid), do: Process.exit(pid, :kill)
         %{state | active_follow_ups: Map.delete(state.active_follow_ups, key)}
 
@@ -1925,10 +2063,26 @@ defmodule Nex.Agent.InboundWorker do
 
   defp clear_follow_up_task(state, key, pid) do
     case Map.get(state.active_follow_ups, key) do
-      %{pid: ^pid} -> %{state | active_follow_ups: Map.delete(state.active_follow_ups, key)}
+      %{pid: ^pid} -> delete_follow_up_task(state, key)
       _ -> state
     end
   end
+
+  defp delete_follow_up_task(state, key) do
+    case Map.get(state.active_follow_ups, key) do
+      nil -> state
+      entry -> cancel_follow_up_typing_timer(entry)
+    end
+
+    %{state | active_follow_ups: Map.delete(state.active_follow_ups, key)}
+  end
+
+  defp cancel_follow_up_typing_timer(%{typing_timer_ref: ref}) when is_reference(ref) do
+    Process.cancel_timer(ref)
+    :ok
+  end
+
+  defp cancel_follow_up_typing_timer(_entry), do: :ok
 
   defp run_prompt_task(prompt_fun, agent, prompt, opts) do
     prompt_fun.(agent, prompt, opts)
@@ -2073,14 +2227,14 @@ defmodule Nex.Agent.InboundWorker do
 
   # ── Discord converter streaming ──────────────────────────────────────
 
-  @discord_stream_flush_ms 1000
-
   defp apply_discord_converter_event(
          %DiscordStreamState{pending_text: pending_text} = discord_state,
          key,
          {:text, chunk}
        )
        when is_binary(chunk) do
+    discord_state = cancel_discord_status_timer(discord_state)
+
     updated =
       %{discord_state | pending_text: pending_text <> chunk}
       |> schedule_discord_flush(key)
@@ -2119,6 +2273,34 @@ defmodule Nex.Agent.InboundWorker do
     Process.cancel_timer(ref)
     %{s | thinking_timer_ref: nil}
   end
+
+  defp cancel_discord_typing_timer(%DiscordStreamState{typing_timer_ref: nil} = s), do: s
+
+  defp cancel_discord_typing_timer(%DiscordStreamState{typing_timer_ref: ref} = s) do
+    Process.cancel_timer(ref)
+    %{s | typing_timer_ref: nil}
+  end
+
+  defp cancel_discord_status_timer(%DiscordStreamState{status_timer_ref: nil} = s), do: s
+
+  defp cancel_discord_status_timer(%DiscordStreamState{status_timer_ref: ref} = s) do
+    Process.cancel_timer(ref)
+    %{s | status_timer_ref: nil}
+  end
+
+  defp maybe_schedule_discord_status(
+         %DiscordStreamState{converter: converter, status_timer_ref: nil} = discord_state,
+         key
+       ) do
+    if DiscordStreamConverter.active_content?(converter) do
+      ref = Process.send_after(self(), {:discord_status_tick, key}, @discord_status_idle_ms)
+      %{discord_state | status_timer_ref: ref}
+    else
+      discord_state
+    end
+  end
+
+  defp maybe_schedule_discord_status(discord_state, _key), do: discord_state
 
   defp flush_discord_converter(%DiscordStreamState{pending_text: ""} = discord_state) do
     {:ok, %{discord_state | flush_timer_ref: nil}}

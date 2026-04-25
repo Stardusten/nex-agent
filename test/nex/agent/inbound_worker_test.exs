@@ -1528,6 +1528,118 @@ defmodule Nex.Agent.InboundWorkerTest do
     refute_receive {:bus_message, @discord_topic, _payload}, 300
   end
 
+  test "discord stream keeps typing and working status visible while run is active" do
+    parent = self()
+
+    worker_config =
+      config_with_channels(%{
+        @discord_instance => %{"type" => "discord", "enabled" => true, "streaming" => true}
+      })
+
+    channel_config = %{"type" => "discord", "enabled" => false, "token" => "discord-token"}
+
+    start_supervised!(
+      {Discord,
+       instance_id: @discord_instance,
+       config: config_with_channels(%{@discord_instance => channel_config}),
+       channel_config: channel_config,
+       http_post_fun: fn url, body, headers ->
+         send(parent, {:discord_http_post, url, body, headers})
+         {:ok, %{"id" => "msg_" <> Integer.to_string(System.unique_integer([:positive]))}}
+       end,
+       http_patch_fun: fn url, body, headers ->
+         send(parent, {:discord_http_patch, url, body, headers})
+         {:ok, %{"id" => "patched"}}
+       end}
+    )
+
+    :sys.replace_state(Nex.Agent.Channel.Registry.whereis(@discord_instance), fn state ->
+      %{state | enabled: true, token: "discord-token"}
+    end)
+
+    worker_name =
+      String.to_atom("inbound_worker_discord_feedback_#{System.unique_integer([:positive])}")
+
+    prompt_fun = fn agent, _prompt, opts ->
+      sink = Keyword.fetch!(opts, :stream_sink)
+      sink.({:text, "partial"})
+      send(parent, {:discord_prompt_waiting, self()})
+
+      receive do
+        :finish_discord_prompt ->
+          sink.(:finish)
+          {:ok, Result.ok("run_discord_feedback_test", "partial", %{}), agent}
+      after
+        5_000 ->
+          {:error, :test_timeout, agent}
+      end
+    end
+
+    start_supervised!(
+      {InboundWorker, name: worker_name, config: worker_config, agent_prompt_fun: prompt_fun}
+    )
+
+    send(Process.whereis(worker_name), {
+      :bus_message,
+      :inbound,
+      %Envelope{
+        channel: @discord_instance,
+        chat_id: "discord-chat",
+        sender_id: "tester",
+        text: "hello",
+        message_type: :text,
+        raw: %{},
+        metadata: %{},
+        media_refs: [],
+        attachments: []
+      }
+    })
+
+    assert_receive {:discord_prompt_waiting, task_pid}, 1_000
+
+    worker_pid = Process.whereis(worker_name)
+    stream_key = wait_for_discord_stream_key(worker_pid)
+
+    assert_discord_event(fn
+      {:discord_http_post, url, %{}, _headers} -> url =~ "/channels/discord-chat/typing"
+      _event -> false
+    end)
+
+    send(worker_pid, {:flush_discord_stream, stream_key})
+
+    assert_discord_event(fn
+      {:discord_http_patch, url, %{"content" => "partial"}, _headers} ->
+        url =~ "/channels/discord-chat/messages/"
+
+      _event ->
+        false
+    end)
+
+    send(worker_pid, {:discord_status_tick, stream_key})
+
+    assert_discord_event(fn
+      {:discord_http_patch, _url, %{"content" => content}, _headers} ->
+        content =~ "partial\n\n_Still working..."
+
+      _event ->
+        false
+    end)
+
+    send(worker_pid, {:discord_typing_tick, stream_key})
+
+    assert_discord_event(fn
+      {:discord_http_post, url, %{}, _headers} -> url =~ "/channels/discord-chat/typing"
+      _event -> false
+    end)
+
+    send(task_pid, :finish_discord_prompt)
+
+    assert_discord_event(fn
+      {:discord_http_patch, _url, %{"content" => "partial"}, _headers} -> true
+      _event -> false
+    end)
+  end
+
   defp collect_discord_posts(acc, timeout) do
     receive do
       {:discord_http_post, url, body, headers} ->
@@ -1537,6 +1649,42 @@ defmodule Nex.Agent.InboundWorkerTest do
         collect_discord_posts([{url, body, headers} | acc], timeout)
     after
       timeout -> Enum.reverse(acc)
+    end
+  end
+
+  defp assert_discord_event(predicate, timeout \\ 1_000) do
+    receive do
+      {:discord_http_post, _url, _body, _headers} = event ->
+        if predicate.(event), do: event, else: assert_discord_event(predicate, timeout)
+
+      {:discord_http_patch, _url, _body, _headers} = event ->
+        if predicate.(event), do: event, else: assert_discord_event(predicate, timeout)
+    after
+      timeout -> flunk("expected matching Discord HTTP event")
+    end
+  end
+
+  defp wait_for_discord_stream_key(worker_pid, attempts \\ 50)
+
+  defp wait_for_discord_stream_key(_worker_pid, 0) do
+    flunk("discord stream state did not start in time")
+  end
+
+  defp wait_for_discord_stream_key(worker_pid, attempts) do
+    worker_pid
+    |> :sys.get_state()
+    |> Map.fetch!(:stream_states)
+    |> Enum.find_value(fn
+      {key, {:discord, _state}} -> key
+      _entry -> nil
+    end)
+    |> case do
+      nil ->
+        Process.sleep(20)
+        wait_for_discord_stream_key(worker_pid, attempts - 1)
+
+      key ->
+        key
     end
   end
 

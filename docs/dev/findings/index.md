@@ -12,3 +12,4 @@
 - [2026-04-17 Cross-Platform Slash Command Foundation](./2026-04-17-cross-platform-slash-command-foundation.md)
 - [2026-04-24 Self-Evolution User Guide](./2026-04-24-self-evolution-user-guide.md)
 - [2026-04-25 Local Tool Backend Selection](./2026-04-25-local-tool-backend-selection.md)
+- [2026-04-25 Newmsg Literal Boundary](./2026-04-25-newmsg-literal-boundary.md)

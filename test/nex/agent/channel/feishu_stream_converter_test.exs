@@ -84,12 +84,12 @@ defmodule Nex.Agent.Channel.FeishuStreamConverterTest do
   test "newmsg split across flush boundary still rotates card" do
     {:ok, c} = StreamConverter.start(@instance_id, "ou_123", %{})
     # First chunk ends with partial "<newmsg/>" → held back
-    {:ok, c} = StreamConverter.push_text(c, "one\n\n<new")
-    assert c.pending_buffer == "\n<new"
+    {:ok, c} = StreamConverter.push_text(c, "one<new")
+    assert c.pending_buffer == "<new"
     assert c.active_text =~ "one"
 
     # Second chunk completes the boundary → card rotated, "two" goes to new card
-    {:ok, c} = StreamConverter.push_text(c, "msg/>\n\ntwo")
+    {:ok, c} = StreamConverter.push_text(c, "msg/>two")
 
     {:ok, c} = StreamConverter.finish(c)
     assert c.active_text == "two"
@@ -132,28 +132,28 @@ defmodule Nex.Agent.Channel.FeishuStreamConverterTest do
     assert length(card_creates) == 3
   end
 
-  test "inline newmsg mention does not rotate" do
+  test "inline newmsg rotates" do
     {:ok, c} = StreamConverter.start(@instance_id, "ou_123", %{})
-    {:ok, c} = StreamConverter.push_text(c, "Use `<newmsg/>` to split messages.")
+    {:ok, c} = StreamConverter.push_text(c, "one<newmsg/>two")
     {:ok, c} = StreamConverter.finish(c)
 
-    assert c.active_text =~ "`<newmsg/>`"
+    assert c.active_text == "two"
 
     posts = collect_http_posts([])
     card_creates = Enum.filter(posts, fn {url, _body} -> url =~ "/cardkit/v1/cards" end)
-    assert length(card_creates) == 1
+    assert length(card_creates) == 2
   end
 
-  test "newmsg not on its own line does not rotate" do
+  test "newmsg not on its own line still rotates" do
     {:ok, c} = StreamConverter.start(@instance_id, "ou_123", %{})
     {:ok, c} = StreamConverter.push_text(c, "some text <newmsg/> more text")
     {:ok, c} = StreamConverter.finish(c)
 
-    assert c.active_text =~ "<newmsg/>"
+    assert c.active_text == "more text"
 
     posts = collect_http_posts([])
     card_creates = Enum.filter(posts, fn {url, _body} -> url =~ "/cardkit/v1/cards" end)
-    assert length(card_creates) == 1
+    assert length(card_creates) == 2
   end
 
   test "close_streaming_mode called on rotate and finish" do

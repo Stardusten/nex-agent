@@ -22,6 +22,7 @@ Phase 4 resolved the first user-visible rendering blocker instead of leaving it 
 - the repo now has an internal IM text IR parser boundary with frozen block shapes and `RenderResult`.
 - Feishu interactive cards now render through the IM IR pipeline instead of the previous weak markdown chunker.
 - `<newmsg/>` now has a first fixed policy:
+  - the literal token is a hard boundary wherever it appears; it no longer needs to be on its own line
   - Feishu: degrade to an in-card separator
   - multi-message channels: split final user-visible messages on finalize
 - runtime prompt guidance now tells the model which channel IR and streaming mode are active.

@@ -19,27 +19,24 @@ defmodule Nex.Agent.IMIR.ParserTest do
            ] = blocks2
 
     {_parser, flushed} = Parser.flush(parser)
-    assert flushed == []
+    refute Enum.any?(flushed, &(&1.canonical_text =~ "<newmsg/>" and &1.type != :new_message))
   end
 
-  test "parser does not split on new_message token inside fenced code blocks" do
+  test "parser splits on new_message token even inside fenced code blocks" do
     parser = IMIR.new(:feishu)
 
     {parser, blocks1} = Parser.push(parser, "```elixir\nIO.puts(\"<newmsg/>\")")
-    assert blocks1 == []
+    assert Enum.any?(blocks1, &match?(%Block{type: :new_message}, &1))
 
     {parser, blocks2} = Parser.push(parser, "\n```\n")
 
-    assert [
-             %Block{
-               type: :code_block,
-               canonical_text: "```elixir\nIO.puts(\"<newmsg/>\")\n```",
-               complete?: true
-             }
-           ] = blocks2
+    refute Enum.any?(
+             blocks1 ++ blocks2,
+             &(&1.canonical_text =~ "<newmsg/>" and &1.type != :new_message)
+           )
 
     {_parser, flushed} = Parser.flush(parser)
-    assert flushed == []
+    refute Enum.any?(flushed, &(&1.canonical_text =~ "<newmsg/>" and &1.type != :new_message))
   end
 
   test "parser marks unclosed code blocks as incomplete until flush" do

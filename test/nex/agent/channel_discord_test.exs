@@ -66,14 +66,14 @@ defmodule Nex.Agent.Channel.DiscordTest do
     assert url2 =~ "/channels/123/messages"
   end
 
-  test "stream converter only treats standalone newmsg as boundary", %{pid: _pid} do
+  test "stream converter treats inline newmsg as boundary", %{pid: _pid} do
     assert {:ok, converter} = StreamConverter.start(@instance_id, "123", %{})
     assert_receive {:http_post, _url, %{"content" => "🤔 Thinking..."}, _headers}
 
-    assert {:ok, converter} = StreamConverter.push_text(converter, "我搜一下。\n<new")
+    assert {:ok, converter} = StreamConverter.push_text(converter, "我搜一下。<new")
     assert_receive {:http_patch, _url, %{"content" => "我搜一下。"}, _headers}
 
-    assert {:ok, converter} = StreamConverter.push_text(converter, "msg/>\n\nsecond")
+    assert {:ok, converter} = StreamConverter.push_text(converter, "msg/>second")
     assert {:ok, converter} = StreamConverter.finish(converter)
 
     assert converter.completed
@@ -81,7 +81,7 @@ defmodule Nex.Agent.Channel.DiscordTest do
     refute converter.active_text =~ "<newmsg/>"
   end
 
-  test "stream converter preserves non-standalone newmsg text", %{pid: _pid} do
+  test "stream converter splits newmsg wherever it appears", %{pid: _pid} do
     assert {:ok, converter} = StreamConverter.start(@instance_id, "123", %{})
     assert_receive {:http_post, _url, %{"content" => "🤔 Thinking..."}, _headers}
 
@@ -89,8 +89,40 @@ defmodule Nex.Agent.Channel.DiscordTest do
     assert {:ok, converter} = StreamConverter.finish(converter)
 
     assert converter.completed
-    assert_receive {:http_patch, _url, %{"content" => "Use <newmsg/> token"}, _headers}
-    refute_receive {:http_post, _url, %{"content" => "token"}, _headers}
+    assert_receive {:http_patch, _url, %{"content" => "Use"}, _headers}
+    assert_receive {:http_post, _url, %{"content" => "token"}, _headers}
+  end
+
+  test "stream converter shows temporary working status and clears it on new text", %{pid: _pid} do
+    assert {:ok, converter} = StreamConverter.start(@instance_id, "123", %{})
+    assert_receive {:http_post, _url, %{"content" => "🤔 Thinking..."}, _headers}
+
+    assert {:ok, converter} = StreamConverter.push_text(converter, "hello")
+    assert_receive {:http_patch, _url, %{"content" => "hello"}, _headers}
+
+    assert {:ok, converter} = StreamConverter.refresh_working_status(converter)
+    assert_receive {:http_patch, _url, %{"content" => status_content}, _headers}
+    assert status_content =~ "hello\n\n_Still working..."
+
+    assert {:ok, converter} = StreamConverter.push_text(converter, " world")
+    assert_receive {:http_patch, _url, %{"content" => "hello world"}, _headers}
+
+    assert {:ok, _converter} = StreamConverter.finish(converter)
+  end
+
+  test "stream converter clears temporary working status on finish", %{pid: _pid} do
+    assert {:ok, converter} = StreamConverter.start(@instance_id, "123", %{})
+    assert_receive {:http_post, _url, %{"content" => "🤔 Thinking..."}, _headers}
+
+    assert {:ok, converter} = StreamConverter.push_text(converter, "hello")
+    assert_receive {:http_patch, _url, %{"content" => "hello"}, _headers}
+
+    assert {:ok, converter} = StreamConverter.refresh_working_status(converter)
+    assert_receive {:http_patch, _url, %{"content" => status_content}, _headers}
+    assert status_content =~ "Still working"
+
+    assert {:ok, _converter} = StreamConverter.finish(converter)
+    assert_receive {:http_patch, _url, %{"content" => "hello"}, _headers}
   end
 
   test "deliver_message returns created message_id", %{pid: _pid} do

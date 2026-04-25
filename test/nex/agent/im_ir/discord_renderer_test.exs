@@ -46,6 +46,6 @@ defmodule Nex.Agent.IMIR.DiscordRendererTest do
   end
 
   test "renderer keeps newmsg boundary out of rendered content" do
-    assert Discord.render_text("before\n<newmsg/>\nafter") == "before\n\nafter"
+    assert Discord.render_text("before<newmsg/>after") == "before\n\nafter"
   end
 end

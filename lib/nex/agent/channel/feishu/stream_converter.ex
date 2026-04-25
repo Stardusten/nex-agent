@@ -8,10 +8,6 @@ defmodule Nex.Agent.Channel.Feishu.StreamConverter do
   @new_message_token "<newmsg/>"
   @placeholder_text "Thinking..."
 
-  # Regex that matches <newmsg/> on its own line (with optional surrounding whitespace),
-  # preceded and followed by a newline. Used to split text into card segments.
-  @newmsg_split_re ~r/\n[ \t]*<newmsg\/>[ \t]*\n/
-
   # Maximum bytes of a partial <newmsg/> prefix that could sit at the end of a chunk.
   # "<newmsg/>" is 9 bytes; we hold back up to 8 bytes (incomplete prefix).
   @newmsg_holdback_bytes byte_size(@new_message_token) - 1
@@ -126,7 +122,7 @@ defmodule Nex.Agent.Channel.Feishu.StreamConverter do
   defp consume(state, ""), do: {:ok, state}
 
   defp consume(state, data) do
-    case String.split(data, @newmsg_split_re, parts: 2) do
+    case String.split(data, @new_message_token, parts: 2) do
       [single] ->
         append_segment(state, single)
 
@@ -136,9 +132,9 @@ defmodule Nex.Agent.Channel.Feishu.StreamConverter do
           "newmsg_match before_bytes=#{byte_size(before)} after_bytes=#{byte_size(after_text)}"
         )
 
-        with {:ok, state} <- append_segment(state, String.trim_trailing(before)),
+        with {:ok, state} <- append_segment(state, String.trim(before)),
              {:ok, state} <- rotate_card(state) do
-          consume(state, String.trim_leading(after_text, "\n"))
+          consume(state, String.trim(after_text))
         end
     end
   end
@@ -149,9 +145,8 @@ defmodule Nex.Agent.Channel.Feishu.StreamConverter do
 
   defp split_processable(data) do
     data_len = byte_size(data)
-    # Check if data ends with an incomplete prefix of <newmsg/> or a \n that
-    # could be the start of \n<newmsg/>\n. We look at the tail region.
-    tail_start = max(data_len - @newmsg_holdback_bytes - 1, 0)
+    # Check if data ends with an incomplete prefix of <newmsg/>.
+    tail_start = max(data_len - @newmsg_holdback_bytes, 0)
     tail = binary_part(data, tail_start, data_len - tail_start)
 
     # If the tail contains a partial "<newmsg" prefix that hasn't completed,
@@ -168,15 +163,10 @@ defmodule Nex.Agent.Channel.Feishu.StreamConverter do
   end
 
   defp find_incomplete_newmsg_suffix(tail) do
-    # We're looking for a suffix of `tail` that is a proper prefix of
-    # "\n<newmsg/>\n" (the boundary pattern including surrounding newlines).
-    # The full boundary is 11 bytes: \n<newmsg/>\n
-    # We check longest-first so we hold back as much as needed.
-    boundary = "\n" <> @new_message_token
-    max_check = min(byte_size(tail), byte_size(boundary) - 1)
+    max_check = min(byte_size(tail), byte_size(@new_message_token) - 1)
 
     Enum.find_value(max_check..1//-1, "", fn len ->
-      prefix = binary_part(boundary, 0, len)
+      prefix = binary_part(@new_message_token, 0, len)
 
       if String.ends_with?(tail, prefix) do
         prefix

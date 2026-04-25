@@ -898,7 +898,7 @@ defmodule Nex.Agent.Runner do
       |> String.trim()
       |> String.slice(0, 120)
 
-    if command == "", do: "", else: "`#{command}`"
+    command
   end
 
   defp render_tool_call_notice_args("get_memory", %{"query" => query}) when is_binary(query) do

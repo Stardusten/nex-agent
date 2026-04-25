@@ -386,7 +386,7 @@ defmodule Nex.Agent.RunnerStreamTest do
            ] = collect_stream_events([])
   end
 
-  test "runner formats bash tool call notices with emoji and inline command" do
+  test "runner formats bash tool call notices with emoji and plain command" do
     parent = self()
 
     workspace =
@@ -425,7 +425,7 @@ defmodule Nex.Agent.RunnerStreamTest do
                  "id" => "call_bash_1",
                  "function" => %{
                    "name" => "bash",
-                   "arguments" => %{"command" => "ps aux | grep nex-agent"}
+                   "arguments" => %{"command" => "echo https://example.com/status"}
                  }
                }
              ]}
@@ -453,7 +453,7 @@ defmodule Nex.Agent.RunnerStreamTest do
              )
 
     assert [
-             {:text, "⚙️ Bash - `ps aux | grep nex-agent`\n"},
+             {:text, "⚙️ Bash - echo https://example.com/status\n"},
              {:text, "\n"},
              {:text, "done"},
              :finish
