@@ -1806,7 +1806,10 @@ defmodule Nex.Agent.Runner do
       project: Keyword.get(opts, :project),
       metadata: Keyword.get(opts, :metadata, %{}),
       skill_runtime: Keyword.get(opts, :skill_runtime, %{}),
-      skill_runtime_prepared_run: Keyword.get(opts, :skill_runtime_prepared_run)
+      skill_runtime_prepared_run: Keyword.get(opts, :skill_runtime_prepared_run),
+      llm_stream_client: Keyword.get(opts, :llm_stream_client),
+      req_llm_stream_text_fun: Keyword.get(opts, :req_llm_stream_text_fun),
+      llm_call_fun: Keyword.get(opts, :llm_call_fun)
     }
   end
 

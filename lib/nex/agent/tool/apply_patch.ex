@@ -90,6 +90,7 @@ defmodule Nex.Agent.Tool.ApplyPatch do
       String.starts_with?(line, @update_prefix) ->
         path = String.replace_prefix(line, @update_prefix, "")
         {body, tail} = take_operation_body(rest, [])
+
         with {:ok, operation} <- parse_update_operation(path, body) do
           parse_operations(tail, [operation | acc])
         end
@@ -97,6 +98,7 @@ defmodule Nex.Agent.Tool.ApplyPatch do
       String.starts_with?(line, @add_prefix) ->
         path = String.replace_prefix(line, @add_prefix, "")
         {body, tail} = take_operation_body(rest, [])
+
         with {:ok, operation} <- parse_add_operation(path, body) do
           parse_operations(tail, [operation | acc])
         end
@@ -202,11 +204,9 @@ defmodule Nex.Agent.Tool.ApplyPatch do
 
   defp invalid_hunk_line?(hunk) do
     Enum.any?(hunk, fn line ->
-      not (
-        String.starts_with?(line, " ") or
-          String.starts_with?(line, "+") or
-          String.starts_with?(line, "-")
-      )
+      not (String.starts_with?(line, " ") or
+             String.starts_with?(line, "+") or
+             String.starts_with?(line, "-"))
     end)
   end
 
@@ -397,7 +397,9 @@ defmodule Nex.Agent.Tool.ApplyPatch do
   defp apply_operations(prepared_ops) do
     Enum.reduce_while(prepared_ops, {:ok, []}, fn operation, {:ok, applied} ->
       case apply_operation(operation) do
-        {:ok, rollback_entry} -> {:cont, {:ok, [rollback_entry | applied]}}
+        {:ok, rollback_entry} ->
+          {:cont, {:ok, [rollback_entry | applied]}}
+
         {:error, reason} ->
           rollback(applied)
           {:halt, {:error, reason}}
@@ -426,7 +428,13 @@ defmodule Nex.Agent.Tool.ApplyPatch do
     end
   end
 
-  defp apply_operation(%{type: :update, path: source, destination: source, updated_content: content, original_content: original_content}) do
+  defp apply_operation(%{
+         type: :update,
+         path: source,
+         destination: source,
+         updated_content: content,
+         original_content: original_content
+       }) do
     with :ok <- File.write(source, content) do
       {:ok, %{undo: :restore, path: source, content: original_content}}
     else
@@ -445,15 +453,21 @@ defmodule Nex.Agent.Tool.ApplyPatch do
          :ok <- File.write(destination, content) do
       case File.rm(source) do
         :ok ->
-      {:ok,
-       %{undo: :move_restore, source: source, destination: destination, content: original_content}}
+          {:ok,
+           %{
+             undo: :move_restore,
+             source: source,
+             destination: destination,
+             content: original_content
+           }}
 
         {:error, reason} ->
           rollback_move_destination(destination)
           {:error, "Failed to move #{source} to #{destination}: #{inspect(reason)}"}
       end
     else
-      {:error, reason} -> {:error, "Failed to move #{source} to #{destination}: #{inspect(reason)}"}
+      {:error, reason} ->
+        {:error, "Failed to move #{source} to #{destination}: #{inspect(reason)}"}
     end
   end
 

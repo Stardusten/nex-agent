@@ -227,7 +227,9 @@ defmodule Nex.Agent.AdminTest do
     assert sessions_state.selected_session.unconsolidated_messages == 2
   end
 
-  test "evolution_state derives candidate lifecycle from control plane observations", %{workspace: workspace} do
+  test "evolution_state derives candidate lifecycle from control plane observations", %{
+    workspace: workspace
+  } do
     assert {:ok, _} =
              Log.info(
                "evolution.candidate.proposed",

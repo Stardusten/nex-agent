@@ -4,7 +4,9 @@ defmodule Nex.Agent.Media.StoreTest do
   alias Nex.Agent.Media.Store
 
   test "put_binary persists inbound media under workspace media dir" do
-    workspace = Path.join(System.tmp_dir!(), "nex-agent-media-store-#{System.unique_integer([:positive])}")
+    workspace =
+      Path.join(System.tmp_dir!(), "nex-agent-media-store-#{System.unique_integer([:positive])}")
+
     File.mkdir_p!(workspace)
 
     on_exit(fn -> File.rm_rf!(workspace) end)

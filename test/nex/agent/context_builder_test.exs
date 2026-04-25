@@ -42,6 +42,7 @@ defmodule Nex.Agent.ContextBuilderTest do
     assert prompt =~ "Budget only controls review/candidate signals"
     assert prompt =~ "single `evolution_candidate` lane"
     assert prompt =~ "Use `evolution_candidate list` / `show`"
+    assert prompt =~ "Use `ask_advisor` when you need an internal second opinion"
 
     assert prompt =~
              "only the owner run may use `self_update status`, `self_update deploy`, or `self_update rollback`"
@@ -57,6 +58,7 @@ defmodule Nex.Agent.ContextBuilderTest do
     assert prompt =~ "`<newmsg/>` is a platform text IR separator"
     assert prompt =~ "Wherever `<newmsg/>` appears"
     assert prompt =~ "Use `<newmsg/>` only when you intentionally want the runtime to split"
+    assert prompt =~ "For Discord, do not use `####` or deeper headings"
   end
 
   test "runtime context includes feishu channel ir and streaming mode", %{} do
@@ -80,6 +82,22 @@ defmodule Nex.Agent.ContextBuilderTest do
 
     assert context =~
              "Feishu IR supports headings, lists, quotes, fenced code blocks, tables, and `<newmsg/>`."
+  end
+
+  test "runtime context includes discord heading limits", %{} do
+    config = %Config{
+      Config.default()
+      | channel: %{
+          "discord_main" => %{"type" => "discord", "enabled" => true, "streaming" => false}
+        }
+    }
+
+    context = ContextBuilder.build_runtime_context("discord_main", "chat-1", config: config)
+
+    assert context =~ "Channel Streaming: single"
+    assert context =~ "Channel IR: Discord markdown"
+    assert context =~ "headings (#/##/### only)"
+    assert context =~ "Do not use `####` or deeper headings in Discord replies."
   end
 
   test "runtime context falls back to plain text guidance for non-feishu channels", %{} do

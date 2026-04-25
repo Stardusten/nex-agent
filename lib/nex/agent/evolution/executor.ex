@@ -344,10 +344,12 @@ defmodule Nex.Agent.Evolution.Executor do
   end
 
   defp extract_paths(candidate) do
-    [candidate["summary"], candidate["rationale"]]
-    |> Enum.filter(&is_binary/1)
-    |> Enum.join("\n")
-    |> Regex.scan(~r/(?:lib|test)\/[A-Za-z0-9_\/\.-]+\.(?:ex|exs)/u)
+    text =
+      [candidate["summary"], candidate["rationale"]]
+      |> Enum.filter(&is_binary/1)
+      |> Enum.join("\n")
+
+    Regex.scan(~r/(?:lib|test)\/[A-Za-z0-9_\/\.-]+\.(?:ex|exs)/u, text)
     |> List.flatten()
     |> Enum.uniq()
   end

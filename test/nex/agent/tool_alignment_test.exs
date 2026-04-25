@@ -27,6 +27,7 @@ defmodule Nex.Agent.ToolAlignmentTest do
   alias Nex.Agent.Runtime.Snapshot
 
   alias Nex.Agent.Tool.{
+    AskAdvisor,
     EvolutionCandidate,
     Registry,
     SkillDiscover,
@@ -222,6 +223,37 @@ defmodule Nex.Agent.ToolAlignmentTest do
     refute Map.has_key?(definition.parameters.properties, :return_mode)
     refute Map.has_key?(definition.parameters.properties, :model_role)
     refute Map.has_key?(definition.parameters.properties, :model_key)
+  end
+
+  test "ask_advisor definition exposes context controls and stays owner-only" do
+    definition =
+      AskAdvisor.definition(
+        subagent_profiles: %{
+          "advisor" => %Nex.Agent.Subagent.Profile{
+            name: "advisor",
+            description: "Advise.",
+            prompt: "advise",
+            source: :test
+          }
+        }
+      )
+
+    properties = definition.parameters.properties
+
+    assert definition.name == "ask_advisor"
+    assert properties.context_mode.enum == ["full", "recent", "none"]
+    assert Map.has_key?(properties, :context_window)
+    assert Map.has_key?(properties, :context)
+    assert Map.has_key?(properties, :model_key)
+    assert properties.profile.enum == ["advisor"]
+
+    all_names = Registry.definitions(:all) |> Enum.map(& &1["name"])
+    follow_up_names = Registry.definitions(:follow_up) |> Enum.map(& &1["name"])
+    subagent_names = Registry.definitions(:subagent) |> Enum.map(& &1["name"])
+
+    assert "ask_advisor" in all_names
+    refute "ask_advisor" in follow_up_names
+    refute "ask_advisor" in subagent_names
   end
 
   test "follow-up tool surface keeps read-only discovery path without patch mutation" do

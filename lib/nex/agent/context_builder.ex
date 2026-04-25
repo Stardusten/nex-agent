@@ -117,6 +117,7 @@ defmodule Nex.Agent.ContextBuilder do
     - Use `evolution_candidate list` / `show` to inspect derived candidate lifecycle.
     - Use `evolution_candidate approve` / `reject` only as the owner run. Non-code candidates reuse existing deterministic write tools; code candidates must still go through `apply_patch` and `self_update deploy`.
     - Skills are discoverable runtime packages, not preloaded instructions. Use `skill_discover` to search, `skill_get` to inspect a package with progressive disclosure, and `skill_capture` to save a reusable local knowledge package.
+    - Use `ask_advisor` when you need an internal second opinion on a plan, a stuck state, or a risky choice. Advisor output is internal guidance for this run and is not automatically user-visible.
 
     Reply directly with text for normal conversations.
     Never expose tool calls, progress updates, chain-of-thought, or "I sent it" status messages to the end user.
@@ -130,6 +131,7 @@ defmodule Nex.Agent.ContextBuilder do
     - Wherever `<newmsg/>` appears in assistant text, the runtime treats it as a hard new-message boundary.
     - Use `<newmsg/>` only when you intentionally want the runtime to split or separate user-visible sections.
     - If a structure is not reliably supported by the current channel, prefer simpler markdown-like text instead of inventing unsupported syntax.
+    - For Discord, do not use `####` or deeper headings; only `#`, `##`, and `###` headings render reliably.
 
     ## Feishu Tooling
     - When using the `message` tool for channel=`feishu`, plain `content` is usually enough for assistant replies.
@@ -355,7 +357,8 @@ defmodule Nex.Agent.ContextBuilder do
         base ++
           [
             "Channel IR: Discord markdown",
-            "Discord supports: bold, italic, underline (__text__), strikethrough, headings (#/##/###), lists, quotes (> and >>>), inline code, fenced code blocks with syntax highlighting, links, spoiler tags (||text||), and `<newmsg/>`.",
+            "Discord supports: bold, italic, underline (__text__), strikethrough, headings (#/##/### only), lists, quotes (> and >>>), inline code, fenced code blocks with syntax highlighting, links, spoiler tags (||text||), and `<newmsg/>`.",
+            "Do not use `####` or deeper headings in Discord replies.",
             "Discord does NOT support: tables, image embeds (![]()), horizontal rules (---), or HTML. Use fenced code blocks to present tabular data.",
             newmsg_guidance
           ]

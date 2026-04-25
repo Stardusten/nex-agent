@@ -60,7 +60,10 @@ defmodule Nex.Agent.RequestTrace do
     |> Enum.map(&trace_event_from_observation(&1, run_id))
   end
 
-  defp trace_event_from_observation(%{"tag" => "request_trace.event.recorded"} = observation, run_id) do
+  defp trace_event_from_observation(
+         %{"tag" => "request_trace.event.recorded"} = observation,
+         run_id
+       ) do
     observation
     |> Map.get("attrs_summary", %{})
     |> Map.put_new("run_id", run_id)

@@ -10,7 +10,10 @@ defmodule Nex.Agent.Tool.Find do
   @max_limit 200
 
   def name, do: "find"
-  def description, do: "Search repository text and return structured path, line, column, and preview matches."
+
+  def description,
+    do: "Search repository text and return structured path, line, column, and preview matches."
+
   def category, do: :base
 
   def definition do
@@ -23,7 +26,11 @@ defmodule Nex.Agent.Tool.Find do
           query: %{type: "string", description: "Text or regex query to search for"},
           path: %{type: "string", description: "Optional file or directory scope"},
           glob: %{type: "string", description: "Optional glob filter, for example *.ex"},
-          limit: %{type: "integer", minimum: 1, description: "Maximum number of matches to return"}
+          limit: %{
+            type: "integer",
+            minimum: 1,
+            description: "Maximum number of matches to return"
+          }
         },
         required: ["query"]
       }
@@ -67,9 +74,14 @@ defmodule Nex.Agent.Tool.Find do
         |> Kernel.++([query, scope_path])
 
       case System.cmd(executable, args, stderr_to_stdout: true) do
-        {output, 0} -> {:ok, parse_rg_json(output)}
-        {output, 1} -> {:ok, parse_rg_json(output)}
-        {output, status} -> {:error, "Search failed with status #{status}: #{String.trim(output)}"}
+        {output, 0} ->
+          {:ok, parse_rg_json(output)}
+
+        {output, 1} ->
+          {:ok, parse_rg_json(output)}
+
+        {output, status} ->
+          {:error, "Search failed with status #{status}: #{String.trim(output)}"}
       end
     end
   end

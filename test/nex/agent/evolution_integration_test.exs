@@ -47,9 +47,10 @@ defmodule Nex.Agent.EvolutionIntegrationTest do
     {:ok, workspace: workspace}
   end
 
-  test "runner signals become ControlPlane evidence and evolution emits candidate observations", %{
-    workspace: workspace
-  } do
+  test "runner signals become ControlPlane evidence and evolution emits candidate observations",
+       %{
+         workspace: workspace
+       } do
     write_budget(workspace, 60)
 
     llm_client = fn _messages, _opts ->
@@ -121,12 +122,14 @@ defmodule Nex.Agent.EvolutionIntegrationTest do
 
       {:ok,
        %{
-         "observations" => "Repeated tool failures plus correction signals suggest targeted code follow-up.",
+         "observations" =>
+           "Repeated tool failures plus correction signals suggest targeted code follow-up.",
          "candidates" => [
            %{
              "kind" => "code_hint",
              "summary" => "Harden repeated tool failure handling",
-             "rationale" => "The same tool failure recurred and user correction signals followed.",
+             "rationale" =>
+               "The same tool failure recurred and user correction signals followed.",
              "evidence_ids" => evidence_ids,
              "risk" => "medium"
            },
@@ -173,6 +176,7 @@ defmodule Nex.Agent.EvolutionIntegrationTest do
       Query.query(%{"tag" => "evolution.candidate.proposed", "limit" => 10}, workspace: workspace)
 
     assert length(candidate_observations) == 2
+
     assert Enum.all?(candidate_observations, fn observation ->
              attrs = observation["attrs"]
              is_list(attrs["evidence_ids"]) and attrs["requires_owner_approval"] == true
@@ -184,7 +188,9 @@ defmodule Nex.Agent.EvolutionIntegrationTest do
   } do
     write_budget(workspace, 10)
 
-    Evolution.record_signal(%{source: "runner", signal: "User corrected format"}, workspace: workspace)
+    Evolution.record_signal(%{source: "runner", signal: "User corrected format"},
+      workspace: workspace
+    )
 
     assert {:ok, _} =
              Log.error(
@@ -239,7 +245,9 @@ defmodule Nex.Agent.EvolutionIntegrationTest do
              )
 
     assert approved["apply"]["status"] == "applied"
-    assert File.read!(Path.join(workspace, "memory/MEMORY.md")) =~ "Remember JSON output preference"
+
+    assert File.read!(Path.join(workspace, "memory/MEMORY.md")) =~
+             "Remember JSON output preference"
 
     assert {:ok, candidate} = Evolution.candidate("cand_memory_apply", workspace: workspace)
     assert candidate["status"] == "applied"

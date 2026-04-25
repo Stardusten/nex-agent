@@ -138,9 +138,15 @@ defmodule Nex.Agent.SelfHealing.Aggregator do
     attrs = Map.get(observation, "attrs_summary", %{})
 
     cond do
-      is_binary(attrs["tool_name"]) -> "tool:" <> attrs["tool_name"]
-      is_binary(attrs["actor"]) -> attrs["actor"]
-      is_binary(attrs["reason_type"]) -> "reason:" <> attrs["reason_type"]
+      is_binary(attrs["tool_name"]) ->
+        "tool:" <> attrs["tool_name"]
+
+      is_binary(attrs["actor"]) ->
+        attrs["actor"]
+
+      is_binary(attrs["reason_type"]) ->
+        "reason:" <> attrs["reason_type"]
+
       is_binary(get_in(observation, ["context", "channel"])) ->
         "channel:" <> get_in(observation, ["context", "channel"])
 

@@ -163,7 +163,9 @@ defmodule Nex.Agent.Tool.Reflect do
                 "Candidate: #{Map.get(payload, "candidate_id", "?")}",
                 "Mode: #{Map.get(payload, "mode", "?")}"
               ]
-              |> maybe_append_line(payload["decision_reason"] && "Reason: #{payload["decision_reason"]}")
+              |> maybe_append_line(
+                payload["decision_reason"] && "Reason: #{payload["decision_reason"]}"
+              )
               |> Enum.join("\n")
 
             "evolution.candidate.rejected" ->
@@ -171,7 +173,9 @@ defmodule Nex.Agent.Tool.Reflect do
                 "**[#{ts}] evolution.candidate.rejected**",
                 "Candidate: #{Map.get(payload, "candidate_id", "?")}"
               ]
-              |> maybe_append_line(payload["decision_reason"] && "Reason: #{payload["decision_reason"]}")
+              |> maybe_append_line(
+                payload["decision_reason"] && "Reason: #{payload["decision_reason"]}"
+              )
               |> Enum.join("\n")
 
             "evolution.candidate.realization.generated" ->
@@ -180,7 +184,9 @@ defmodule Nex.Agent.Tool.Reflect do
                 "Candidate: #{Map.get(payload, "candidate_id", "?")}",
                 "Mode: #{Map.get(payload, "mode", "?")}"
               ]
-              |> maybe_append_line(payload["execution"] && "Execution: #{inspect(payload["execution"])}")
+              |> maybe_append_line(
+                payload["execution"] && "Execution: #{inspect(payload["execution"])}"
+              )
               |> Enum.join("\n")
 
             "evolution.candidate.apply.completed" ->

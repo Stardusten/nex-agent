@@ -64,7 +64,8 @@ defmodule Nex.Agent.Evolution.Candidates do
   def lifecycle_tags, do: @candidate_tags
 
   defp candidate_observations(opts) do
-    Query.query(%{"tag_prefix" => "evolution.candidate.", "limit" => Keyword.get(opts, :limit, 200)},
+    Query.query(
+      %{"tag_prefix" => "evolution.candidate.", "limit" => Keyword.get(opts, :limit, 200)},
       opts
     )
   end
@@ -135,7 +136,10 @@ defmodule Nex.Agent.Evolution.Candidates do
     lifecycle
     |> Enum.reverse()
     |> Enum.find_value(fn entry ->
-      if entry.tag in ["evolution.candidate.realization.failed", "evolution.candidate.apply.failed"] do
+      if entry.tag in [
+           "evolution.candidate.realization.failed",
+           "evolution.candidate.apply.failed"
+         ] do
         entry.attrs["error_summary"] || entry.attrs["reason"] || entry.attrs["summary"]
       end
     end)

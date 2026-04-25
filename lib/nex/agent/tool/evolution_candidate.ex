@@ -35,14 +35,22 @@ defmodule Nex.Agent.Tool.EvolutionCandidate do
           action: %{
             type: "string",
             enum: @approve_actions,
-            description: "list candidates, show one candidate, or record an owner approval/rejection"
+            description:
+              "list candidates, show one candidate, or record an owner approval/rejection"
           },
-          candidate_id: %{type: "string", description: "Candidate id returned from evolution candidate list/show"},
-          decision_reason: %{type: "string", description: "Owner rationale for approve/reject decisions"},
+          candidate_id: %{
+            type: "string",
+            description: "Candidate id returned from evolution candidate list/show"
+          },
+          decision_reason: %{
+            type: "string",
+            description: "Owner rationale for approve/reject decisions"
+          },
           mode: %{
             type: "string",
             enum: ["plan", "apply"],
-            description: "Execution mode. approve defaults to apply except code_hint defaults to plan."
+            description:
+              "Execution mode. approve defaults to apply except code_hint defaults to plan."
           }
         },
         required: ["action"]
@@ -128,7 +136,8 @@ defmodule Nex.Agent.Tool.EvolutionCandidate do
   defp continue_approval(candidate, mode, observation_id, ctx) do
     case Executor.realize(candidate, mode, ctx) do
       {:ok, realization} ->
-        with {:ok, realization_observation_id} <- emit_realization(candidate, mode, realization, ctx),
+        with {:ok, realization_observation_id} <-
+               emit_realization(candidate, mode, realization, ctx),
              {:ok, apply_result} <- maybe_apply(candidate, mode, realization, ctx) do
           {:ok,
            %{
@@ -168,7 +177,8 @@ defmodule Nex.Agent.Tool.EvolutionCandidate do
           action: %{
             type: "string",
             enum: ["list", "show"],
-            description: "This tool is owner-only; follow-up and subagent surfaces do not expose it."
+            description:
+              "This tool is owner-only; follow-up and subagent surfaces do not expose it."
           }
         },
         required: ["action"]
@@ -181,10 +191,18 @@ defmodule Nex.Agent.Tool.EvolutionCandidate do
   end
 
   defp ensure_actionable(%{"status" => "pending"}, _action), do: :ok
-  defp ensure_actionable(%{"status" => "approved"}, action), do: {:error, "Candidate already approved; cannot #{action}"}
-  defp ensure_actionable(%{"status" => "failed"}, action), do: {:error, "Candidate already failed; cannot #{action} before retry support exists"}
-  defp ensure_actionable(%{"status" => "realized"}, action), do: {:error, "Candidate already realized; cannot #{action}"}
-  defp ensure_actionable(candidate, action), do: {:error, "Cannot #{action} candidate in status #{candidate["status"] || "unknown"}"}
+
+  defp ensure_actionable(%{"status" => "approved"}, action),
+    do: {:error, "Candidate already approved; cannot #{action}"}
+
+  defp ensure_actionable(%{"status" => "failed"}, action),
+    do: {:error, "Candidate already failed; cannot #{action} before retry support exists"}
+
+  defp ensure_actionable(%{"status" => "realized"}, action),
+    do: {:error, "Candidate already realized; cannot #{action}"}
+
+  defp ensure_actionable(candidate, action),
+    do: {:error, "Cannot #{action} candidate in status #{candidate["status"] || "unknown"}"}
 
   defp approval_mode(%{"kind" => "code_hint"}, nil), do: "plan"
   defp approval_mode(_candidate, nil), do: "apply"
@@ -231,12 +249,18 @@ defmodule Nex.Agent.Tool.EvolutionCandidate do
             "kind" => candidate["kind"],
             "mode" => "apply",
             "summary" => candidate["summary"],
-            "result_summary" => inspect(applied_realization["result"], limit: 20, printable_limit: 400)
+            "result_summary" =>
+              inspect(applied_realization["result"], limit: 20, printable_limit: 400)
           }
 
           case Log.info("evolution.candidate.apply.completed", compact_map(attrs), tool_opts(ctx)) do
             {:ok, observation} ->
-              {:ok, %{"status" => "applied", "started_observation_id" => started_id, "completed_observation_id" => observation["id"]}}
+              {:ok,
+               %{
+                 "status" => "applied",
+                 "started_observation_id" => started_id,
+                 "completed_observation_id" => observation["id"]
+               }}
 
             :ok ->
               {:ok, %{"status" => "applied", "started_observation_id" => started_id}}

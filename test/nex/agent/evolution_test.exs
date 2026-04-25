@@ -16,7 +16,11 @@ defmodule Nex.Agent.EvolutionTest do
     File.write!(Path.join(workspace, "SOUL.md"), "# Soul\n\n## Values\n- Be helpful\n")
     File.write!(Path.join(workspace, "USER.md"), "# USER\n- likes concise replies\n")
     File.write!(Path.join(workspace, "memory/MEMORY.md"), "# Memory\nStable facts live here.\n")
-    File.write!(Path.join(workspace, "memory/HISTORY.md"), "[2026-03-20 10:00] historical note.\n")
+
+    File.write!(
+      Path.join(workspace, "memory/HISTORY.md"),
+      "[2026-03-20 10:00] historical note.\n"
+    )
 
     Application.put_env(:nex_agent, :workspace_path, workspace)
 
@@ -58,7 +62,9 @@ defmodule Nex.Agent.EvolutionTest do
   end
 
   describe "candidate lifecycle reduction" do
-    test "derives candidate status from evolution.candidate.* observations", %{workspace: workspace} do
+    test "derives candidate status from evolution.candidate.* observations", %{
+      workspace: workspace
+    } do
       assert {:ok, _} =
                Log.info(
                  "evolution.candidate.proposed",
@@ -170,7 +176,10 @@ defmodule Nex.Agent.EvolutionTest do
                EvolutionCandidate.execute(%{"action" => "list"}, ctx)
 
       assert {:ok, %{"candidate_id" => "cand_code", "status" => "pending"}} =
-               EvolutionCandidate.execute(%{"action" => "show", "candidate_id" => "cand_code"}, ctx)
+               EvolutionCandidate.execute(
+                 %{"action" => "show", "candidate_id" => "cand_code"},
+                 ctx
+               )
 
       assert {:ok, %{"decision" => "approved", "mode" => "plan"}} =
                EvolutionCandidate.execute(
@@ -189,10 +198,15 @@ defmodule Nex.Agent.EvolutionTest do
                )
 
       assert {:error, "Candidate not found: missing"} =
-               EvolutionCandidate.execute(%{"action" => "approve", "candidate_id" => "missing"}, ctx)
+               EvolutionCandidate.execute(
+                 %{"action" => "approve", "candidate_id" => "missing"},
+                 ctx
+               )
     end
 
-    test "reject writes rejected lifecycle observation for pending candidate", %{workspace: workspace} do
+    test "reject writes rejected lifecycle observation for pending candidate", %{
+      workspace: workspace
+    } do
       assert {:ok, _} =
                Log.info(
                  "evolution.candidate.proposed",
@@ -231,7 +245,8 @@ defmodule Nex.Agent.EvolutionTest do
                    "id" => "cand_code_apply",
                    "kind" => "code_hint",
                    "summary" => "Patch lib/nex/agent/example.ex for retry handling",
-                   "rationale" => "Update lib/nex/agent/example.ex to guard retries and redeploy.",
+                   "rationale" =>
+                     "Update lib/nex/agent/example.ex to guard retries and redeploy.",
                    "evidence_ids" => ["obs_1"],
                    "risk" => "medium",
                    "requires_owner_approval" => true,
@@ -249,15 +264,14 @@ defmodule Nex.Agent.EvolutionTest do
          %{
            "summary" => "Apply retry guard patch",
            "files" => ["lib/nex/agent/example.ex"],
-           "patch" =>
-             """
-             *** Begin Patch
-             *** Update File: lib/nex/agent/example.ex
-             @@
-             -old
-             +new
-             *** End Patch
-             """,
+           "patch" => """
+           *** Begin Patch
+           *** Update File: lib/nex/agent/example.ex
+           @@
+           -old
+           +new
+           *** End Patch
+           """,
            "deploy_reason" => "owner approved code hint"
          }}
       end
@@ -277,10 +291,13 @@ defmodule Nex.Agent.EvolutionTest do
         llm_call_fun: llm_call_fun,
         apply_patch_fun: apply_patch_fun,
         self_update_fun: self_update_fun,
-        read_fun: fn %{"path" => path}, _ctx -> {:ok, %{"content" => "defmodule Example do\nend\n", "path" => path}} end
+        read_fun: fn %{"path" => path}, _ctx ->
+          {:ok, %{"content" => "defmodule Example do\nend\n", "path" => path}}
+        end
       }
 
-      assert {:ok, %{"decision" => "approved", "mode" => "apply", "apply" => %{"status" => "applied"}}} =
+      assert {:ok,
+              %{"decision" => "approved", "mode" => "apply", "apply" => %{"status" => "applied"}}} =
                EvolutionCandidate.execute(
                  %{"action" => "approve", "candidate_id" => "cand_code_apply", "mode" => "apply"},
                  ctx
@@ -289,7 +306,9 @@ defmodule Nex.Agent.EvolutionTest do
       assert_receive :realization_llm_called
       assert_receive {:apply_patch_called, patch}
       assert patch =~ "*** Begin Patch"
-      assert_receive {:self_update_called, ["lib/nex/agent/example.ex"], "owner approved code hint"}
+
+      assert_receive {:self_update_called, ["lib/nex/agent/example.ex"],
+                      "owner approved code hint"}
 
       assert {:ok, applied} = Evolution.candidate("cand_code_apply", workspace: workspace)
       assert applied["status"] == "applied"

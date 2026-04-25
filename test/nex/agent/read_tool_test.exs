@@ -78,7 +78,11 @@ defmodule Nex.Agent.ReadToolTest do
 
     assert {:ok, second_page} =
              Read.execute(
-               %{"path" => root, "directory" => %{"limit" => 2}, "start_line" => first_page.next_start_line},
+               %{
+                 "path" => root,
+                 "directory" => %{"limit" => 2},
+                 "start_line" => first_page.next_start_line
+               },
                %{}
              )
 

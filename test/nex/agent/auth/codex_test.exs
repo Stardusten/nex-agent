@@ -4,7 +4,9 @@ defmodule Nex.Agent.Auth.CodexTest do
   alias Nex.Agent.Auth.Codex
 
   test "resolve_access_token refreshes expired codex tokens and persists them" do
-    tmp_dir = Path.join(System.tmp_dir!(), "nex-agent-codex-auth-#{System.unique_integer([:positive])}")
+    tmp_dir =
+      Path.join(System.tmp_dir!(), "nex-agent-codex-auth-#{System.unique_integer([:positive])}")
+
     auth_path = Path.join(tmp_dir, "auth.json")
     previous_home = System.get_env("CODEX_HOME")
 

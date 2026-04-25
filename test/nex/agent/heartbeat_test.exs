@@ -65,11 +65,11 @@ defmodule Nex.Agent.HeartbeatTest do
     send(heartbeat_name, {:weekly_evolution_done, completed_at, {:error, :llm_unavailable}})
 
     assert wait_until(fn ->
-      state = :sys.get_state(heartbeat_name)
+             state = :sys.get_state(heartbeat_name)
 
              Enum.any?(state.execution_history, fn
                {"evolution", _timestamp,
-               %{trigger: "scheduled_weekly", result: {:error, _reason}}} ->
+                %{trigger: "scheduled_weekly", result: {:error, _reason}}} ->
                  true
 
                _ ->

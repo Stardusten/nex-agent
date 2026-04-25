@@ -20,6 +20,7 @@ defmodule Nex.Agent.Tool.Registry do
     Nex.Agent.Tool.ImageGeneration,
     Nex.Agent.Tool.WebFetch,
     Nex.Agent.Tool.Message,
+    Nex.Agent.Tool.AskAdvisor,
     Nex.Agent.Tool.Observe,
     Nex.Agent.Tool.Task,
     Nex.Agent.Tool.KnowledgeCapture,

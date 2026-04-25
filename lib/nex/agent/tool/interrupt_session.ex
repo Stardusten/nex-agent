@@ -6,7 +6,10 @@ defmodule Nex.Agent.Tool.InterruptSession do
   alias Nex.Agent.InboundWorker
 
   def name, do: "interrupt_session"
-  def description, do: "Request cancellation of the current owner session through the shared control lane."
+
+  def description,
+    do: "Request cancellation of the current owner session through the shared control lane."
+
   def category, do: :base
 
   def definition do
@@ -41,7 +44,9 @@ defmodule Nex.Agent.Tool.InterruptSession do
         opts =
           []
           |> maybe_put_server(Map.get(ctx, :server) || Map.get(ctx, "server"))
-          |> maybe_put_requester_pid(Map.get(ctx, :requester_pid) || Map.get(ctx, "requester_pid"))
+          |> maybe_put_requester_pid(
+            Map.get(ctx, :requester_pid) || Map.get(ctx, "requester_pid")
+          )
 
         InboundWorker.request_interrupt(workspace, session_key, {:follow_up_tool, reason}, opts)
     end
@@ -53,5 +58,7 @@ defmodule Nex.Agent.Tool.InterruptSession do
   defp maybe_put_server(opts, server), do: Keyword.put(opts, :server, server)
 
   defp maybe_put_requester_pid(opts, nil), do: opts
-  defp maybe_put_requester_pid(opts, requester_pid), do: Keyword.put(opts, :requester_pid, requester_pid)
+
+  defp maybe_put_requester_pid(opts, requester_pid),
+    do: Keyword.put(opts, :requester_pid, requester_pid)
 end

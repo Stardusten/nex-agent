@@ -234,7 +234,10 @@ defmodule Nex.Agent.Auth.Codex do
           }
         )
       )
-      |> Map.put("last_refresh", DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601())
+      |> Map.put(
+        "last_refresh",
+        DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+      )
 
     case write_state(updated_state) do
       :ok -> {:ok, updated_state}

@@ -79,7 +79,9 @@ defmodule Nex.Agent.ApplyPatchToolTest do
   end
 
   test "apply_patch rolls back earlier writes when a later hunk fails" do
-    root = Path.join("/tmp", "nex-agent-apply-patch-rollback-#{System.unique_integer([:positive])}")
+    root =
+      Path.join("/tmp", "nex-agent-apply-patch-rollback-#{System.unique_integer([:positive])}")
+
     first_path = Path.join(root, "first.txt")
     second_path = Path.join(root, "second.txt")
 

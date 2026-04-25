@@ -64,7 +64,10 @@ defmodule Nex.Agent.WS do
   def init(state) do
     case state.connect_fun.(state.url, extra_headers: state.extra_headers) do
       {:ok, conn, websocket, request_ref, resp_headers, early_data} ->
-        case state.callback_module.handle_connect(conn_info(conn, resp_headers), state.callback_state) do
+        case state.callback_module.handle_connect(
+               conn_info(conn, resp_headers),
+               state.callback_state
+             ) do
           {:ok, callback_state} ->
             new_state =
               Map.merge(state, %{
@@ -153,9 +156,15 @@ defmodule Nex.Agent.WS do
           | {:error, term()}
   def connect(url, opts \\ []) when is_binary(url) and is_list(opts) do
     with {:ok, uri} <- parse_uri(url),
-         {:ok, conn} <- connect_http(uri, Keyword.get(opts, :connect_http_fun, &Mint.HTTP.connect/4)),
+         {:ok, conn} <-
+           connect_http(uri, Keyword.get(opts, :connect_http_fun, &Mint.HTTP.connect/4)),
          {:ok, conn, request_ref} <-
-           Mint.WebSocket.upgrade(ws_scheme(uri), conn, request_path(uri), Keyword.get(opts, :extra_headers, [])),
+           Mint.WebSocket.upgrade(
+             ws_scheme(uri),
+             conn,
+             request_path(uri),
+             Keyword.get(opts, :extra_headers, [])
+           ),
          {:ok, conn, responses} <- receive_handshake(conn, request_ref),
          {:ok, conn, websocket} <-
            Mint.WebSocket.new(
@@ -256,7 +265,9 @@ defmodule Nex.Agent.WS do
     end
   end
 
-  defp handle_responses([{:done, _request_ref} | _rest], state), do: disconnect({:remote, :closed}, state)
+  defp handle_responses([{:done, _request_ref} | _rest], state),
+    do: disconnect({:remote, :closed}, state)
+
   defp handle_responses([_response | rest], state), do: handle_responses(rest, state)
 
   defp continue_responses({:noreply, state}, rest), do: handle_responses(rest, state)
@@ -285,8 +296,11 @@ defmodule Nex.Agent.WS do
     case Mint.WebSocket.encode(state.websocket, frame) do
       {:ok, websocket, data} ->
         case Mint.WebSocket.stream_request_body(state.conn, state.request_ref, data) do
-          {:ok, conn} -> {:noreply, %{state | websocket: websocket, conn: conn}}
-          {:error, conn, reason} -> disconnect({:error, reason}, %{state | websocket: websocket, conn: conn})
+          {:ok, conn} ->
+            {:noreply, %{state | websocket: websocket, conn: conn}}
+
+          {:error, conn, reason} ->
+            disconnect({:error, reason}, %{state | websocket: websocket, conn: conn})
         end
 
       {:error, websocket, reason} ->

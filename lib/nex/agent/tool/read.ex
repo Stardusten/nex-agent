@@ -11,7 +11,10 @@ defmodule Nex.Agent.Tool.Read do
   @max_directory_limit 1_000
 
   def name, do: "read"
-  def description, do: "Read files or directories with pagination, metadata, and continuation info."
+
+  def description,
+    do: "Read files or directories with pagination, metadata, and continuation info."
+
   def category, do: :base
 
   def definition do
@@ -94,10 +97,16 @@ defmodule Nex.Agent.Tool.Read do
         start_index = max(start_line - 1, 0)
         requested_lines = normalize_positive_or_nil(args["line_count"])
         selected = Enum.drop(lines, start_index)
-        selected = if is_integer(requested_lines), do: Enum.take(selected, requested_lines), else: selected
+
+        selected =
+          if is_integer(requested_lines), do: Enum.take(selected, requested_lines), else: selected
 
         {returned_lines, end_index} =
-          take_lines_with_byte_limit(selected, start_index, args["max_bytes"] || @default_max_bytes)
+          take_lines_with_byte_limit(
+            selected,
+            start_index,
+            args["max_bytes"] || @default_max_bytes
+          )
 
         content_out =
           returned_lines
@@ -270,7 +279,9 @@ defmodule Nex.Agent.Tool.Read do
   defp format_mtime(_mtime), do: nil
 
   defp directory_limit(nil), do: @default_directory_limit
-  defp directory_limit(limit), do: min(normalize_positive(limit, @default_directory_limit), @max_directory_limit)
+
+  defp directory_limit(limit),
+    do: min(normalize_positive(limit, @default_directory_limit), @max_directory_limit)
 
   defp normalize_positive(value, _default) when is_integer(value) and value > 0, do: value
   defp normalize_positive(_value, default), do: default

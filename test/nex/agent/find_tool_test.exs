@@ -12,7 +12,10 @@ defmodule Nex.Agent.FindToolTest do
     on_exit(fn -> File.rm_rf(root) end)
 
     assert {:ok, result} =
-             Find.execute(%{"query" => "needle", "path" => root, "glob" => "*.ex", "limit" => 1}, %{})
+             Find.execute(
+               %{"query" => "needle", "path" => root, "glob" => "*.ex", "limit" => 1},
+               %{}
+             )
 
     assert result.status == :ok
     assert result.query == "needle"
