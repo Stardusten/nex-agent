@@ -1,4 +1,4 @@
-defmodule Nex.Agent.Tool.Backends.OpenAICodex do
+defmodule Nex.Agent.Tool.Backends.Codex do
   @moduledoc false
 
   alias Nex.Agent.LLM.ProviderProfile
@@ -8,14 +8,14 @@ defmodule Nex.Agent.Tool.Backends.OpenAICodex do
 
   @spec web_search(String.t(), pos_integer(), map(), map()) ::
           {:ok, String.t()} | {:error, String.t()}
-  def web_search(query, count, ctx, capability_config) when is_binary(query) do
+  def web_search(query, count, ctx, backend_config) when is_binary(query) do
     tool =
       %{
         "type" => "web_search",
-        "external_web_access" => Map.get(capability_config, "mode", "live") == "live"
+        "external_web_access" => Map.get(backend_config, "mode", "live") == "live"
       }
-      |> maybe_put_filters(Map.get(capability_config, "allowed_domains"))
-      |> maybe_put_user_location(Map.get(capability_config, "user_location"))
+      |> maybe_put_filters(Map.get(backend_config, "allowed_domains"))
+      |> maybe_put_user_location(Map.get(backend_config, "user_location"))
 
     prompt = """
     You must use the web_search tool for this request.
@@ -26,17 +26,17 @@ defmodule Nex.Agent.Tool.Backends.OpenAICodex do
     Return concise search results with titles, URLs, and snippets when available.
     """
 
-    with {:ok, response} <- run_builtin_call(prompt, [tool], ctx),
+    with {:ok, response} <- run_codex_tool_call(prompt, [tool], ctx),
          :ok <- require_tool_usage(response, "web_search") do
       {:ok, response.content}
     end
   end
 
   @spec image_generation(String.t(), map(), map()) :: {:ok, map()} | {:error, String.t()}
-  def image_generation(prompt, ctx, capability_config) when is_binary(prompt) do
+  def image_generation(prompt, ctx, backend_config) when is_binary(prompt) do
     tool = %{
       "type" => "image_generation",
-      "output_format" => Map.get(capability_config, "output_format", "png")
+      "output_format" => Map.get(backend_config, "output_format", "png")
     }
 
     request = """
@@ -47,8 +47,9 @@ defmodule Nex.Agent.Tool.Backends.OpenAICodex do
     Generate the image and return no additional prose beyond any required tool output.
     """
 
-    with {:ok, response} <- run_builtin_call(request, [tool], ctx),
-         images when is_list(images) and images != [] <- Map.get(response.metadata, :generated_images) do
+    with {:ok, response} <- run_codex_tool_call(request, [tool], ctx),
+         images when is_list(images) and images != [] <-
+           Map.get(response.metadata, :generated_images) do
       {:ok, %{generated_images: images, content: response.content}}
     else
       [] -> {:error, "image_generation backend returned no images"}
@@ -57,7 +58,7 @@ defmodule Nex.Agent.Tool.Backends.OpenAICodex do
     end
   end
 
-  defp run_builtin_call(prompt, tools, ctx) do
+  defp run_codex_tool_call(prompt, tools, ctx) do
     opts =
       [
         provider: :openai_codex,
@@ -72,7 +73,10 @@ defmodule Nex.Agent.Tool.Backends.OpenAICodex do
         ],
         max_tokens: 4096
       ]
-      |> maybe_put_opt(:req_llm_stream_text_fun, Map.get(ctx, :req_llm_stream_text_fun) || Map.get(ctx, "req_llm_stream_text_fun"))
+      |> maybe_put_opt(
+        :req_llm_stream_text_fun,
+        Map.get(ctx, :req_llm_stream_text_fun) || Map.get(ctx, "req_llm_stream_text_fun")
+      )
 
     messages = [
       %{"role" => "user", "content" => prompt}
@@ -108,14 +112,17 @@ defmodule Nex.Agent.Tool.Backends.OpenAICodex do
            }
          }}
 
-      {:error, reason} -> {:error, to_error_string(reason)}
+      {:error, reason} ->
+        {:error, to_error_string(reason)}
     end
   end
 
   defp require_tool_usage(%{metadata: metadata}, tool_name) when is_map(metadata) do
     usage = Map.get(metadata, :usage) || Map.get(metadata, "usage") || %{}
     tool_usage = Map.get(usage, :tool_usage) || Map.get(usage, "tool_usage") || %{}
-    entry = Map.get(tool_usage, tool_name) || Map.get(tool_usage, String.to_atom(tool_name)) || %{}
+
+    entry =
+      Map.get(tool_usage, tool_name) || Map.get(tool_usage, String.to_atom(tool_name)) || %{}
 
     if Map.get(entry, :count) || Map.get(entry, "count") do
       :ok

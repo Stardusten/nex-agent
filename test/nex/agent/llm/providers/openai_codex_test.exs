@@ -132,8 +132,8 @@ defmodule Nex.Agent.LLM.Providers.OpenAICodexTest do
       Config.default()
       | tools: %{
           "web_search" => %{
-            "strategy" => "provider_native",
-            "mode" => "live"
+            "provider" => "codex",
+            "providers" => %{"codex" => %{"mode" => "live"}}
           }
         }
     }
@@ -183,8 +183,8 @@ defmodule Nex.Agent.LLM.Providers.OpenAICodexTest do
       Config.default()
       | tools: %{
           "image_generation" => %{
-            "strategy" => "provider_native",
-            "output_format" => "webp"
+            "provider" => "codex",
+            "providers" => %{"codex" => %{"output_format" => "webp"}}
           }
         }
     }

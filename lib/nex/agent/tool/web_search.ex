@@ -7,7 +7,7 @@ defmodule Nex.Agent.Tool.WebSearch do
 
   alias Nex.Agent.Config
   alias Nex.Agent.HTTP
-  alias Nex.Agent.Tool.Backends.OpenAICodex
+  alias Nex.Agent.Tool.Backends.Codex
 
   @ddg_api_url "https://api.duckduckgo.com"
   @ddg_html_url "https://html.duckduckgo.com/html/"
@@ -67,23 +67,27 @@ defmodule Nex.Agent.Tool.WebSearch do
   end
 
   defp execute_with_backend(query, count, opts) do
-    provider_config = provider_config(opts)
-    strategy = Map.get(provider_config, "strategy", "auto")
+    backend_config = provider_config(opts)
 
-    cond do
-      Map.get(provider_config, "mode") == "disabled" ->
-        {:error, "web_search is disabled. [Analyze the error and try a different approach.]"}
-
-      strategy == "provider_native" ->
-        OpenAICodex.web_search(query, count, normalize_ctx(opts), provider_config)
-
-      strategy in ["auto", "local"] ->
+    case Map.get(backend_config, "provider") do
+      "duckduckgo" ->
         do_search(query, count, request_fun(opts), cancel_ref(opts), observe_context(opts))
 
-      true ->
-        {:error, invalid_strategy_error(strategy)}
+      "codex" ->
+        if Map.get(backend_config, "mode") == "disabled" do
+          {:error, "web_search is disabled. [Analyze the error and try a different approach.]"}
+        else
+          Codex.web_search(query, count, normalize_ctx(opts), backend_config)
+        end
+
+      provider ->
+        {:error, unsupported_provider_error("web_search", provider)}
     end
   end
+
+  defp unsupported_provider_error(tool, provider),
+    do:
+      "#{tool} provider #{inspect(provider)} is not supported. [Analyze the error and try a different approach.]"
 
   defp do_search(query, count, http_get, cancel_ref, observe_context) do
     params = %{
@@ -253,10 +257,6 @@ defmodule Nex.Agent.Tool.WebSearch do
   end
 
   defp provider_config(_opts), do: Config.web_search_provider_config(nil)
-
-  defp invalid_strategy_error(strategy),
-    do:
-      "web_search strategy #{inspect(strategy)} is not supported. [Analyze the error and try a different approach.]"
 
   defp normalize_ctx(opts) when is_map(opts), do: opts
   defp normalize_ctx(opts) when is_list(opts), do: Enum.into(opts, %{})

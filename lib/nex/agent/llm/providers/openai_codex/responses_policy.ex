@@ -17,7 +17,6 @@ defmodule Nex.Agent.LLM.Providers.OpenAICodex.ResponsesPolicy do
   def apply_body(body, opts) when is_map(body) do
     body
     |> put_instructions(opts)
-    |> rewrite_builtin_tools(opts)
     |> put_tool_choice(opts)
     |> apply_payload_policy()
   end
@@ -92,14 +91,6 @@ defmodule Nex.Agent.LLM.Providers.OpenAICodex.ResponsesPolicy do
   end
 
   defp strip_reasoning_item_ids(body), do: body
-
-  defp rewrite_builtin_tools(%{"tools" => tools} = body, opts) when is_list(tools) do
-    Map.put(body, "tools", Enum.map(tools, &rewrite_builtin_tool(&1, opts)))
-  end
-
-  defp rewrite_builtin_tools(body, _opts), do: body
-
-  defp rewrite_builtin_tool(tool, _opts), do: tool
 
   defp strip_reasoning_item_id(%{"type" => "reasoning"} = item), do: Map.delete(item, "id")
   defp strip_reasoning_item_id(item), do: item

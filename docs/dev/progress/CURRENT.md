@@ -150,6 +150,13 @@ Config contract cutover is now landed on top of the existing runtime mainline:
 - channel processes are instance-keyed through `Nex.Agent.Channel.Registry`
 - inbound and outbound routing now use channel instance ids, with channel type stored as metadata
 
+Local tool backend selection is now the active contract for tool-backed external capabilities:
+
+- `web_search` and `image_generation` are always model-visible local function tools
+- Codex search/image support is a backend implementation detail inside those local tools
+- `Runner`, `ReqLLM`, and `Tool.Registry` do not expose a second tool lane for these capabilities
+- the aborted Phase 15 provider-native capability plan is historical only; use the 2026-04-25 local-tool backend finding as the current review source
+
 ## Current Plan Pointer
 
 - [Phase 1 Runtime Reload Foundation](../task-plan/phase1-runtime-reload-foundation.md)
@@ -176,13 +183,14 @@ Config contract cutover is now landed on top of the existing runtime mainline:
 - [Phase 13D Semantic Log And Admin Query Cutover](../task-plan/phase13d-semantic-log-and-admin-query-cutover.md)
 - [Phase 13E Evolution Control Plane Consumption](../task-plan/phase13e-evolution-control-plane-consumption.md)
 - [Phase 14 Owner-Approved Evolution Execution](../task-plan/phase14-owner-approved-evolution-execution.md)
-- [Phase 15 Provider-Native Tool Capability Resolution](../task-plan/phase15-provider-native-tool-capability-resolution.md)
+- [Phase 15 Tool Backend Selection (Aborted)](../task-plan/phase15-provider-native-tool-capability-resolution.md)
 - [2026-04-16 IM Inbound Media Architecture](../findings/2026-04-16-im-inbound-media-architecture.md)
 - [2026-04-16 IM Streaming Capabilities And Delivery Contract](../findings/2026-04-16-im-streaming-capabilities.md)
 - [2026-04-16 Streaming Architecture Convergence](../findings/2026-04-16-streaming-architecture-convergence.md)
 - [2026-04-16 Streaming Phase4 Polish](../findings/2026-04-16-streaming-phase4-polish.md)
 - [2026-04-17 Feishu Streaming Converter Boundary](../findings/2026-04-17-feishu-streaming-converter-boundary.md)
 - [2026-04-16 OpenAI Native Computer Use Architecture](../findings/2026-04-16-openai-native-computer-use-architecture.md)
+- [2026-04-25 Local Tool Backend Selection](../findings/2026-04-25-local-tool-backend-selection.md)
 
 ## Immediate Next Steps
 
@@ -214,6 +222,6 @@ Config contract cutover is now landed on top of the existing runtime mainline:
 
 ## Parked Architecture Work
 
-- OpenAI native computer use has an architecture decision record, but it is not part of the current runtime-reload mainline.
-- Any future implementation should follow the provider-native item orchestration path in [2026-04-16 OpenAI Native Computer Use Architecture](../findings/2026-04-16-openai-native-computer-use-architecture.md) instead of adding fake browser function tools to `Tool.Registry`.
+- OpenAI native computer use has an architecture decision record, but it is historical/parked and is not current implementation guidance for `web_search`, `image_generation`, or other ordinary agent tools.
+- Current tool policy is local function tool facade plus backend implementation behind the facade. Any future exception needs a new reviewed plan.
 - Slack native stream and Telegram/Discord edit adapters are intentionally not part of Phase 3A; Phase 3A exists to make those follow-on integrations land on cleaner boundaries.

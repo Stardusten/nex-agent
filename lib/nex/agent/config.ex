@@ -262,37 +262,22 @@ defmodule Nex.Agent.Config do
 
   @spec web_search_provider_config(t() | nil) :: map()
   def web_search_provider_config(%__MODULE__{tools: tools}) when is_map(tools) do
-    raw = Map.get(tools, "web_search", %{})
-
-    %{
-      "strategy" => normalize_strategy(Map.get(raw, "strategy")),
-      "mode" => normalize_web_search_mode(Map.get(raw, "mode")),
-      "allowed_domains" => normalize_allowed_domains(Map.get(raw, "allowed_domains")),
-      "user_location" => normalize_user_location(Map.get(raw, "user_location"))
-    }
+    {provider, config} = selected_tool_backend(tools, "web_search", "duckduckgo")
+    normalize_web_search_provider_config(provider, config)
   end
 
   def web_search_provider_config(_config) do
-    %{
-      "strategy" => "auto",
-      "mode" => "live",
-      "allowed_domains" => [],
-      "user_location" => nil
-    }
+    %{"provider" => "duckduckgo"}
   end
 
   @spec image_generation_provider_config(t() | nil) :: map()
   def image_generation_provider_config(%__MODULE__{tools: tools}) when is_map(tools) do
-    raw = Map.get(tools, "image_generation", %{})
-
-    %{
-      "strategy" => normalize_strategy(Map.get(raw, "strategy")),
-      "output_format" => normalize_image_generation_output_format(Map.get(raw, "output_format"))
-    }
+    {provider, config} = selected_tool_backend(tools, "image_generation", "codex")
+    normalize_image_generation_provider_config(provider, config)
   end
 
   def image_generation_provider_config(_config) do
-    %{"strategy" => "auto", "output_format" => "png"}
+    %{"provider" => "codex", "output_format" => "png"}
   end
 
   @spec request_trace(t()) :: map()
@@ -614,9 +599,49 @@ defmodule Nex.Agent.Config do
   defp normalize_tools(tools) when is_map(tools), do: stringify_map_keys(tools)
   defp normalize_tools(_tools), do: %{}
 
-  defp normalize_strategy("provider_native"), do: "provider_native"
-  defp normalize_strategy("local"), do: "local"
-  defp normalize_strategy(_), do: "auto"
+  defp selected_tool_backend(tools, tool_name, default_provider) do
+    tool_config =
+      tools
+      |> Map.get(tool_name, %{})
+      |> normalize_tool_config()
+
+    provider = normalize_optional_string(Map.get(tool_config, "provider")) || default_provider
+
+    provider_config =
+      tool_config
+      |> Map.get("providers")
+      |> normalize_tool_backend_table()
+      |> Map.get(provider, %{})
+
+    {provider, provider_config}
+  end
+
+  defp normalize_tool_config(%{} = config), do: stringify_map_keys(config)
+  defp normalize_tool_config(_config), do: %{}
+
+  defp normalize_tool_backend_table(%{} = providers), do: stringify_map_keys(providers)
+  defp normalize_tool_backend_table(_providers), do: %{}
+
+  defp normalize_web_search_provider_config("codex", config) when is_map(config) do
+    %{
+      "provider" => "codex",
+      "mode" => normalize_web_search_mode(Map.get(config, "mode")),
+      "allowed_domains" => normalize_allowed_domains(Map.get(config, "allowed_domains")),
+      "user_location" => normalize_user_location(Map.get(config, "user_location"))
+    }
+  end
+
+  defp normalize_web_search_provider_config(provider, _config) do
+    %{"provider" => provider}
+  end
+
+  defp normalize_image_generation_provider_config(provider, config) when is_map(config) do
+    %{
+      "provider" => provider,
+      "output_format" =>
+        normalize_image_generation_output_format(Map.get(config, "output_format"))
+    }
+  end
 
   defp normalize_web_search_mode("cached"), do: "cached"
   defp normalize_web_search_mode("disabled"), do: "disabled"

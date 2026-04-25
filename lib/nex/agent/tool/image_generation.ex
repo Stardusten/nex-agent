@@ -6,7 +6,7 @@ defmodule Nex.Agent.Tool.ImageGeneration do
   @behaviour Nex.Agent.Tool.Behaviour
 
   alias Nex.Agent.Config
-  alias Nex.Agent.Tool.Backends.OpenAICodex
+  alias Nex.Agent.Tool.Backends.Codex
 
   def name, do: "image_generation"
   def description, do: "Generate or edit images from text and image context."
@@ -30,20 +30,14 @@ defmodule Nex.Agent.Tool.ImageGeneration do
   end
 
   def execute(%{"prompt" => prompt}, ctx) when is_binary(prompt) and prompt != "" do
-    provider_config = provider_config(ctx)
-    strategy = Map.get(provider_config, "strategy", "auto")
+    backend_config = provider_config(ctx)
 
-    case strategy do
-      strategy when strategy in ["auto", "provider_native"] ->
-        OpenAICodex.image_generation(prompt, normalize_ctx(ctx), provider_config)
+    case Map.get(backend_config, "provider") do
+      "codex" ->
+        Codex.image_generation(prompt, normalize_ctx(ctx), backend_config)
 
-      "local" ->
-        {:error,
-         "image_generation local strategy is not implemented yet. [Analyze the error and try a different approach.]"}
-
-      _ ->
-        {:error,
-         "image_generation strategy #{inspect(strategy)} is not supported. [Analyze the error and try a different approach.]"}
+      provider ->
+        {:error, unsupported_provider_error("image_generation", provider)}
     end
   end
 
@@ -60,6 +54,10 @@ defmodule Nex.Agent.Tool.ImageGeneration do
   end
 
   defp provider_config(_ctx), do: Config.image_generation_provider_config(nil)
+
+  defp unsupported_provider_error(tool, provider),
+    do:
+      "#{tool} provider #{inspect(provider)} is not supported. [Analyze the error and try a different approach.]"
 
   defp normalize_ctx(ctx) when is_map(ctx), do: ctx
   defp normalize_ctx(_ctx), do: %{}

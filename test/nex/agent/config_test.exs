@@ -230,26 +230,30 @@ defmodule Nex.Agent.ConfigTest do
     assert Config.valid?(config)
   end
 
-  test "web_search config reads the flat tools.web_search contract" do
+  test "web_search config reads the tools.web_search backend provider contract" do
     config =
       Config.from_map(%{
         full_config()
         | "tools" => %{
             "web_search" => %{
-              "strategy" => "provider_native",
-              "mode" => "cached",
-              "allowed_domains" => [" example.com ", "example.com", ""],
-              "user_location" => %{
-                "country" => "US",
-                "timezone" => "America/Los_Angeles",
-                "ignored" => "value"
+              "provider" => "codex",
+              "providers" => %{
+                "codex" => %{
+                  "mode" => "cached",
+                  "allowed_domains" => [" example.com ", "example.com", ""],
+                  "user_location" => %{
+                    "country" => "US",
+                    "timezone" => "America/Los_Angeles",
+                    "ignored" => "value"
+                  }
+                }
               }
             }
           }
       })
 
     assert Config.web_search_provider_config(config) == %{
-             "strategy" => "provider_native",
+             "provider" => "codex",
              "mode" => "cached",
              "allowed_domains" => ["example.com"],
              "user_location" => %{
@@ -259,20 +263,22 @@ defmodule Nex.Agent.ConfigTest do
            }
   end
 
-  test "image_generation config reads the flat tools.image_generation contract" do
+  test "image_generation config reads the tools.image_generation backend provider contract" do
     config =
       Config.from_map(%{
         full_config()
         | "tools" => %{
             "image_generation" => %{
-              "strategy" => "local",
-              "output_format" => "webp"
+              "provider" => "codex",
+              "providers" => %{
+                "codex" => %{"output_format" => "webp"}
+              }
             }
           }
       })
 
     assert Config.image_generation_provider_config(config) == %{
-             "strategy" => "local",
+             "provider" => "codex",
              "output_format" => "webp"
            }
   end
@@ -322,8 +328,17 @@ defmodule Nex.Agent.ConfigTest do
         }
       },
       "tools" => %{
-        "web_search" => %{"strategy" => "auto", "mode" => "live"},
-        "image_generation" => %{"strategy" => "auto", "output_format" => "png"}
+        "web_search" => %{
+          "provider" => "duckduckgo",
+          "providers" => %{
+            "duckduckgo" => %{},
+            "codex" => %{"mode" => "live"}
+          }
+        },
+        "image_generation" => %{
+          "provider" => "codex",
+          "providers" => %{"codex" => %{"output_format" => "png"}}
+        }
       }
     }
   end
