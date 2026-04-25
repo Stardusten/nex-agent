@@ -301,6 +301,91 @@ defmodule Nex.Agent.RunnerStreamTest do
              collect_stream_events([])
   end
 
+  test "runner separates streamed text from following tool call notices with a blank line" do
+    parent = self()
+
+    workspace =
+      Path.join(
+        System.tmp_dir!(),
+        "nex-agent-runner-stream-tool-notice-spacing-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(Path.join(workspace, "memory"))
+    File.write!(Path.join(workspace, "AGENTS.md"), "# AGENTS\n")
+    File.write!(Path.join(workspace, "SOUL.md"), "# SOUL\n")
+    File.write!(Path.join(workspace, "USER.md"), "# USER\n")
+    File.write!(Path.join(workspace, "TOOLS.md"), "# TOOLS\n")
+    File.write!(Path.join(workspace, "memory/MEMORY.md"), "# Memory\n")
+
+    on_exit(fn -> File.rm_rf!(workspace) end)
+
+    stream_sink = fn event ->
+      send(parent, {:stream_event, event})
+      :ok
+    end
+
+    turn_key = {:tool_notice_spacing_turn, self()}
+    Process.put(turn_key, 0)
+
+    llm_stream_client = fn _messages, _opts, callback ->
+      turn = Process.get(turn_key, 0)
+      Process.put(turn_key, turn + 1)
+
+      case turn do
+        0 ->
+          callback.({:delta, "我再直接打一次 web_search，看这次后端链路是不是修好了。"})
+
+          callback.(
+            {:tool_calls,
+             [
+               %{
+                 "id" => "call_read_1",
+                 "function" => %{
+                   "name" => "read",
+                   "arguments" => %{"path" => "AGENTS.md"}
+                 }
+               },
+               %{
+                 "id" => "call_read_2",
+                 "function" => %{
+                   "name" => "read",
+                   "arguments" => %{"path" => "docs/dev/progress/CURRENT.md"}
+                 }
+               }
+             ]}
+          )
+
+          callback.({:done, %{finish_reason: nil, usage: nil, model: nil}})
+          :ok
+
+        1 ->
+          callback.({:delta, "好了，这次通了"})
+          callback.({:done, %{finish_reason: nil, usage: nil, model: nil}})
+          :ok
+      end
+    end
+
+    assert {:ok, %Result{handled?: true, status: :ok, final_content: "好了，这次通了"}, _session} =
+             Runner.run(Session.new("stream:tool-call-spacing"), "hi",
+               workspace: workspace,
+               provider: :anthropic,
+               model: "claude-sonnet-4-20250514",
+               skip_consolidation: true,
+               skip_skills: true,
+               stream_sink: stream_sink,
+               llm_stream_client: llm_stream_client
+             )
+
+    assert [
+             {:text, "我再直接打一次 web_search，看这次后端链路是不是修好了。"},
+             {:text, "\n\n"},
+             {:text, "📖 Read - path=AGENTS.md\n📖 Read - path=docs/dev/progress/CURRENT.md\n"},
+             {:text, "\n"},
+             {:text, "好了，这次通了"},
+             :finish
+           ] = collect_stream_events([])
+  end
+
   test "runner formats bash tool call notices with emoji and inline command" do
     parent = self()
 
@@ -536,8 +621,8 @@ defmodule Nex.Agent.RunnerStreamTest do
   defp render_mock_content(text), do: inspect(text, printable_limit: 500, limit: 50)
 
   defp tiny_png_bytes do
-    <<137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0,
-      1, 8, 6, 0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 11, 73, 68, 65, 84, 120, 156, 99, 96,
-      0, 2, 0, 0, 5, 0, 1, 122, 94, 171, 63, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130>>
+    <<137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6,
+      0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 11, 73, 68, 65, 84, 120, 156, 99, 96, 0, 2, 0, 0, 5, 0,
+      1, 122, 94, 171, 63, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130>>
   end
 end

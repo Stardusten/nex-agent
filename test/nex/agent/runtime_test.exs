@@ -66,6 +66,47 @@ defmodule Nex.Agent.RuntimeTest do
     assert is_binary(snapshot.skills.hash)
   end
 
+  test "snapshot channels are keyed by channel instance id", %{workspace: workspace} do
+    config = runtime_config(workspace)
+
+    assert {:ok, %Snapshot{} = snapshot} =
+             Runtime.reload(workspace: workspace, config_loader: fn _opts -> config end)
+
+    assert snapshot.channels == %{
+             "feishu_kai" => %{"type" => "feishu", "streaming" => true},
+             "discord_kai" => %{"type" => "discord", "streaming" => false}
+           }
+  end
+
+  test "tool definition builder receives resolved default model runtime", %{workspace: workspace} do
+    parent = self()
+    config = runtime_config(workspace)
+
+    tool_builder = fn filter, opts ->
+      send(parent, {:tool_definition_opts, filter, Keyword.fetch!(opts, :model_runtime)})
+      []
+    end
+
+    assert {:ok, %Snapshot{}} =
+             Runtime.reload(
+               workspace: workspace,
+               config_loader: fn _opts -> config end,
+               tool_definitions_builder: tool_builder
+             )
+
+    for filter <- [:all, :follow_up, :subagent, :cron] do
+      assert_receive {:tool_definition_opts, ^filter,
+                      %{
+                        model_key: "hy3-preview",
+                        model_id: "hy3-preview",
+                        provider_key: "hy3-tencent",
+                        provider_type: "openai-compatible",
+                        provider: :openai,
+                        api_key: "sk-runtime-test"
+                      }}
+    end
+  end
+
   test "reload succeeds, increments version, broadcasts event, and records changed paths", %{
     workspace: workspace
   } do
@@ -148,6 +189,47 @@ defmodule Nex.Agent.RuntimeTest do
              Runtime.start_link(name: name, prompt_builder: fn _opts -> {:error, :boom} end)
 
     Process.flag(:trap_exit, previous_flag)
+  end
+
+  defp runtime_config(workspace) do
+    Config.from_map(%{
+      "max_iterations" => 100,
+      "workspace" => workspace,
+      "channel" => %{
+        "feishu_kai" => %{
+          "type" => "feishu",
+          "enabled" => true,
+          "streaming" => true,
+          "app_id" => "cli_feishu_app",
+          "app_secret" => "feishu_secret"
+        },
+        "discord_kai" => %{
+          "type" => "discord",
+          "enabled" => true,
+          "streaming" => false,
+          "token" => "discord-token"
+        }
+      },
+      "gateway" => %{"port" => 18_790},
+      "provider" => %{
+        "providers" => %{
+          "hy3-tencent" => %{
+            "type" => "openai-compatible",
+            "base_url" => "https://hy3.example.com/v1",
+            "api_key" => "sk-runtime-test"
+          }
+        }
+      },
+      "model" => %{
+        "cheap_model" => "hy3-preview",
+        "default_model" => "hy3-preview",
+        "advisor_model" => "hy3-preview",
+        "models" => %{
+          "hy3-preview" => %{"provider" => "hy3-tencent", "id" => "hy3-preview"}
+        }
+      },
+      "tools" => %{}
+    })
   end
 
   defp restore_env(key, nil), do: Application.delete_env(:nex_agent, key)

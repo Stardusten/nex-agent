@@ -134,13 +134,20 @@ Phase 13 planning now defines the Control Plane observability direction:
   - InboundWorker emits inbound, owner dispatch, follow-up, queue, interrupt, status, timeout, and crash observations.
   - `/status` remains deterministic and now appends recent ControlPlane warning/error evidence for the current run/session.
   - Follow-up prompts require `observe summary` / `observe incident` before answering error, stuck, backend, log, status, or incident questions.
-- Phase 13D is now implemented for semantic log and Admin query cutover:
-  - Production code no longer calls `Audit.*` / `RequestTrace.*` as machine truth sources; remaining modules are ControlPlane compatibility wrappers.
-  - `Audit.append/3` writes `ControlPlane.Log` observations and publishes observation summaries instead of `audit/events.jsonl`.
-  - `RequestTrace.append_event/2`, `list_paths/1`, and `read_trace/2` are ControlPlane-derived and do not write or read request trace JSONL files.
-  - Admin recent events and request trace detail read `ControlPlane.Query` summaries/run traces, aligning Admin with `observe`.
-  - Runner request trace compatibility observations store bounded summaries only, not full prompts, messages, responses, or tool results.
-  - Direct `Logger.*` files are captured by `control_plane_logger_cutover_test.exs` as an explicit reviewed allowlist.
+	- Phase 13D is now implemented for semantic log and Admin query cutover:
+	  - Production code no longer calls `Audit.*` / `RequestTrace.*` as machine truth sources; remaining modules are ControlPlane compatibility wrappers.
+	  - `Audit.append/3` writes `ControlPlane.Log` observations and publishes observation summaries instead of `audit/events.jsonl`.
+	  - `RequestTrace.append_event/2`, `list_paths/1`, and `read_trace/2` are ControlPlane-derived and do not write or read request trace JSONL files.
+	  - Admin recent events and request trace detail read `ControlPlane.Query` summaries/run traces, aligning Admin with `observe`.
+	  - Runner request trace compatibility observations store bounded summaries only, not full prompts, messages, responses, or tool results.
+	  - Direct `Logger.*` files are captured by `control_plane_logger_cutover_test.exs` as an explicit reviewed allowlist.
+
+Config contract cutover is now landed on top of the existing runtime mainline:
+
+- external config shape is the new `channel` / `gateway` / `provider.providers` / `model.models` / `tools` contract
+- old top-level `provider` / `model` strings, `providers`, `defaults`, and top-level channel config are intentionally invalid
+- channel processes are instance-keyed through `Nex.Agent.Channel.Registry`
+- inbound and outbound routing now use channel instance ids, with channel type stored as metadata
 
 ## Current Plan Pointer
 
@@ -178,12 +185,10 @@ Phase 13 planning now defines the Control Plane observability direction:
 
 ## Immediate Next Steps
 
-1. 优先进入 Phase 15：建立 capability-resolved tool 主链，把 `web_search` 从“静态 local tool + Codex 特判 rewrite”迁到统一 resolver，至少支持 `openai-codex` 官方 OAuth backend 的 native search。
-2. 在 Phase 15 中同时收口 `ProviderProfile.default_api_key(:openai_codex)` facade 偏差，确保 provider profile 真相源与 `Auth.Codex.resolve_access_token/0` 对齐。
-3. Phase 15 完成后，再补真实 gateway/manual 验证，确认 capability resolution 在实际 workspace 上不会泄漏 parallel definitions，且 `web_search` 在不同 provider / surface 下行为一致。
-4. 跑更完整的 channel 回归：`test/nex/agent/channel_discord_test.exs`、`test/nex/agent/channel_feishu_test.exs`。
-5. 用真实 gateway/manual 场景检查 busy 普通消息 follow-up、`/btw`、`/status`、`/stop`、可选 interrupt tool，以及 follow-up 使用 `observe summary` 的实际交互时序。
-6. Phase 7 留存问题仍需后续处理：Finch 连接池泄漏、飞书 `close_streaming_mode` 404、LLM 空返回兜底。
+1. 用真实 `~/.nex/agent/config.json` 手动改成新 config shape 后重启 gateway，验证多个 Feishu/Discord instance 可以同时注册、收消息、发消息。
+2. 真实 gateway/manual 场景检查 runtime reload 后 channel add/remove/change 是否只影响对应 instance。
+3. 用真实 gateway/manual 场景检查 busy 普通消息 follow-up、`/btw`、`/status`、`/stop`、可选 interrupt tool，以及 follow-up 使用 `observe summary` 的实际交互时序。
+4. Phase 7 留存问题仍需后续处理：Finch 连接池泄漏、飞书 `close_streaming_mode` 404、LLM 空返回兜底。
 
 ## Reviewer Verification
 
@@ -192,6 +197,9 @@ Phase 13 planning now defines the Control Plane observability direction:
 - `mix test test/nex/agent/channel_discord_test.exs`
 - `mix test test/nex/agent/inbound_worker_test.exs`
 - `mix test test/nex/agent/message_tool_test.exs`
+- `mix test test/nex/agent/config_test.exs`
+- `mix test test/nex/agent/runtime_test.exs`
+- `mix test test/nex/agent/runtime_reconciler_test.exs`
 - `mix test test/nex/agent/run_control_test.exs`
 - `mix test test/nex/agent/bash_tool_test.exs`
 - `mix test test/nex/agent/runner_stream_test.exs`

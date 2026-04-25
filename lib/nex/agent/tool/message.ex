@@ -64,7 +64,7 @@ defmodule Nex.Agent.Tool.Message do
           },
           channel: %{
             type: "string",
-            description: "Target channel (feishu, discord). Defaults to current channel."
+            description: "Target channel instance id. Defaults to current channel."
           },
           chat_id: %{
             type: "string",
@@ -86,30 +86,11 @@ defmodule Nex.Agent.Tool.Message do
     )
 
     with {:ok, outbound} <- from_tool_args(args, ctx) do
-      case outbound.channel do
-        "feishu" ->
-          if Process.whereis(Nex.Agent.Channel.Feishu) do
-            case Nex.Agent.Channel.Feishu.deliver_outbound(outbound) do
-              {:ok, delivered} ->
-                {:ok,
-                 %{sent: true, channel: outbound.channel, chat_id: outbound.chat_id}
-                 |> maybe_put_result(:delivered, delivered)}
-
-              {:error, reason} ->
-                {:error, "Feishu send failed: #{inspect(reason)}"}
-            end
-          else
-            publish_outbound(outbound)
-            {:ok, %{sent: true, channel: outbound.channel, chat_id: outbound.chat_id}}
-          end
-
-        _ ->
-          if outbound.attachments != [] do
-            {:error, "attachments are currently only supported for Feishu"}
-          else
-            publish_outbound(outbound)
-            {:ok, %{sent: true, channel: outbound.channel, chat_id: outbound.chat_id}}
-          end
+      if outbound.attachments != [] and channel_type(ctx, outbound.channel) != "feishu" do
+        {:error, "attachments are currently only supported for Feishu channel instances"}
+      else
+        publish_outbound(outbound)
+        {:ok, %{sent: true, channel: outbound.channel, chat_id: outbound.chat_id}}
       end
     else
       {:error, reason} ->
@@ -152,16 +133,37 @@ defmodule Nex.Agent.Tool.Message do
   defp publish_outbound(%OutboundMessage{} = outbound) do
     topic = Outbound.topic_for_channel(outbound.channel)
 
-    payload = %{
-      chat_id: outbound.chat_id,
-      content: outbound.text,
-      metadata:
-        outbound.metadata
-        |> maybe_put("msg_type", outbound.native_type)
-        |> maybe_put("content_json", outbound.native_payload)
-    }
+    payload =
+      if outbound.attachments == [] do
+        %{
+          chat_id: outbound.chat_id,
+          content: outbound.text,
+          metadata:
+            outbound.metadata
+            |> maybe_put("msg_type", outbound.native_type)
+            |> maybe_put("content_json", outbound.native_payload)
+        }
+      else
+        outbound
+      end
 
     Nex.Agent.Bus.publish(topic, payload)
+  end
+
+  defp channel_type(ctx, channel) do
+    config = Map.get(ctx, :config) || Map.get(ctx, "config")
+    metadata = Map.get(ctx, :metadata) || Map.get(ctx, "metadata") || %{}
+
+    cond do
+      match?(%Nex.Agent.Config{}, config) ->
+        Nex.Agent.Config.channel_type(config, channel)
+
+      Map.get(metadata, "channel_type") ->
+        Map.get(metadata, "channel_type")
+
+      true ->
+        nil
+    end
   end
 
   defp attachments_from_args(args, channel, ctx) do
@@ -298,9 +300,6 @@ defmodule Nex.Agent.Tool.Message do
         Path.expand(path)
     end
   end
-
-  defp maybe_put_result(map, _key, nil), do: map
-  defp maybe_put_result(map, key, value), do: Map.put(map, key, value)
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)

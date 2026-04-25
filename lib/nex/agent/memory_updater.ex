@@ -17,6 +17,7 @@ defmodule Nex.Agent.MemoryUpdater do
           model: String.t(),
           api_key: String.t() | nil,
           base_url: String.t() | nil,
+          provider_options: keyword(),
           req_llm_stream_text_fun: any(),
           llm_call_fun: any()
         }
@@ -133,7 +134,8 @@ defmodule Nex.Agent.MemoryUpdater do
       [
         workspace: job.workspace,
         api_key: job.api_key,
-        base_url: job.base_url
+        base_url: job.base_url,
+        provider_options: job.provider_options
       ]
       |> maybe_put(:req_llm_stream_text_fun, job.req_llm_stream_text_fun)
       |> maybe_put(:llm_call_fun, job.llm_call_fun)
@@ -210,6 +212,7 @@ defmodule Nex.Agent.MemoryUpdater do
       model: Keyword.get(opts, :model, "claude-sonnet-4-20250514"),
       api_key: Keyword.get(opts, :api_key),
       base_url: Keyword.get(opts, :base_url),
+      provider_options: Keyword.get(opts, :provider_options, []),
       req_llm_stream_text_fun:
         Keyword.get(opts, :req_llm_stream_text_fun) ||
           Map.get(runtime_metadata, "memory_refresh_req_llm_stream_text_fun"),

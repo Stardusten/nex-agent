@@ -55,20 +55,26 @@ defmodule Nex.Agent.ContextBuilderTest do
 
     assert prompt =~ "## Channel Output Rules"
     assert prompt =~ "`<newmsg/>` is a platform text IR separator"
+    assert prompt =~ "put exactly `<newmsg/>` on its own line"
     assert prompt =~ "Do not place `<newmsg/>` inside fenced code blocks."
     assert prompt =~ "Use `<newmsg/>` only when you intentionally want the runtime to split"
   end
 
   test "runtime context includes feishu channel ir and streaming mode", %{} do
-    config = %Config{Config.default() | feishu: %{"enabled" => true, "streaming" => true}}
+    config = %Config{
+      Config.default()
+      | channel: %{
+          "feishu_kai" => %{"type" => "feishu", "enabled" => true, "streaming" => true}
+        }
+    }
 
     context =
-      ContextBuilder.build_runtime_context("feishu", "chat-1",
+      ContextBuilder.build_runtime_context("feishu_kai", "chat-1",
         config: config,
         cwd: File.cwd!()
       )
 
-    assert context =~ "Channel: feishu"
+    assert context =~ "Channel: feishu_kai"
     assert context =~ "Chat ID: chat-1"
     assert context =~ "Channel Streaming: streaming"
     assert context =~ "Channel IR: feishu markdown-like text IR"

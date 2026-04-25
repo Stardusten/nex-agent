@@ -134,8 +134,8 @@ defmodule Nex.Agent.Runtime do
   end
 
   defp build_snapshot(%__MODULE__{} = state, opts, version) do
-    with {:ok, workspace} <- resolve_workspace(opts),
-         {:ok, config} <- call_builder(config_loader(opts, state), [opts]),
+    with {:ok, config} <- call_builder(config_loader(opts, state), [opts]),
+         {:ok, workspace} <- resolve_workspace(config, opts),
          {:ok, command_definitions} <- call_builder(command_builder(opts), []),
          {:ok, prompt, diagnostics} <-
            call_prompt_builder(prompt_builder(opts, state), [
@@ -183,7 +183,8 @@ defmodule Nex.Agent.Runtime do
         definitions_follow_up: definitions_follow_up,
         definitions_subagent: definitions_subagent,
         definitions_cron: definitions_cron,
-        hash: hash({definitions_all, definitions_follow_up, definitions_subagent, definitions_cron})
+        hash:
+          hash({definitions_all, definitions_follow_up, definitions_subagent, definitions_cron})
       }
 
       skills_data = %{
@@ -206,8 +207,10 @@ defmodule Nex.Agent.Runtime do
     end
   end
 
-  defp resolve_workspace(opts) do
-    workspace = Keyword.get(opts, :workspace) || Workspace.root(opts)
+  defp resolve_workspace(%Config{} = config, opts) do
+    workspace =
+      Keyword.get(opts, :workspace) || Config.configured_workspace(config) || Workspace.root(opts)
+
     {:ok, workspace}
   rescue
     e -> {:error, {:workspace, e}}
@@ -254,7 +257,12 @@ defmodule Nex.Agent.Runtime do
   end
 
   defp tool_definition_opts(config, workspace, surface) do
-    [config: config, workspace: workspace, surface: surface]
+    [
+      config: config,
+      workspace: workspace,
+      surface: surface,
+      model_runtime: Config.default_model_runtime(config)
+    ]
   end
 
   defp config_loader(opts, state), do: Keyword.get(opts, :config_loader, state.config_loader)
@@ -264,7 +272,9 @@ defmodule Nex.Agent.Runtime do
     do: Keyword.get(opts, :tool_definitions_builder, state.tool_definitions_builder)
 
   defp skills_builder(opts, state), do: Keyword.get(opts, :skills_builder, state.skills_builder)
-  defp command_builder(opts), do: Keyword.get(opts, :command_builder, &CommandCatalog.runtime_definitions/0)
+
+  defp command_builder(opts),
+    do: Keyword.get(opts, :command_builder, &CommandCatalog.runtime_definitions/0)
 
   defp changed_paths(opts) do
     opts

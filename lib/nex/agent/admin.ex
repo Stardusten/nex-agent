@@ -198,11 +198,15 @@ defmodule Nex.Agent.Admin do
 
         external_gateway_running?(opts) ->
           config = Config.load(config_path: Keyword.get(opts, :config_path))
+          model_runtime = Config.default_model_runtime(config)
 
           %{
             status: :running,
             started_at: nil,
-            config: %{provider: config.provider, model: config.model},
+            config: %{
+              provider: model_runtime && model_runtime.provider_key,
+              model: model_runtime && model_runtime.model_id
+            },
             services: %{},
             external: true
           }
@@ -762,12 +766,13 @@ defmodule Nex.Agent.Admin do
 
   defp current_llm_opts(opts) do
     config = Config.load(config_path: Keyword.get(opts, :config_path))
+    model_runtime = Config.default_model_runtime(config)
 
     [
-      provider: Config.provider_to_atom(config.provider),
-      model: config.model,
-      api_key: Config.get_current_api_key(config),
-      base_url: Config.get_current_base_url(config)
+      provider: model_runtime && model_runtime.provider,
+      model: model_runtime && model_runtime.model_id,
+      api_key: model_runtime && model_runtime.api_key,
+      base_url: model_runtime && model_runtime.base_url
     ]
   end
 

@@ -1,12 +1,11 @@
 defmodule Nex.Agent.Outbound do
   @moduledoc false
 
-  @spec topic_for_channel(String.t() | nil) :: atom()
+  @spec topic_for_channel(String.t() | nil) :: {:channel_outbound, String.t()} | :outbound
   def topic_for_channel(channel) do
-    case channel do
-      "feishu" -> :feishu_outbound
-      "discord" -> :discord_outbound
-      _ -> :outbound
+    case to_string(channel || "") do
+      "" -> :outbound
+      instance_id -> {:channel_outbound, instance_id}
     end
   end
 end

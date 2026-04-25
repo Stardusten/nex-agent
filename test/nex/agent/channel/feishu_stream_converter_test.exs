@@ -4,10 +4,17 @@ defmodule Nex.Agent.Channel.FeishuStreamConverterTest do
   alias Nex.Agent.{Bus, Config}
   alias Nex.Agent.Channel.Feishu
   alias Nex.Agent.Channel.Feishu.StreamConverter
+  alias Nex.Agent.Channel.Registry, as: ChannelRegistry
+
+  @instance_id "feishu_stream_test"
 
   setup do
     if Process.whereis(Bus) == nil do
       start_supervised!({Bus, name: Bus})
+    end
+
+    if Process.whereis(Nex.Agent.ChannelRegistry) == nil do
+      start_supervised!(ChannelRegistry)
     end
 
     parent = self()
@@ -36,12 +43,17 @@ defmodule Nex.Agent.Channel.FeishuStreamConverterTest do
       {:ok, %{"code" => 0, "data" => %{}}}
     end
 
-    config = %Config{Config.default() | feishu: %{"enabled" => false}}
+    config = %Config{
+      Config.default()
+      | channel: %{@instance_id => %{"type" => "feishu", "enabled" => false}}
+    }
 
     pid =
       start_supervised!(
         {Feishu,
+         instance_id: @instance_id,
          config: config,
+         channel_config: %{"type" => "feishu", "enabled" => false},
          http_post_fun: http_post_fun,
          http_put_fun: http_put_fun,
          http_post_multipart_fun: fn _url, _body, _headers -> {:error, :unused} end,
@@ -56,7 +68,7 @@ defmodule Nex.Agent.Channel.FeishuStreamConverterTest do
   end
 
   test "single newmsg splits into two cards" do
-    {:ok, c} = StreamConverter.start("ou_123", %{})
+    {:ok, c} = StreamConverter.start(@instance_id, "ou_123", %{})
     {:ok, c} = StreamConverter.push_text(c, "one\n\n<newmsg/>\n\ntwo")
     {:ok, c} = StreamConverter.finish(c)
 
@@ -70,7 +82,7 @@ defmodule Nex.Agent.Channel.FeishuStreamConverterTest do
   end
 
   test "newmsg split across flush boundary still rotates card" do
-    {:ok, c} = StreamConverter.start("ou_123", %{})
+    {:ok, c} = StreamConverter.start(@instance_id, "ou_123", %{})
     # First chunk ends with partial "<newmsg/>" → held back
     {:ok, c} = StreamConverter.push_text(c, "one\n\n<new")
     assert c.pending_buffer == "\n<new"
@@ -89,8 +101,11 @@ defmodule Nex.Agent.Channel.FeishuStreamConverterTest do
   end
 
   test "newmsg after code block rotates card (no in_code_block tracking needed)" do
-    {:ok, c} = StreamConverter.start("ou_123", %{})
-    {:ok, c} = StreamConverter.push_text(c, "```json\n{\"key\": true}\n```\n\n<newmsg/>\n\nsecond")
+    {:ok, c} = StreamConverter.start(@instance_id, "ou_123", %{})
+
+    {:ok, c} =
+      StreamConverter.push_text(c, "```json\n{\"key\": true}\n```\n\n<newmsg/>\n\nsecond")
+
     {:ok, c} = StreamConverter.finish(c)
 
     assert c.active_text == "second"
@@ -101,7 +116,7 @@ defmodule Nex.Agent.Channel.FeishuStreamConverterTest do
   end
 
   test "multiple newmsgs with code blocks across flushes" do
-    {:ok, c} = StreamConverter.start("ou_123", %{})
+    {:ok, c} = StreamConverter.start(@instance_id, "ou_123", %{})
 
     {:ok, c} = StreamConverter.push_text(c, "# Card 1\n\n```bash\necho hi\n```")
     {:ok, c} = StreamConverter.push_text(c, "\n\n<newmsg/>\n\n# Card 2\n\n```json\n{\"a\":1}")
@@ -118,7 +133,7 @@ defmodule Nex.Agent.Channel.FeishuStreamConverterTest do
   end
 
   test "inline newmsg mention does not rotate" do
-    {:ok, c} = StreamConverter.start("ou_123", %{})
+    {:ok, c} = StreamConverter.start(@instance_id, "ou_123", %{})
     {:ok, c} = StreamConverter.push_text(c, "Use `<newmsg/>` to split messages.")
     {:ok, c} = StreamConverter.finish(c)
 
@@ -130,7 +145,7 @@ defmodule Nex.Agent.Channel.FeishuStreamConverterTest do
   end
 
   test "newmsg not on its own line does not rotate" do
-    {:ok, c} = StreamConverter.start("ou_123", %{})
+    {:ok, c} = StreamConverter.start(@instance_id, "ou_123", %{})
     {:ok, c} = StreamConverter.push_text(c, "some text <newmsg/> more text")
     {:ok, c} = StreamConverter.finish(c)
 
@@ -142,7 +157,7 @@ defmodule Nex.Agent.Channel.FeishuStreamConverterTest do
   end
 
   test "close_streaming_mode called on rotate and finish" do
-    {:ok, c} = StreamConverter.start("ou_123", %{})
+    {:ok, c} = StreamConverter.start(@instance_id, "ou_123", %{})
     {:ok, c} = StreamConverter.push_text(c, "one\n\n<newmsg/>\n\ntwo")
     {:ok, c} = StreamConverter.finish(c)
 
@@ -155,7 +170,7 @@ defmodule Nex.Agent.Channel.FeishuStreamConverterTest do
   end
 
   test "fail with active card appends error" do
-    {:ok, c} = StreamConverter.start("ou_123", %{})
+    {:ok, c} = StreamConverter.start(@instance_id, "ou_123", %{})
     {:ok, c} = StreamConverter.push_text(c, "partial content")
     {:ok, c} = StreamConverter.fail(c, "something went wrong")
 
@@ -165,7 +180,7 @@ defmodule Nex.Agent.Channel.FeishuStreamConverterTest do
   end
 
   test "fail without active card creates error card" do
-    {:ok, c} = StreamConverter.start("ou_123", %{})
+    {:ok, c} = StreamConverter.start(@instance_id, "ou_123", %{})
     # Simulate: card rotated away, no active card
     c = %{c | active_card_id: nil, active_text: ""}
     {:ok, c} = StreamConverter.fail(c, "total failure")

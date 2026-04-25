@@ -127,6 +127,7 @@ defmodule Nex.Agent.ContextBuilder do
     - Normal assistant replies stay model-side plain text. Channel-specific rendering happens after generation.
     - Do not emit platform JSON payloads unless a tool explicitly requires them.
     - `<newmsg/>` is a platform text IR separator, not prose. Never explain or expose it to the user.
+    - When using `<newmsg/>`, put exactly `<newmsg/>` on its own line with a blank line before and after it.
     - Do not place `<newmsg/>` inside fenced code blocks.
     - Use `<newmsg/>` only when you intentionally want the runtime to split or separate user-visible sections.
     - If a structure is not reliably supported by the current channel, prefer simpler markdown-like text instead of inventing unsupported syntax.
@@ -334,6 +335,7 @@ defmodule Nex.Agent.ContextBuilder do
 
   defp channel_runtime_lines(channel, %Config{} = config) do
     channel_runtime = Config.channel_runtime(config, channel)
+    channel_type = Map.get(channel_runtime, "type")
     streaming? = Map.get(channel_runtime, "streaming", false) == true
 
     base = ["Channel Streaming: #{if streaming?, do: "streaming", else: "single"}"]
@@ -341,7 +343,7 @@ defmodule Nex.Agent.ContextBuilder do
     newmsg_guidance =
       "`<newmsg/>` splits your reply into separate messages. Place it on its own line between paragraphs."
 
-    case channel do
+    case channel_type do
       "feishu" ->
         base ++
           [

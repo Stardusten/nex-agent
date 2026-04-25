@@ -138,16 +138,22 @@ defmodule Nex.Agent.PersonalSummary do
   defp workspace_opts(nil), do: []
   defp workspace_opts(workspace), do: [workspace: workspace]
 
-  defp personal_chat?("feishu", _chat_id, opts) do
+  defp personal_chat?(channel, _chat_id, opts) do
     metadata = Keyword.get(opts, :metadata, %{})
-    chat_type = Map.get(metadata, "chat_type") || Map.get(metadata, :chat_type)
-    to_string(chat_type) == "p2p"
-  end
 
-  defp personal_chat?("discord", _chat_id, opts) do
-    metadata = Keyword.get(opts, :metadata, %{})
-    is_nil(Map.get(metadata, "guild_id") || Map.get(metadata, :guild_id))
-  end
+    channel_type =
+      Map.get(metadata, "channel_type") || Map.get(metadata, :channel_type) || channel
 
-  defp personal_chat?(_channel, _chat_id, _opts), do: false
+    case to_string(channel_type) do
+      "feishu" ->
+        chat_type = Map.get(metadata, "chat_type") || Map.get(metadata, :chat_type)
+        to_string(chat_type) == "p2p"
+
+      "discord" ->
+        is_nil(Map.get(metadata, "guild_id") || Map.get(metadata, :guild_id))
+
+      _ ->
+        false
+    end
+  end
 end

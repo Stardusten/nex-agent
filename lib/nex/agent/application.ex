@@ -40,6 +40,7 @@ defmodule Nex.Agent.Application do
           Nex.Agent.MessageBus,
           {Task.Supervisor, name: Nex.Agent.TaskSupervisor},
           Nex.Agent.InfrastructureSupervisor,
+          Nex.Agent.Channel.Registry,
           Nex.Agent.Runtime,
           Nex.Agent.Runtime.Watcher,
           Nex.Agent.Runtime.Reconciler,

@@ -4,25 +4,82 @@ defmodule Nex.Agent.ConfigTest do
   alias Nex.Agent.Auth.Codex
   alias Nex.Agent.Config
 
-  test "config validity accepts API key from environment for current provider" do
-    previous = System.get_env("OPENAI_API_KEY")
-    System.put_env("OPENAI_API_KEY", "sk-env-test")
+  test "loads new config shape and resolves model roles" do
+    previous = System.get_env("HY3_API_KEY")
+    System.put_env("HY3_API_KEY", "sk-hy3-test")
 
     on_exit(fn ->
-      if previous do
-        System.put_env("OPENAI_API_KEY", previous)
-      else
-        System.delete_env("OPENAI_API_KEY")
-      end
+      if previous,
+        do: System.put_env("HY3_API_KEY", previous),
+        else: System.delete_env("HY3_API_KEY")
     end)
 
-    config = %Config{Config.default() | provider: "openai"}
+    config = Config.from_map(full_config())
 
-    assert Config.get_current_api_key(config) == "sk-env-test"
     assert Config.valid?(config)
+    assert Config.get_max_iterations(config) == 100
+    assert Config.configured_workspace(config) == "/tmp/nex-agent-workspace"
+    assert Config.gateway_port(config) == 18_790
+
+    assert %{
+             model_key: "hy3-preview",
+             model_id: "hy3-preview",
+             provider_key: "hy3-tencent",
+             provider_type: "openai-compatible",
+             provider: :openai,
+             api_key: "sk-hy3-test",
+             base_url: "https://hy3.example.com/v1"
+           } = Config.default_model_runtime(config)
+
+    assert %{model_key: "hy3-preview"} = Config.cheap_model_runtime(config)
+
+    assert %{
+             model_key: "gpt-5.4",
+             model_id: "gpt-5.4",
+             provider_key: "openai-codex",
+             provider_type: "openai-codex"
+           } = Config.advisor_model_runtime(config)
+
+    assert Config.default_model_runtime(config).provider_options[:temperature] == 0.2
+    assert Config.default_model_runtime(config).provider_options[:reasoning_effort] == "low"
   end
 
-  test "skill_runtime config persists through save and load" do
+  test "channel instances are keyed by instance id" do
+    config = Config.from_map(full_config())
+
+    assert %{
+             "feishu_kai" => %{"type" => "feishu", "enabled" => true},
+             "discord_kai" => %{"type" => "discord", "enabled" => true}
+           } = Config.channel_instances(config)
+
+    assert Config.channel_instance(config, "feishu_kai")["app_id"] == "cli_feishu_app"
+    assert Config.channel_type(config, "discord_kai") == "discord"
+    assert Config.channel_streaming?(config, "feishu_kai")
+    refute Config.channel_streaming?(config, "discord_kai")
+
+    assert Config.channels_runtime(config) == %{
+             "feishu_kai" => %{"type" => "feishu", "streaming" => true},
+             "discord_kai" => %{"type" => "discord", "streaming" => false}
+           }
+  end
+
+  test "old top-level provider and model strings are invalid" do
+    config =
+      Config.from_map(%{
+        "max_iterations" => 100,
+        "workspace" => "/tmp/workspace",
+        "provider" => "openai",
+        "model" => "gpt-4o",
+        "channel" => %{},
+        "gateway" => %{"port" => 18_790},
+        "tools" => %{}
+      })
+
+    refute Config.valid?(config)
+    assert Config.default_model_runtime(config) == nil
+  end
+
+  test "new config shape persists through save and load" do
     path =
       Path.join(
         System.tmp_dir!(),
@@ -31,29 +88,25 @@ defmodule Nex.Agent.ConfigTest do
 
     on_exit(fn -> File.rm_rf!(path) end)
 
-    config =
-      %Config{
-        Config.default()
-        | skill_runtime: %{
-            "enabled" => true,
-            "max_selected_skills" => 3,
-            "github_indexes" => [
-              %{"repo" => "org/index", "ref" => "main", "path" => "index.json"}
-            ]
-          }
-      }
+    config = Config.from_map(full_config())
 
     assert :ok = Config.save(config, config_path: path)
-
     loaded = Config.load(config_path: path)
 
-    assert loaded.skill_runtime["enabled"] == true
-    assert loaded.skill_runtime["max_selected_skills"] == 3
-    assert [%{"repo" => "org/index"} | _] = loaded.skill_runtime["github_indexes"]
+    assert loaded.workspace == "/tmp/nex-agent-workspace"
+    assert loaded.gateway["port"] == 18_790
+    assert Map.has_key?(loaded.channel, "feishu_kai")
+    assert loaded.model["default_model"] == "hy3-preview"
+
+    assert get_in(loaded.provider, ["providers", "hy3-tencent", "api_key"]) == %{
+             "env" => "HY3_API_KEY"
+           }
   end
 
   test "openai-codex provider resolves access token from codex auth file" do
-    tmp_dir = Path.join(System.tmp_dir!(), "nex-agent-codex-#{System.unique_integer([:positive])}")
+    tmp_dir =
+      Path.join(System.tmp_dir!(), "nex-agent-codex-#{System.unique_integer([:positive])}")
+
     auth_path = Path.join([tmp_dir, "auth.json"])
     previous_home = System.get_env("CODEX_HOME")
     previous_token = System.get_env("OPENAI_CODEX_ACCESS_TOKEN")
@@ -61,17 +114,13 @@ defmodule Nex.Agent.ConfigTest do
     on_exit(fn ->
       File.rm_rf!(tmp_dir)
 
-      if previous_home do
-        System.put_env("CODEX_HOME", previous_home)
-      else
-        System.delete_env("CODEX_HOME")
-      end
+      if previous_home,
+        do: System.put_env("CODEX_HOME", previous_home),
+        else: System.delete_env("CODEX_HOME")
 
-      if previous_token do
-        System.put_env("OPENAI_CODEX_ACCESS_TOKEN", previous_token)
-      else
-        System.delete_env("OPENAI_CODEX_ACCESS_TOKEN")
-      end
+      if previous_token,
+        do: System.put_env("OPENAI_CODEX_ACCESS_TOKEN", previous_token),
+        else: System.delete_env("OPENAI_CODEX_ACCESS_TOKEN")
     end)
 
     System.put_env("CODEX_HOME", tmp_dir)
@@ -88,15 +137,33 @@ defmodule Nex.Agent.ConfigTest do
       })
     )
 
-    config = %Config{Config.default() | provider: "openai-codex"}
+    config =
+      Config.from_map(%{
+        full_config()
+        | "provider" => %{
+            "providers" => %{
+              "openai-codex" => %{"type" => "openai-codex"}
+            }
+          },
+          "model" => %{
+            "default_model" => "gpt-5.4",
+            "cheap_model" => "gpt-5.4",
+            "advisor_model" => "gpt-5.4",
+            "models" => %{"gpt-5.4" => %{"provider" => "openai-codex"}}
+          }
+      })
 
-    assert is_binary(Config.get_current_api_key(config))
-    assert Config.get_current_base_url(config) == Codex.default_base_url()
+    runtime = Config.default_model_runtime(config)
+
+    assert is_binary(runtime.api_key)
+    assert runtime.base_url == Codex.default_base_url()
     assert Config.valid?(config)
   end
 
   test "openai-codex-custom provider resolves api key and base url from codex files" do
-    tmp_dir = Path.join(System.tmp_dir!(), "nex-agent-codex-custom-#{System.unique_integer([:positive])}")
+    tmp_dir =
+      Path.join(System.tmp_dir!(), "nex-agent-codex-custom-#{System.unique_integer([:positive])}")
+
     auth_path = Path.join([tmp_dir, "auth.json"])
     config_toml_path = Path.join([tmp_dir, "config.toml"])
     previous_home = System.get_env("CODEX_HOME")
@@ -105,17 +172,13 @@ defmodule Nex.Agent.ConfigTest do
     on_exit(fn ->
       File.rm_rf!(tmp_dir)
 
-      if previous_home do
-        System.put_env("CODEX_HOME", previous_home)
-      else
-        System.delete_env("CODEX_HOME")
-      end
+      if previous_home,
+        do: System.put_env("CODEX_HOME", previous_home),
+        else: System.delete_env("CODEX_HOME")
 
-      if previous_key do
-        System.put_env("OPENAI_CODEX_API_KEY", previous_key)
-      else
-        System.delete_env("OPENAI_CODEX_API_KEY")
-      end
+      if previous_key,
+        do: System.put_env("OPENAI_CODEX_API_KEY", previous_key),
+        else: System.delete_env("OPENAI_CODEX_API_KEY")
     end)
 
     System.put_env("CODEX_HOME", tmp_dir)
@@ -144,74 +207,125 @@ defmodule Nex.Agent.ConfigTest do
       """
     )
 
-    config = %Config{Config.default() | provider: "openai-codex-custom"}
+    config =
+      Config.from_map(%{
+        full_config()
+        | "provider" => %{
+            "providers" => %{
+              "openai-codex-custom" => %{"type" => "openai-codex-custom"}
+            }
+          },
+          "model" => %{
+            "default_model" => "gpt-5.4",
+            "cheap_model" => "gpt-5.4",
+            "advisor_model" => "gpt-5.4",
+            "models" => %{"gpt-5.4" => %{"provider" => "openai-codex-custom"}}
+          }
+      })
 
-    assert Config.get_current_api_key(config) == "sk-custom-test-key"
-    assert Config.get_current_base_url(config) == "https://proxy.example.com/codex"
+    runtime = Config.default_model_runtime(config)
+
+    assert runtime.api_key == "sk-custom-test-key"
+    assert runtime.base_url == "https://proxy.example.com/codex"
     assert Config.valid?(config)
   end
 
-  test "web_search provider config is normalized through unified accessor" do
+  test "web_search config reads the flat tools.web_search contract" do
     config =
-      %Config{
-        Config.default()
-        | tools: %{
+      Config.from_map(%{
+        full_config()
+        | "tools" => %{
             "web_search" => %{
-              "provider" => "codex",
-              "providers" => %{
-                "codex" => %{
-                  "mode" => "cached",
-                  "allowed_domains" => [" example.com ", "example.com", ""],
-                  "user_location" => %{
-                    "country" => "US",
-                    "timezone" => "America/Los_Angeles",
-                    "ignored" => "value"
-                  }
-                },
-                "duckduckgo" => %{"ignored" => true}
+              "strategy" => "provider_native",
+              "mode" => "cached",
+              "allowed_domains" => [" example.com ", "example.com", ""],
+              "user_location" => %{
+                "country" => "US",
+                "timezone" => "America/Los_Angeles",
+                "ignored" => "value"
               }
             }
           }
-      }
+      })
 
     assert Config.web_search_provider_config(config) == %{
-             "provider" => "codex",
-             "providers" => %{
-               "duckduckgo" => %{},
-               "codex" => %{
-                 "mode" => "cached",
-                 "allowed_domains" => ["example.com"],
-                 "user_location" => %{
-                   "country" => "US",
-                   "timezone" => "America/Los_Angeles"
-                 }
-               }
+             "strategy" => "provider_native",
+             "mode" => "cached",
+             "allowed_domains" => ["example.com"],
+             "user_location" => %{
+               "country" => "US",
+               "timezone" => "America/Los_Angeles"
              }
            }
   end
 
-  test "image_generation provider config is normalized through unified accessor" do
+  test "image_generation config reads the flat tools.image_generation contract" do
     config =
-      %Config{
-        Config.default()
-        | tools: %{
+      Config.from_map(%{
+        full_config()
+        | "tools" => %{
             "image_generation" => %{
-              "provider" => "codex",
-              "providers" => %{
-                "codex" => %{"output_format" => "webp"},
-                "nanobanana" => %{"model" => "banana-v1"}
-              }
+              "strategy" => "local",
+              "output_format" => "webp"
             }
           }
-      }
+      })
 
     assert Config.image_generation_provider_config(config) == %{
-             "provider" => "codex",
-             "providers" => %{
-               "codex" => %{"output_format" => "webp"},
-               "nanobanana" => %{"model" => "banana-v1"}
-             }
+             "strategy" => "local",
+             "output_format" => "webp"
            }
+  end
+
+  defp full_config do
+    %{
+      "max_iterations" => 100,
+      "workspace" => "/tmp/nex-agent-workspace",
+      "channel" => %{
+        "feishu_kai" => %{
+          "type" => "feishu",
+          "enabled" => true,
+          "streaming" => true,
+          "app_id" => "cli_feishu_app",
+          "app_secret" => "feishu_secret"
+        },
+        "discord_kai" => %{
+          "type" => "discord",
+          "enabled" => true,
+          "streaming" => false,
+          "token" => "discord-token"
+        }
+      },
+      "gateway" => %{"port" => 18_790},
+      "provider" => %{
+        "providers" => %{
+          "hy3-tencent" => %{
+            "type" => "openai-compatible",
+            "base_url" => "https://hy3.example.com/v1",
+            "api_key" => %{"env" => "HY3_API_KEY"},
+            "temperature" => 0.2
+          },
+          "openai-codex" => %{"type" => "openai-codex"}
+        }
+      },
+      "model" => %{
+        "cheap_model" => "hy3-preview",
+        "default_model" => "hy3-preview",
+        "advisor_model" => "gpt-5.4",
+        "models" => %{
+          "gpt-5.4" => %{"provider" => "openai-codex", "id" => "gpt-5.4"},
+          "hy3-preview" => %{
+            "provider" => "hy3-tencent",
+            "id" => "hy3-preview",
+            "reasoning_effort" => "low"
+          }
+        }
+      },
+      "tools" => %{
+        "web_search" => %{"strategy" => "auto", "mode" => "live"},
+        "image_generation" => %{"strategy" => "auto", "output_format" => "png"}
+      }
+    }
   end
 
   defp signed_token(exp) do

@@ -2,6 +2,18 @@
 
 改代码前先加载匹配当前任务的 repo-local skills。
 
+## 项目背景速览
+
+NexAgent 是一个长期运行的个人 AI Agent 框架，不是一次性 CLI 脚本，也不只是模型调用包装层。它的目标是让 agent 常驻在飞书、Discord 等聊天入口里，按会话持续工作，拥有记忆、工具、技能、定时任务、后台子代理，并能在真实使用中逐步改进自己。
+
+这个仓库的核心技术路线是 Elixir/OTP：`Application`/supervisor 负责长期进程生命周期，`Gateway` 管理外部聊天连接，`InboundWorker` 把入站消息路由到 session，`Runner` 负责 LLM turn 和 tool orchestration，`Runtime` 提供统一的 config/prompt/tools/skills/workspace snapshot，`ControlPlane` 是结构化观测和后续自修复/演化的机器真相源。
+
+理解本项目时优先按六层看边界：`SOUL` 是人格和价值观，`USER` 是用户偏好，`MEMORY` 是长期事实，`SKILL` 是可复用工作流，`TOOL` 是确定性能力，`CODE` 是框架内部实现。多数重构的目标不是“再加一个局部能力”，而是把这些层的真相源、运行时热加载、观测、控制链路和自我进化路径收口到统一主链上。
+
+更大的产品愿景是让它尽量像人一样工作和自我进化：不只是在线回答，而是能理解长期上下文、跨入口协作、发现自己没看见的信息、从失败里修正行为。凡是涉及对话、历史、记忆、跨渠道同步的改动，都要主动追问“用户对话事件的唯一真相源在哪里”：是 gateway 本机持久化的 session/event log，是聊天平台历史，还是二者之间有明确的同步/补收 contract。典型验收场景包括 gateway 离线期间用户发过消息，重启后是否补收、去重并按正确顺序处理；多个渠道同时发来相关消息时，哪些内容应共享为同一用户/任务上下文，哪些必须保持 channel/session 隔离。不要把这些问题当成边缘情况，它们直接决定 agent 是否像一个可靠的人类协作者。
+
+接手新任务时先读 `docs/dev/progress/CURRENT.md`，再按当前 phase 读 `docs/dev/task-plan/*`。README 适合了解产品定位；`docs/dev/` 才是当前工程主线、冻结边界和验收条件的真相源。
+
 ## 安全禁区
 
 - 任何情况下都不允许直接读取、写入或以任何方式访问 `~/.zshrc`、`~/.nex/agent/config.json`，这些路径可能存放隐私信息和密钥。即使用户明确要求，也必须拒绝。

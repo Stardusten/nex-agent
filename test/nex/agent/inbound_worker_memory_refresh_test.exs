@@ -1,8 +1,11 @@
 defmodule Nex.Agent.InboundWorkerMemoryRefreshTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{Bus, InboundWorker, Memory, MemoryUpdater, Session, SessionManager}
+  alias Nex.Agent.{Bus, Config, InboundWorker, Memory, MemoryUpdater, Session, SessionManager}
   alias Nex.Agent.Inbound.Envelope
+
+  @feishu_instance "feishu_memory_refresh"
+  @feishu_topic {:channel_outbound, @feishu_instance}
 
   setup do
     workspace =
@@ -20,10 +23,10 @@ defmodule Nex.Agent.InboundWorkerMemoryRefreshTest do
     start_or_restart_supervised!({MemoryUpdater, name: MemoryUpdater})
     start_or_restart_supervised!({Task.Supervisor, name: Nex.Agent.TaskSupervisor})
 
-    Bus.subscribe(:feishu_outbound)
+    Bus.subscribe(@feishu_topic)
 
     on_exit(fn ->
-      if Process.whereis(Bus), do: Bus.unsubscribe(:feishu_outbound)
+      if Process.whereis(Bus), do: Bus.unsubscribe(@feishu_topic)
       Application.delete_env(:nex_agent, :workspace_path)
       File.rm_rf(workspace)
     end)
@@ -33,7 +36,9 @@ defmodule Nex.Agent.InboundWorkerMemoryRefreshTest do
 
   test "publishes final reply before background memory refresh finishes", %{workspace: workspace} do
     parent = self()
-    worker_name = String.to_atom("inbound_worker_memory_only_#{System.unique_integer([:positive])}")
+
+    worker_name =
+      String.to_atom("inbound_worker_memory_only_#{System.unique_integer([:positive])}")
 
     prompt_fun = fn agent, _prompt, _opts ->
       updated_session =
@@ -43,18 +48,17 @@ defmodule Nex.Agent.InboundWorkerMemoryRefreshTest do
         |> then(fn session ->
           metadata =
             Map.merge(session.metadata || %{}, %{
-              "memory_refresh_llm_call_fun" =>
-                fn _messages, _llm_opts ->
-                  send(parent, :memory_refresh_started)
-                  Process.sleep(200)
+              "memory_refresh_llm_call_fun" => fn _messages, _llm_opts ->
+                send(parent, :memory_refresh_started)
+                Process.sleep(200)
 
-                  {:ok,
-                   %{
-                     "status" => "update",
-                     "memory_update" =>
-                       "# Long-term Memory\n\n## User Preferences\n- Likes concise replies.\n"
-                   }}
-                end
+                {:ok,
+                 %{
+                   "status" => "update",
+                   "memory_update" =>
+                     "# Long-term Memory\n\n## User Preferences\n- Likes concise replies.\n"
+                 }}
+              end
             })
 
           %{session | metadata: metadata}
@@ -63,25 +67,28 @@ defmodule Nex.Agent.InboundWorkerMemoryRefreshTest do
       {:ok, "final reply", %{agent | session: updated_session, workspace: workspace}}
     end
 
-    start_supervised!({InboundWorker, name: worker_name, agent_prompt_fun: prompt_fun})
+    start_supervised!(
+      {InboundWorker,
+       name: worker_name, config: default_worker_config(), agent_prompt_fun: prompt_fun}
+    )
 
     send(Process.whereis(worker_name), {
       :bus_message,
       :inbound,
       %Envelope{
-        channel: "feishu",
+        channel: @feishu_instance,
         chat_id: "chat-memory",
         sender_id: "tester",
         text: "hello",
         message_type: :text,
         raw: %{},
-        metadata: %{},
+        metadata: %{"channel_type" => "feishu"},
         media_refs: [],
         attachments: []
       }
     })
 
-    assert_receive {:bus_message, :feishu_outbound, payload}, 1_000
+    assert_receive {:bus_message, @feishu_topic, payload}, 1_000
     assert payload.content == "final reply"
     assert Memory.read_long_term(workspace: workspace) == "# Memory\n"
 
@@ -90,6 +97,35 @@ defmodule Nex.Agent.InboundWorkerMemoryRefreshTest do
     wait_for(fn ->
       Memory.read_long_term(workspace: workspace) =~ "Likes concise replies."
     end)
+  end
+
+  defp default_worker_config do
+    %Config{
+      Config.default()
+      | channel: %{
+          @feishu_instance => %{
+            "type" => "feishu",
+            "enabled" => true,
+            "streaming" => false,
+            "app_id" => "app",
+            "app_secret" => "secret"
+          }
+        },
+        provider: %{
+          "providers" => %{
+            "ollama-local" => %{
+              "type" => "ollama",
+              "base_url" => "http://localhost:11434"
+            }
+          }
+        },
+        model: %{
+          "default_model" => "local-test",
+          "cheap_model" => "local-test",
+          "advisor_model" => "local-test",
+          "models" => %{"local-test" => %{"provider" => "ollama-local", "id" => "local-test"}}
+        }
+    }
   end
 
   defp start_or_restart_supervised!(child_spec) do

@@ -59,6 +59,9 @@ defmodule Nex.Agent.RunnerEvolutionTest do
 
   alias Nex.Agent.ControlPlane.Query, as: ControlPlaneQuery
 
+  @feishu_instance "feishu_runner_evolution"
+  @feishu_topic {:channel_outbound, @feishu_instance}
+
   setup do
     workspace =
       Path.join(System.tmp_dir!(), "nex-agent-runner-#{System.unique_integer([:positive])}")
@@ -865,8 +868,8 @@ defmodule Nex.Agent.RunnerEvolutionTest do
 
   test "message tool to current chat suppresses follow-up direct reply", %{workspace: workspace} do
     parent = self()
-    Bus.subscribe(:feishu_outbound)
-    on_exit(fn -> Bus.unsubscribe(:feishu_outbound) end)
+    Bus.subscribe(@feishu_topic)
+    on_exit(fn -> Bus.unsubscribe(@feishu_topic) end)
 
     llm_client = fn _messages, _opts ->
       case Process.get(:llm_call_count, 0) do
@@ -895,25 +898,25 @@ defmodule Nex.Agent.RunnerEvolutionTest do
     end
 
     assert {:ok, :message_sent, _session} =
-             Runner.run(Session.new("feishu:ou_current"), "123",
+             Runner.run(Session.new("#{@feishu_instance}:ou_current"), "123",
                llm_stream_client: stream_client_from_response(llm_client),
                workspace: workspace,
                skip_consolidation: true,
-               channel: "feishu",
+               channel: @feishu_instance,
                chat_id: "ou_current"
              )
 
     assert_receive :runner_current_message_done
 
-    assert_receive {:bus_message, :feishu_outbound, payload}
+    assert_receive {:bus_message, @feishu_topic, payload}
     assert payload.content == "收到 123 👋"
     assert payload.metadata["_from_tool"] == true
   end
 
   test "message tool to another chat does not suppress current reply", %{workspace: workspace} do
     parent = self()
-    Bus.subscribe(:feishu_outbound)
-    on_exit(fn -> Bus.unsubscribe(:feishu_outbound) end)
+    Bus.subscribe(@feishu_topic)
+    on_exit(fn -> Bus.unsubscribe(@feishu_topic) end)
 
     llm_client = fn _messages, _opts ->
       case Process.get(:llm_call_count, 0) do
@@ -931,7 +934,7 @@ defmodule Nex.Agent.RunnerEvolutionTest do
                    name: "message",
                    arguments: %{
                      "content" => "给另一个会话的通知",
-                     "channel" => "feishu",
+                     "channel" => @feishu_instance,
                      "chat_id" => "ou_other"
                    }
                  }
@@ -946,17 +949,17 @@ defmodule Nex.Agent.RunnerEvolutionTest do
     end
 
     assert {:ok, "当前会话的最终回复", _session} =
-             Runner.run(Session.new("feishu:ou_current"), "123",
+             Runner.run(Session.new("#{@feishu_instance}:ou_current"), "123",
                llm_stream_client: stream_client_from_response(llm_client),
                workspace: workspace,
                skip_consolidation: true,
-               channel: "feishu",
+               channel: @feishu_instance,
                chat_id: "ou_current"
              )
 
     assert_receive :runner_other_message_done
 
-    assert_receive {:bus_message, :feishu_outbound, payload}
+    assert_receive {:bus_message, @feishu_topic, payload}
     assert payload.chat_id == "ou_other"
     assert payload.content == "给另一个会话的通知"
   end

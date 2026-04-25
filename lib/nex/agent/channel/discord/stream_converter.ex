@@ -12,6 +12,7 @@ defmodule Nex.Agent.Channel.Discord.StreamConverter do
   @placeholder_text "🤔 Thinking..."
 
   defstruct [
+    :instance_id,
     :chat_id,
     :metadata,
     :current_message_id,
@@ -24,6 +25,7 @@ defmodule Nex.Agent.Channel.Discord.StreamConverter do
 
   @type t :: %__MODULE__{
           chat_id: String.t(),
+          instance_id: String.t(),
           metadata: map(),
           current_message_id: String.t() | nil,
           started_at: integer() | nil,
@@ -33,16 +35,18 @@ defmodule Nex.Agent.Channel.Discord.StreamConverter do
           completed: boolean()
         }
 
-  @spec start(String.t(), map()) :: {:ok, t()} | {:error, term()}
-  def start(chat_id, metadata) when is_binary(chat_id) and is_map(metadata) do
+  @spec start(String.t(), String.t(), map()) :: {:ok, t()} | {:error, term()}
+  def start(instance_id, chat_id, metadata)
+      when is_binary(instance_id) and is_binary(chat_id) and is_map(metadata) do
     state = %__MODULE__{
+      instance_id: instance_id,
       chat_id: chat_id,
       metadata: metadata,
       started_at: System.monotonic_time(:second)
     }
 
     # Send the initial "Thinking..." placeholder message
-    case Discord.deliver_message(chat_id, @placeholder_text, metadata) do
+    case Discord.deliver_message(instance_id, chat_id, @placeholder_text, metadata) do
       {:ok, message_id} ->
         {:ok,
          %{
@@ -232,7 +236,7 @@ defmodule Nex.Agent.Channel.Discord.StreamConverter do
   end
 
   defp send_new_message(%__MODULE__{} = state, text) do
-    case Discord.deliver_message(state.chat_id, text, state.metadata) do
+    case Discord.deliver_message(state.instance_id, state.chat_id, text, state.metadata) do
       {:ok, message_id} ->
         {:ok,
          %{
@@ -257,6 +261,7 @@ defmodule Nex.Agent.Channel.Discord.StreamConverter do
       {:ok, state}
     else
       case Discord.update_message(
+             state.instance_id,
              state.chat_id,
              state.current_message_id,
              text,

@@ -172,7 +172,8 @@ defmodule Nex.Agent.Evolution do
     {:ok, completed_result(evidence, :low, candidates)}
   end
 
-  defp run_cycle_with_evidence(evidence, budget_mode, opts) when budget_mode in [:normal, :deep] do
+  defp run_cycle_with_evidence(evidence, budget_mode, opts)
+       when budget_mode in [:normal, :deep] do
     profile = evidence["profile"] |> normalize_profile()
 
     case spend_budget(profile, opts) do
@@ -377,8 +378,14 @@ defmodule Nex.Agent.Evolution do
       |> Map.get("kind", "record_only")
       |> to_string()
 
-    if kind in ["record_only", "reflection_candidate", "memory_candidate", "skill_candidate",
-                "soul_candidate", "code_hint"] do
+    if kind in [
+         "record_only",
+         "reflection_candidate",
+         "memory_candidate",
+         "skill_candidate",
+         "soul_candidate",
+         "code_hint"
+       ] do
       evidence_ids =
         candidate
         |> Map.get("evidence_ids", [])
@@ -550,14 +557,15 @@ defmodule Nex.Agent.Evolution do
 
   defp resolve_runtime_llm_opts(opts) do
     config = Config.load(config_opts(opts))
-    provider = Keyword.get(opts, :provider, config.provider)
-    provider_name = provider_name(provider)
+    model_runtime = Config.default_model_runtime(config)
 
     [
-      provider: Config.provider_to_atom(provider),
-      model: Keyword.get(opts, :model, config.model),
-      api_key: Keyword.get(opts, :api_key) || Config.get_api_key(config, provider_name),
-      base_url: Keyword.get(opts, :base_url) || Config.get_base_url(config, provider_name)
+      provider: Keyword.get(opts, :provider) || (model_runtime && model_runtime.provider),
+      model: Keyword.get(opts, :model) || (model_runtime && model_runtime.model_id),
+      api_key: Keyword.get(opts, :api_key) || (model_runtime && model_runtime.api_key),
+      base_url: Keyword.get(opts, :base_url) || (model_runtime && model_runtime.base_url),
+      provider_options:
+        Keyword.get(opts, :provider_options) || (model_runtime && model_runtime.provider_options)
     ]
   end
 
@@ -605,9 +613,6 @@ defmodule Nex.Agent.Evolution do
   defp tool_choice_for(_provider, name), do: %{type: "tool", name: name}
   defp maybe_put_opt(opts, _key, nil), do: opts
   defp maybe_put_opt(opts, key, value), do: Keyword.put(opts, key, value)
-
-  defp provider_name(provider) when is_binary(provider), do: provider
-  defp provider_name(provider) when is_atom(provider), do: Atom.to_string(provider)
 
   defp config_opts(opts) do
     case Keyword.get(opts, :config_path) do

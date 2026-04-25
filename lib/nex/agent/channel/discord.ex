@@ -39,6 +39,7 @@ defmodule Nex.Agent.Channel.Discord do
         }
 
   defstruct [
+    :instance_id,
     :token,
     :allow_from,
     :guild_id,
@@ -57,6 +58,7 @@ defmodule Nex.Agent.Channel.Discord do
   ]
 
   @type t :: %__MODULE__{
+          instance_id: String.t(),
           token: String.t(),
           allow_from: [String.t()],
           guild_id: String.t() | nil,
@@ -78,13 +80,14 @@ defmodule Nex.Agent.Channel.Discord do
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
-    name = Keyword.get(opts, :name, __MODULE__)
+    instance_id = Keyword.fetch!(opts, :instance_id)
+    name = Keyword.get(opts, :name, Nex.Agent.Channel.Registry.via(instance_id))
     GenServer.start_link(__MODULE__, opts, name: name)
   end
 
-  @spec send_message(String.t(), String.t(), map()) :: :ok
-  def send_message(channel_id, content, metadata \\ %{}) do
-    Bus.publish(:discord_outbound, %{
+  @spec send_message(String.t(), String.t(), String.t(), map()) :: :ok
+  def send_message(instance_id, channel_id, content, metadata \\ %{}) do
+    Bus.publish(Nex.Agent.Outbound.topic_for_channel(instance_id), %{
       chat_id: to_string(channel_id),
       content: content,
       metadata: metadata
@@ -92,22 +95,22 @@ defmodule Nex.Agent.Channel.Discord do
   end
 
   @doc "Send a Discord message synchronously and return the created message_id."
-  @spec deliver_message(String.t(), String.t(), map()) ::
+  @spec deliver_message(String.t(), String.t(), String.t(), map()) ::
           {:ok, String.t()} | {:error, term()}
-  def deliver_message(channel_id, content, metadata \\ %{}) do
-    if Process.whereis(__MODULE__) do
-      GenServer.call(__MODULE__, {:deliver_message, channel_id, content, metadata}, 15_000)
-    else
-      {:error, :discord_not_running}
+  def deliver_message(instance_id, channel_id, content, metadata \\ %{}) do
+    case Nex.Agent.Channel.Registry.whereis(instance_id) do
+      nil -> {:error, :discord_not_running}
+      pid -> GenServer.call(pid, {:deliver_message, channel_id, content, metadata}, 15_000)
     end
   end
 
   @doc "Edit an existing Discord message synchronously."
-  @spec update_message(String.t(), String.t(), String.t(), map()) :: :ok | {:error, term()}
-  def update_message(channel_id, message_id, content, metadata \\ %{}) do
-    if Process.whereis(__MODULE__) do
+  @spec update_message(String.t(), String.t(), String.t(), String.t(), map()) ::
+          :ok | {:error, term()}
+  def update_message(instance_id, channel_id, message_id, content, metadata \\ %{}) do
+    if pid = Nex.Agent.Channel.Registry.whereis(instance_id) do
       GenServer.call(
-        __MODULE__,
+        pid,
         {:update_message, channel_id, message_id, content, metadata},
         15_000
       )
@@ -117,30 +120,30 @@ defmodule Nex.Agent.Channel.Discord do
   end
 
   @doc "Add a Unicode emoji reaction to a message. Fire-and-forget."
-  @spec add_reaction(String.t(), String.t(), String.t()) :: :ok
-  def add_reaction(channel_id, message_id, emoji) do
-    if Process.whereis(__MODULE__) do
-      GenServer.cast(__MODULE__, {:add_reaction, channel_id, message_id, emoji})
+  @spec add_reaction(String.t(), String.t(), String.t(), String.t()) :: :ok
+  def add_reaction(instance_id, channel_id, message_id, emoji) do
+    if pid = Nex.Agent.Channel.Registry.whereis(instance_id) do
+      GenServer.cast(pid, {:add_reaction, channel_id, message_id, emoji})
     end
 
     :ok
   end
 
   @doc "Remove the bot's own reaction from a message. Fire-and-forget."
-  @spec remove_reaction(String.t(), String.t(), String.t()) :: :ok
-  def remove_reaction(channel_id, message_id, emoji) do
-    if Process.whereis(__MODULE__) do
-      GenServer.cast(__MODULE__, {:remove_reaction, channel_id, message_id, emoji})
+  @spec remove_reaction(String.t(), String.t(), String.t(), String.t()) :: :ok
+  def remove_reaction(instance_id, channel_id, message_id, emoji) do
+    if pid = Nex.Agent.Channel.Registry.whereis(instance_id) do
+      GenServer.cast(pid, {:remove_reaction, channel_id, message_id, emoji})
     end
 
     :ok
   end
 
   @doc "Trigger the typing indicator in a channel. Fire-and-forget."
-  @spec trigger_typing(String.t()) :: :ok
-  def trigger_typing(channel_id) do
-    if Process.whereis(__MODULE__) do
-      GenServer.cast(__MODULE__, {:trigger_typing, channel_id})
+  @spec trigger_typing(String.t(), String.t()) :: :ok
+  def trigger_typing(instance_id, channel_id) do
+    if pid = Nex.Agent.Channel.Registry.whereis(instance_id) do
+      GenServer.cast(pid, {:trigger_typing, channel_id})
     end
 
     :ok
@@ -154,20 +157,24 @@ defmodule Nex.Agent.Channel.Discord do
     _ = Application.ensure_all_started(:mint)
 
     config = Keyword.get(opts, :config, Config.load())
-    discord = Config.discord(config)
+    instance_id = Keyword.fetch!(opts, :instance_id)
+
+    discord =
+      Keyword.get(opts, :channel_config) || Config.channel_instance(config, instance_id) || %{}
 
     state = %__MODULE__{
-      token: Map.get(discord, "token", ""),
-      allow_from: Config.discord_allow_from(config),
+      instance_id: instance_id,
+      token: normalize_discord_token(Map.get(discord, "token", "")),
+      allow_from: normalize_allow_from(Map.get(discord, "allow_from")),
       guild_id: Map.get(discord, "guild_id"),
-      enabled: Config.discord_enabled?(config),
+      enabled: Map.get(discord, "enabled", false) == true,
       http_post_fun: Keyword.get(opts, :http_post_fun, &default_http_post/3),
       http_patch_fun: Keyword.get(opts, :http_patch_fun, &default_http_patch/3),
       sequence: nil,
       session_id: nil
     }
 
-    Bus.subscribe(:discord_outbound)
+    Bus.subscribe(Nex.Agent.Outbound.topic_for_channel(instance_id))
     Bus.subscribe(:inbound_ack)
     Bus.subscribe(:task_complete)
     {:ok, state, {:continue, :connect}}
@@ -272,11 +279,17 @@ defmodule Nex.Agent.Channel.Discord do
 
     case reason do
       {:remote, 4004, _message} ->
-        Logger.error("[Discord] Gateway authentication failed (close code 4004), disabling channel")
+        Logger.error(
+          "[Discord] Gateway authentication failed (close code 4004), disabling channel"
+        )
+
         {:noreply, %{state | enabled: false}}
 
       {:remote, 1000, _message} ->
-        Logger.info("[Discord] WebSocket closed normally reason=#{inspect(reason)}, reconnecting...")
+        Logger.info(
+          "[Discord] WebSocket closed normally reason=#{inspect(reason)}, reconnecting..."
+        )
+
         Process.send_after(self(), :reconnect, @reconnect_delay_ms)
         {:noreply, state}
 
@@ -288,32 +301,40 @@ defmodule Nex.Agent.Channel.Discord do
   end
 
   @impl true
-  def handle_info({:bus_message, :discord_outbound, payload}, state) when is_map(payload) do
-    _ = do_send(payload, state)
-    {:noreply, state}
-  end
-
-  @impl true
-  def handle_info({:bus_message, :inbound_ack, %{channel: "discord"} = payload}, state) do
-    message_id = payload.message_id
-    reaction_channel = payload[:origin_channel_id] || payload.chat_id
-
-    if is_binary(message_id) and message_id != "" do
-      do_add_reaction(reaction_channel, message_id, @eyes_emoji, state)
+  def handle_info({:bus_message, {:channel_outbound, instance_id}, payload}, state)
+      when is_map(payload) do
+    if instance_id == state.instance_id do
+      _ = do_send(payload, state)
     end
 
     {:noreply, state}
   end
 
   @impl true
-  def handle_info({:bus_message, :task_complete, %{channel: "discord"} = payload}, state) do
-    message_id = payload.message_id
-    reaction_channel = payload[:origin_channel_id] || payload.chat_id
+  def handle_info({:bus_message, :inbound_ack, %{channel: channel} = payload}, state) do
+    if channel == state.instance_id do
+      message_id = payload.message_id
+      reaction_channel = payload[:origin_channel_id] || payload.chat_id
 
-    if is_binary(message_id) and message_id != "" do
-      do_remove_reaction(reaction_channel, message_id, @eyes_emoji, state)
-      final_emoji = if payload.status == :ok, do: @done_emoji, else: @error_emoji
-      do_add_reaction(reaction_channel, message_id, final_emoji, state)
+      if is_binary(message_id) and message_id != "" do
+        do_add_reaction(reaction_channel, message_id, @eyes_emoji, state)
+      end
+    end
+
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info({:bus_message, :task_complete, %{channel: channel} = payload}, state) do
+    if channel == state.instance_id do
+      message_id = payload.message_id
+      reaction_channel = payload[:origin_channel_id] || payload.chat_id
+
+      if is_binary(message_id) and message_id != "" do
+        do_remove_reaction(reaction_channel, message_id, @eyes_emoji, state)
+        final_emoji = if payload.status == :ok, do: @done_emoji, else: @error_emoji
+        do_add_reaction(reaction_channel, message_id, final_emoji, state)
+      end
     end
 
     {:noreply, state}
@@ -400,7 +421,10 @@ defmodule Nex.Agent.Channel.Discord do
     handle_message(data, state)
   end
 
-  defp handle_gateway_event(%{"op" => 0, "t" => "INTERACTION_CREATE", "d" => data, "s" => seq}, state) do
+  defp handle_gateway_event(
+         %{"op" => 0, "t" => "INTERACTION_CREATE", "d" => data, "s" => seq},
+         state
+       ) do
     state = %{state | sequence: seq}
     handle_interaction(data, state)
   end
@@ -422,8 +446,11 @@ defmodule Nex.Agent.Channel.Discord do
       end)
 
     guild_id = Map.get(data, "id", "?")
+
     if map_size(thread_parents) > 0 do
-      Logger.info("[Discord] GUILD_CREATE guild=#{guild_id} cached #{map_size(thread_parents)} thread(s)")
+      Logger.info(
+        "[Discord] GUILD_CREATE guild=#{guild_id} cached #{map_size(thread_parents)} thread(s)"
+      )
     end
 
     %{state | known_threads: Map.merge(state.known_threads, thread_parents)}
@@ -540,7 +567,10 @@ defmodule Nex.Agent.Channel.Discord do
               }
 
             {:error, reason} ->
-              Logger.warning("[Discord] Failed to create thread: #{inspect(reason)}, replying in channel")
+              Logger.warning(
+                "[Discord] Failed to create thread: #{inspect(reason)}, replying in channel"
+              )
+
               publish_inbound(channel_id, author_id, clean_content, data, state)
               state
           end
@@ -578,7 +608,7 @@ defmodule Nex.Agent.Channel.Discord do
 
     if allowed?(allowed_channel_id, state.allow_from) do
       Bus.publish(:inbound, %Envelope{
-        channel: "discord",
+        channel: state.instance_id,
         chat_id: to_string(channel_id),
         sender_id: to_string(author_id),
         text: raw,
@@ -586,6 +616,7 @@ defmodule Nex.Agent.Channel.Discord do
         message_type: :text,
         raw: data,
         metadata: %{
+          "channel_type" => "discord",
           "guild_id" => guild_id,
           "application_id" => Map.get(data, "application_id"),
           "interaction_id" => Map.get(data, "id"),
@@ -601,9 +632,15 @@ defmodule Nex.Agent.Channel.Discord do
   end
 
   defp interaction_option_values(%{"value" => value}) when is_binary(value), do: [value]
-  defp interaction_option_values(%{"value" => value}) when is_integer(value), do: [Integer.to_string(value)]
+
+  defp interaction_option_values(%{"value" => value}) when is_integer(value),
+    do: [Integer.to_string(value)]
+
   defp interaction_option_values(%{"value" => value}) when is_float(value), do: [to_string(value)]
-  defp interaction_option_values(%{"value" => value}) when is_boolean(value), do: [to_string(value)]
+
+  defp interaction_option_values(%{"value" => value}) when is_boolean(value),
+    do: [to_string(value)]
+
   defp interaction_option_values(_option), do: []
 
   defp acknowledge_interaction(data, state) do
@@ -621,17 +658,18 @@ defmodule Nex.Agent.Channel.Discord do
     end
   end
 
-  defp publish_inbound(chat_id, author_id, content, data, _state) do
+  defp publish_inbound(chat_id, author_id, content, data, state) do
     origin_channel_id = Map.get(data, "channel_id")
 
     Bus.publish(:inbound, %Envelope{
-      channel: "discord",
+      channel: state.instance_id,
       chat_id: to_string(chat_id),
       sender_id: to_string(author_id),
       text: content,
       message_type: :text,
       raw: data,
       metadata: %{
+        "channel_type" => "discord",
         "guild_id" => Map.get(data, "guild_id"),
         "message_id" => Map.get(data, "id"),
         "origin_channel_id" => origin_channel_id,
@@ -686,8 +724,11 @@ defmodule Nex.Agent.Channel.Discord do
         |> render_discord_content()
         |> edit_interaction_response(application_id, token, state)
         |> case do
-          :ok -> :ok
-          {:error, reason} -> Logger.error("[Discord] Interaction response failed: #{inspect(reason)}")
+          :ok ->
+            :ok
+
+          {:error, reason} ->
+            Logger.error("[Discord] Interaction response failed: #{inspect(reason)}")
         end
 
       _ ->
@@ -737,7 +778,7 @@ defmodule Nex.Agent.Channel.Discord do
     content = render_discord_content(content)
 
     with :ok <- validate_outbound_message(channel_id, content, state),
-         true <- is_binary(message_id) and message_id != "" or {:error, :invalid_message_id},
+         true <- (is_binary(message_id) and message_id != "") or {:error, :invalid_message_id},
          {:ok, _response} <-
            state.http_patch_fun.(
              "#{@discord_api}/channels/#{channel_id}/messages/#{message_id}",
@@ -748,7 +789,9 @@ defmodule Nex.Agent.Channel.Discord do
     end
   end
 
-  defp render_discord_content(content) when is_binary(content), do: DiscordRenderer.render_text(content)
+  defp render_discord_content(content) when is_binary(content),
+    do: DiscordRenderer.render_text(content)
+
   defp render_discord_content(content), do: content
 
   defp validate_outbound_message(channel_id, content, state) do
@@ -817,7 +860,9 @@ defmodule Nex.Agent.Channel.Discord do
   defp do_add_reaction(channel_id, message_id, emoji, state) do
     Task.start(fn ->
       encoded_emoji = URI.encode(emoji)
-      url = "#{@discord_api}/channels/#{channel_id}/messages/#{message_id}/reactions/#{encoded_emoji}/@me"
+
+      url =
+        "#{@discord_api}/channels/#{channel_id}/messages/#{message_id}/reactions/#{encoded_emoji}/@me"
 
       case default_http_put(url, [{"authorization", discord_authorization(state.token)}]) do
         :ok ->
@@ -832,7 +877,9 @@ defmodule Nex.Agent.Channel.Discord do
   defp do_remove_reaction(channel_id, message_id, emoji, state) do
     Task.start(fn ->
       encoded_emoji = URI.encode(emoji)
-      url = "#{@discord_api}/channels/#{channel_id}/messages/#{message_id}/reactions/#{encoded_emoji}/@me"
+
+      url =
+        "#{@discord_api}/channels/#{channel_id}/messages/#{message_id}/reactions/#{encoded_emoji}/@me"
 
       case default_http_delete(url, [{"authorization", discord_authorization(state.token)}]) do
         :ok ->
@@ -955,6 +1002,25 @@ defmodule Nex.Agent.Channel.Discord do
   defp allowed?(channel_id, allow_from) do
     to_string(channel_id) in allow_from
   end
+
+  defp normalize_discord_token(token) when is_binary(token) do
+    token
+    |> String.trim()
+    |> String.replace_prefix("Bot ", "")
+    |> String.replace_prefix("bot ", "")
+  end
+
+  defp normalize_discord_token(_token), do: ""
+
+  defp normalize_allow_from(list) when is_list(list) do
+    list
+    |> Enum.map(&to_string/1)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
+  end
+
+  defp normalize_allow_from(_list), do: []
 
   defp thread_meta(data) when is_map(data) do
     %{

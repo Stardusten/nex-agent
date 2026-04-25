@@ -3,6 +3,9 @@ defmodule Nex.Agent.RuntimeReconcilerTest do
 
   alias Nex.Agent.{Config, Gateway, Runtime}
 
+  @feishu_instance "feishu_reconcile"
+  @discord_instance "discord_reconcile"
+
   setup do
     workspace =
       Path.join(System.tmp_dir!(), "nex-agent-reconciler-#{System.unique_integer([:positive])}")
@@ -24,6 +27,12 @@ defmodule Nex.Agent.RuntimeReconcilerTest do
       )
     end
 
+    if Process.whereis(Nex.Agent.ChannelRegistry) == nil do
+      start_supervised!(Nex.Agent.Channel.Registry)
+    end
+
+    stop_channel_children()
+
     if Process.whereis(Runtime) == nil do
       start_supervised!({Runtime, workspace: workspace})
     else
@@ -43,15 +52,41 @@ defmodule Nex.Agent.RuntimeReconcilerTest do
         end)
       end
 
+      stop_channel_children()
       File.rm_rf!(workspace)
     end)
 
     {:ok, workspace: workspace}
   end
 
-  test "gateway reconcile enables and disables channel child locally", %{workspace: workspace} do
-    disabled_config = %Config{Config.default() | telegram: %{"enabled" => false}}
-    enabled_config = %Config{Config.default() | telegram: %{"enabled" => true, "token" => ""}}
+  test "gateway reconcile starts, restarts, and removes channel instances", %{
+    workspace: workspace
+  } do
+    disabled_config = config_with_channels(%{})
+
+    enabled_config =
+      config_with_channels(%{
+        @feishu_instance => %{
+          "type" => "feishu",
+          "enabled" => true,
+          "streaming" => true,
+          "app_id" => "",
+          "app_secret" => ""
+        },
+        @discord_instance => %{"type" => "discord", "enabled" => true, "token" => ""}
+      })
+
+    changed_config =
+      config_with_channels(%{
+        @feishu_instance => %{
+          "type" => "feishu",
+          "enabled" => true,
+          "streaming" => false,
+          "app_id" => "",
+          "app_secret" => ""
+        },
+        @discord_instance => %{"type" => "discord", "enabled" => true, "token" => ""}
+      })
 
     {:ok, _snapshot} =
       Runtime.reload(
@@ -64,7 +99,8 @@ defmodule Nex.Agent.RuntimeReconcilerTest do
     end)
 
     assert :ok = Gateway.reconcile()
-    assert Process.whereis(Nex.Agent.Channel.Telegram) == nil
+    assert Nex.Agent.Channel.Registry.whereis(@feishu_instance) == nil
+    assert Nex.Agent.Channel.Registry.whereis(@discord_instance) == nil
 
     {:ok, _snapshot} =
       Runtime.reload(
@@ -74,7 +110,21 @@ defmodule Nex.Agent.RuntimeReconcilerTest do
       )
 
     assert :ok = Gateway.reconcile()
-    assert is_pid(Process.whereis(Nex.Agent.Channel.Telegram))
+    feishu_pid = Nex.Agent.Channel.Registry.whereis(@feishu_instance)
+    discord_pid = Nex.Agent.Channel.Registry.whereis(@discord_instance)
+    assert is_pid(feishu_pid)
+    assert is_pid(discord_pid)
+
+    {:ok, _snapshot} =
+      Runtime.reload(
+        workspace: workspace,
+        config_loader: fn _opts -> changed_config end,
+        changed_paths: ["config.json"]
+      )
+
+    assert :ok = Gateway.reconcile()
+    assert Nex.Agent.Channel.Registry.whereis(@feishu_instance) != feishu_pid
+    assert Nex.Agent.Channel.Registry.whereis(@discord_instance) == discord_pid
 
     {:ok, _snapshot} =
       Runtime.reload(
@@ -84,6 +134,38 @@ defmodule Nex.Agent.RuntimeReconcilerTest do
       )
 
     assert :ok = Gateway.reconcile()
-    assert Process.whereis(Nex.Agent.Channel.Telegram) == nil
+    assert Nex.Agent.Channel.Registry.whereis(@feishu_instance) == nil
+    assert Nex.Agent.Channel.Registry.whereis(@discord_instance) == nil
+  end
+
+  defp config_with_channels(channels) do
+    %Config{
+      Config.default()
+      | channel: channels,
+        provider: %{
+          "providers" => %{
+            "ollama-local" => %{
+              "type" => "ollama",
+              "base_url" => "http://localhost:11434"
+            }
+          }
+        },
+        model: %{
+          "default_model" => "local-test",
+          "cheap_model" => "local-test",
+          "advisor_model" => "local-test",
+          "models" => %{"local-test" => %{"provider" => "ollama-local", "id" => "local-test"}}
+        }
+    }
+  end
+
+  defp stop_channel_children do
+    if Process.whereis(Nex.Agent.ChannelSupervisor) do
+      Nex.Agent.ChannelSupervisor
+      |> DynamicSupervisor.which_children()
+      |> Enum.each(fn {_, pid, _, _} ->
+        DynamicSupervisor.terminate_child(Nex.Agent.ChannelSupervisor, pid)
+      end)
+    end
   end
 end

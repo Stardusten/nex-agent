@@ -25,7 +25,16 @@ defmodule Nex.Agent.ToolAlignmentTest do
 
   alias Nex.Agent.{Runner, Session, Skills}
   alias Nex.Agent.Runtime.Snapshot
-  alias Nex.Agent.Tool.{EvolutionCandidate, Registry, SkillDiscover, SkillGet, SoulUpdate, ToolList}
+
+  alias Nex.Agent.Tool.{
+    EvolutionCandidate,
+    Registry,
+    SkillDiscover,
+    SkillGet,
+    SoulUpdate,
+    ToolList
+  }
+
   alias Nex.SkillRuntime
 
   setup do
@@ -201,11 +210,10 @@ defmodule Nex.Agent.ToolAlignmentTest do
     config =
       %Nex.Agent.Config{
         Nex.Agent.Config.default()
-        | provider: "openai-codex",
-          tools: %{
+        | tools: %{
             "web_search" => %{
-              "provider" => "codex",
-              "providers" => %{"codex" => %{"mode" => "live"}}
+              "strategy" => "provider_native",
+              "mode" => "live"
             }
           }
       }
@@ -228,11 +236,10 @@ defmodule Nex.Agent.ToolAlignmentTest do
     config =
       %Nex.Agent.Config{
         Nex.Agent.Config.default()
-        | provider: "openai-codex",
-          tools: %{
+        | tools: %{
             "image_generation" => %{
-              "provider" => "codex",
-              "providers" => %{"codex" => %{"output_format" => "png"}}
+              "strategy" => "provider_native",
+              "output_format" => "png"
             }
           }
       }
@@ -257,11 +264,10 @@ defmodule Nex.Agent.ToolAlignmentTest do
     codex_config =
       %Nex.Agent.Config{
         Nex.Agent.Config.default()
-        | provider: "openai-codex",
-          tools: %{
+        | tools: %{
             "web_search" => %{
-              "provider" => "codex",
-              "providers" => %{"codex" => %{"mode" => "live"}}
+              "strategy" => "provider_native",
+              "mode" => "live"
             }
           }
       }
@@ -319,6 +325,7 @@ defmodule Nex.Agent.ToolAlignmentTest do
     assert "evolution_candidate" in all_names
 
     definition = EvolutionCandidate.definition()
+
     assert get_in(definition, [:parameters, :properties, :action, :enum]) == [
              "list",
              "show",

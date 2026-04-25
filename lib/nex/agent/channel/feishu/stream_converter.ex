@@ -17,6 +17,7 @@ defmodule Nex.Agent.Channel.Feishu.StreamConverter do
   @newmsg_holdback_bytes byte_size(@new_message_token) - 1
 
   defstruct [
+    :instance_id,
     :chat_id,
     :metadata,
     :active_card_id,
@@ -28,6 +29,7 @@ defmodule Nex.Agent.Channel.Feishu.StreamConverter do
 
   @type t :: %__MODULE__{
           chat_id: String.t(),
+          instance_id: String.t(),
           metadata: map(),
           active_card_id: String.t() | nil,
           active_sequence: pos_integer() | nil,
@@ -36,9 +38,11 @@ defmodule Nex.Agent.Channel.Feishu.StreamConverter do
           completed: boolean()
         }
 
-  @spec start(String.t(), map()) :: {:ok, t()} | {:error, term()}
-  def start(chat_id, metadata) when is_binary(chat_id) and is_map(metadata) do
+  @spec start(String.t(), String.t(), map()) :: {:ok, t()} | {:error, term()}
+  def start(instance_id, chat_id, metadata)
+      when is_binary(instance_id) and is_binary(chat_id) and is_map(metadata) do
     state = %__MODULE__{
+      instance_id: instance_id,
       chat_id: chat_id,
       metadata: metadata
     }
@@ -48,7 +52,10 @@ defmodule Nex.Agent.Channel.Feishu.StreamConverter do
 
   @spec push_text(t(), String.t()) :: {:ok, t()} | {:error, term()}
   def push_text(%__MODULE__{} = state, text_chunk) when is_binary(text_chunk) do
-    trace(state, "push_text bytes=#{byte_size(text_chunk)} preview=#{inspect(String.slice(text_chunk, 0, 80))}")
+    trace(
+      state,
+      "push_text bytes=#{byte_size(text_chunk)} preview=#{inspect(String.slice(text_chunk, 0, 80))}"
+    )
 
     data = state.pending_buffer <> text_chunk
     {processable, holdback} = split_processable(data)
@@ -194,7 +201,11 @@ defmodule Nex.Agent.Channel.Feishu.StreamConverter do
     if segment == "" do
       {:ok, state}
     else
-      trace(state, "append_segment_open bytes=#{byte_size(segment)} preview=#{inspect(String.slice(segment, 0, 80))}")
+      trace(
+        state,
+        "append_segment_open bytes=#{byte_size(segment)} preview=#{inspect(String.slice(segment, 0, 80))}"
+      )
+
       open_card(state, segment)
     end
   end
@@ -216,7 +227,11 @@ defmodule Nex.Agent.Channel.Feishu.StreamConverter do
   end
 
   defp rotate_card(%__MODULE__{} = state) do
-    trace(state, "rotate_card previous_card_id=#{inspect(state.active_card_id)} previous_len=#{byte_size(state.active_text)}")
+    trace(
+      state,
+      "rotate_card previous_card_id=#{inspect(state.active_card_id)} previous_len=#{byte_size(state.active_text)}"
+    )
+
     close_active_card(state)
 
     {:ok,
@@ -229,10 +244,13 @@ defmodule Nex.Agent.Channel.Feishu.StreamConverter do
   end
 
   defp open_card(%__MODULE__{} = state, content) do
-    trace(state, "open_card content_len=#{byte_size(content)} preview=#{inspect(String.slice(content, 0, 80))}")
+    trace(
+      state,
+      "open_card content_len=#{byte_size(content)} preview=#{inspect(String.slice(content, 0, 80))}"
+    )
 
     with {:ok, %{card_id: card_id}} <-
-           Feishu.open_stream_card(state.chat_id, content, state.metadata) do
+           Feishu.open_stream_card(state.instance_id, state.chat_id, content, state.metadata) do
       trace(state, "open_card_done card_id=#{card_id}")
 
       {:ok,
@@ -255,7 +273,7 @@ defmodule Nex.Agent.Channel.Feishu.StreamConverter do
       "update_card card_id=#{inspect(state.active_card_id)} sequence=#{next_sequence} content_len=#{byte_size(text)}"
     )
 
-    case Feishu.update_card(state.active_card_id, text, next_sequence) do
+    case Feishu.update_card(state.instance_id, state.active_card_id, text, next_sequence) do
       :ok ->
         {:ok, %{state | active_text: text, active_sequence: next_sequence}}
 
@@ -271,10 +289,16 @@ defmodule Nex.Agent.Channel.Feishu.StreamConverter do
   defp close_active_card(%__MODULE__{active_card_id: card_id} = state) do
     trace(state, "close_streaming_mode card_id=#{inspect(card_id)}")
 
-    case Feishu.close_streaming_mode(card_id) do
-      :ok -> :ok
+    case Feishu.close_streaming_mode(state.instance_id, card_id) do
+      :ok ->
+        :ok
+
       {:error, reason} ->
-        trace(state, "close_streaming_mode_failed card_id=#{inspect(card_id)} reason=#{inspect(reason)}")
+        trace(
+          state,
+          "close_streaming_mode_failed card_id=#{inspect(card_id)} reason=#{inspect(reason)}"
+        )
+
         :ok
     end
   end

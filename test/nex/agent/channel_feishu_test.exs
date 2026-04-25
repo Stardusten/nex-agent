@@ -7,9 +7,15 @@ defmodule Nex.Agent.Channel.FeishuTest do
   alias Nex.Agent.Inbound.Envelope
   alias Nex.Agent.Media.Attachment
 
+  @instance_id "feishu_test"
+
   setup do
     if Process.whereis(Bus) == nil do
       start_supervised!({Bus, name: Bus})
+    end
+
+    if Process.whereis(Nex.Agent.ChannelRegistry) == nil do
+      start_supervised!(Nex.Agent.Channel.Registry)
     end
 
     parent = self()
@@ -71,12 +77,21 @@ defmodule Nex.Agent.Channel.FeishuTest do
       end
     end
 
-    config = %Config{Config.default() | feishu: %{"enabled" => false}}
+    channel_config = %{
+      "type" => "feishu",
+      "enabled" => false,
+      "app_id" => "cli_test",
+      "app_secret" => "sec_test"
+    }
+
+    config = %Config{Config.default() | channel: %{@instance_id => channel_config}}
 
     pid =
       start_supervised!(
         {Feishu,
+         instance_id: @instance_id,
          config: config,
+         channel_config: channel_config,
          http_post_fun: http_post_fun,
          http_put_fun: http_put_fun,
          http_post_multipart_fun: http_post_multipart_fun,
@@ -97,7 +112,7 @@ defmodule Nex.Agent.Channel.FeishuTest do
   end
 
   test "legacy outbound defaults to interactive JSON 2.0 card", %{pid: _pid} do
-    Bus.publish_sync(:feishu_outbound, %{
+    Bus.publish_sync({:channel_outbound, @instance_id}, %{
       chat_id: "ou_123",
       content: "hello world",
       metadata: %{}
@@ -116,7 +131,7 @@ defmodule Nex.Agent.Channel.FeishuTest do
   end
 
   test "explicit image msg_type sends raw feishu payload", %{pid: _pid} do
-    Bus.publish_sync(:feishu_outbound, %{
+    Bus.publish_sync({:channel_outbound, @instance_id}, %{
       chat_id: "oc_chat_123",
       content: nil,
       metadata: %{
@@ -150,7 +165,7 @@ defmodule Nex.Agent.Channel.FeishuTest do
   end
 
   test "public send_card uses inline interactive JSON 2.0 card", %{pid: _pid} do
-    assert {:ok, "om_123"} = Feishu.send_card("ou_123", "hello card", %{})
+    assert {:ok, "om_123"} = Feishu.send_card(@instance_id, "ou_123", "hello card", %{})
 
     assert_receive {:http_post, url1, _body1, _headers1}
     assert url1 =~ "/auth/v3/tenant_access_token/internal"
@@ -165,7 +180,7 @@ defmodule Nex.Agent.Channel.FeishuTest do
 
   test "stream card uses CardKit create, card reference send, and element update", %{pid: _pid} do
     assert {:ok, %{message_id: "om_123", card_id: "card_123"}} =
-             Feishu.open_stream_card("ou_123", "hello stream", %{})
+             Feishu.open_stream_card(@instance_id, "ou_123", "hello stream", %{})
 
     assert_receive {:http_post, auth_url, _auth_body, _auth_headers}
     assert auth_url =~ "/auth/v3/tenant_access_token/internal"
@@ -182,15 +197,18 @@ defmodule Nex.Agent.Channel.FeishuTest do
     assert_receive {:http_post, send_url, send_body, _headers}
     assert send_url =~ "/im/v1/messages"
     assert send_body["msg_type"] == "interactive"
-    assert Jason.decode!(send_body["content"]) == %{"type" => "card", "data" => %{"card_id" => "card_123"}}
 
-    assert :ok = Feishu.update_card("card_123", "hello updated", 2)
+    assert Jason.decode!(send_body["content"]) == %{
+             "type" => "card",
+             "data" => %{"card_id" => "card_123"}
+           }
+
+    assert :ok = Feishu.update_card(@instance_id, "card_123", "hello updated", 2)
 
     assert_receive {:http_put, put_url, put_body, _put_headers}
     assert put_url =~ "/cardkit/v1/cards/card_123/elements/content/content"
     assert put_body["content"] == "hello updated"
     assert put_body["sequence"] == 2
-
   end
 
   test "interactive JSON 2.0 card preserves markdown content", %{
@@ -210,7 +228,7 @@ defmodule Nex.Agent.Channel.FeishuTest do
     next
     """
 
-    assert {:ok, "om_123"} = Feishu.send_card("ou_123", markdown, %{})
+    assert {:ok, "om_123"} = Feishu.send_card(@instance_id, "ou_123", markdown, %{})
 
     assert_receive {:http_post, _auth_url, _auth_body, _auth_headers}
     assert_receive {:http_post, send_url, body, _headers}
@@ -223,7 +241,7 @@ defmodule Nex.Agent.Channel.FeishuTest do
   end
 
   test "stream converter updates active card incrementally", %{pid: _pid} do
-    assert {:ok, converter} = StreamConverter.start("ou_123", %{})
+    assert {:ok, converter} = StreamConverter.start(@instance_id, "ou_123", %{})
     assert {:ok, converter} = StreamConverter.push_text(converter, "# Ti")
     assert {:ok, converter} = StreamConverter.push_text(converter, "tle")
     assert {:ok, converter} = StreamConverter.finish(converter)
@@ -239,12 +257,15 @@ defmodule Nex.Agent.Channel.FeishuTest do
     drain_http_posts_multipart()
     _ = collect_http_puts([])
 
-    assert {:ok, converter} = StreamConverter.start("ou_123", %{})
+    assert {:ok, converter} = StreamConverter.start(@instance_id, "ou_123", %{})
     assert {:ok, converter} = StreamConverter.push_text(converter, "first\n\n<newmsg/>\n\nsec")
 
     # New card for "sec" should already be created (no deferral)
     posts_after_push = collect_http_posts([])
-    card_creates_after_push = Enum.filter(posts_after_push, fn {url, _body} -> url =~ "/cardkit/v1/cards" end)
+
+    card_creates_after_push =
+      Enum.filter(posts_after_push, fn {url, _body} -> url =~ "/cardkit/v1/cards" end)
+
     assert length(card_creates_after_push) >= 2
 
     assert {:ok, converter2} = StreamConverter.push_text(converter, "ond")
@@ -252,15 +273,26 @@ defmodule Nex.Agent.Channel.FeishuTest do
 
     posts = posts_after_push ++ collect_http_posts([])
     card_creates = Enum.filter(posts, fn {url, _body} -> url =~ "/cardkit/v1/cards" end)
-    card_sends = Enum.filter(posts, fn {url, body} -> url =~ "/im/v1/messages" and body["msg_type"] == "interactive" end)
+
+    card_sends =
+      Enum.filter(posts, fn {url, body} ->
+        url =~ "/im/v1/messages" and body["msg_type"] == "interactive"
+      end)
+
     puts = collect_http_puts([])
 
     assert length(card_creates) >= 2
     assert length(card_sends) >= 2
+
     assert Enum.any?(card_creates, fn {_url, body} ->
-             body["data"] |> Jason.decode!() |> get_in(["body", "elements", Access.at(0), "content"]) == "Thinking..."
+             body["data"]
+             |> Jason.decode!()
+             |> get_in(["body", "elements", Access.at(0), "content"]) == "Thinking..."
            end)
-    refute Enum.any?(puts, fn {_url, body} -> is_binary(body["content"]) and body["content"] =~ "<newmsg/>" end)
+
+    refute Enum.any?(puts, fn {_url, body} ->
+             is_binary(body["content"]) and body["content"] =~ "<newmsg/>"
+           end)
   end
 
   test "synchronous local image send uploads and delivers native image message", %{pid: pid} do
@@ -286,13 +318,20 @@ defmodule Nex.Agent.Channel.FeishuTest do
     assert Keyword.get(multipart_body, :image_type) == "message"
 
     posts = collect_http_posts([])
-    {url2, body2} = Enum.find(posts, fn {url, body} -> url =~ "/im/v1/messages" and body["msg_type"] == "image" end)
+
+    {url2, body2} =
+      Enum.find(posts, fn {url, body} ->
+        url =~ "/im/v1/messages" and body["msg_type"] == "image"
+      end)
+
     assert url2 =~ "/im/v1/messages"
     assert body2["msg_type"] == "image"
     assert Jason.decode!(body2["content"]) == %{"image_key" => "img_uploaded"}
   end
 
-  test "attachment send preserves explicit receive_id_type for native media messages", %{pid: _pid} do
+  test "attachment send preserves explicit receive_id_type for native media messages", %{
+    pid: _pid
+  } do
     path =
       Path.join(System.tmp_dir!(), "feishu_chat_target_#{System.unique_integer([:positive])}.png")
 
@@ -301,12 +340,12 @@ defmodule Nex.Agent.Channel.FeishuTest do
 
     assert {:ok, ["image"]} =
              Feishu.deliver_outbound(%Nex.Agent.Outbound.Message{
-               channel: "feishu",
+               channel: @instance_id,
                chat_id: "oc_chat_target",
                attachments: [
                  %Attachment{
                    id: "out_chat_target",
-                   channel: "feishu",
+                   channel: @instance_id,
                    kind: :image,
                    mime_type: "image/png",
                    filename: "chat-target.png",
@@ -327,12 +366,19 @@ defmodule Nex.Agent.Channel.FeishuTest do
     assert upload_url =~ "/im/v1/images"
 
     posts = collect_http_posts([])
-    {send_url, body} = Enum.find(posts, fn {url, body} -> url =~ "/im/v1/messages" and body["msg_type"] == "image" end)
+
+    {send_url, body} =
+      Enum.find(posts, fn {url, body} ->
+        url =~ "/im/v1/messages" and body["msg_type"] == "image"
+      end)
+
     assert send_url =~ "receive_id_type=chat_id"
     assert body["receive_id"] == "oc_chat_target"
   end
 
-  test "outbound file audio and video attachments use files upload and native msg types", %{pid: _pid} do
+  test "outbound file audio and video attachments use files upload and native msg types", %{
+    pid: _pid
+  } do
     for {kind, expected_type} <- [file: "file", audio: "audio", video: "media"] do
       path =
         Path.join(
@@ -344,7 +390,7 @@ defmodule Nex.Agent.Channel.FeishuTest do
 
       attachment = %Attachment{
         id: "out_#{kind}",
-        channel: "feishu",
+        channel: @instance_id,
         kind: kind,
         mime_type: "application/octet-stream",
         filename: "#{kind}.bin",
@@ -357,11 +403,12 @@ defmodule Nex.Agent.Channel.FeishuTest do
 
       assert {:ok, [returned_kind]} =
                Feishu.deliver_outbound(%Nex.Agent.Outbound.Message{
-                 channel: "feishu",
+                 channel: @instance_id,
                  chat_id: "ou_media",
                  attachments: [attachment],
                  metadata: %{}
                })
+
       assert returned_kind == Atom.to_string(kind)
 
       assert_receive {:http_post_multipart, upload_url, multipart_body, _headers}
@@ -369,7 +416,12 @@ defmodule Nex.Agent.Channel.FeishuTest do
       assert Keyword.get(multipart_body, :file_type) == "message"
 
       posts = collect_http_posts([])
-      {_send_url, body} = Enum.find(posts, fn {url, body} -> url =~ "/im/v1/messages" and body["msg_type"] == expected_type end)
+
+      {_send_url, body} =
+        Enum.find(posts, fn {url, body} ->
+          url =~ "/im/v1/messages" and body["msg_type"] == expected_type
+        end)
+
       assert body["msg_type"] == expected_type
 
       on_exit(fn -> File.rm(path) end)
@@ -381,7 +433,7 @@ defmodule Nex.Agent.Channel.FeishuTest do
   test "progress payloads are ignored instead of being sent to feishu", %{pid: _pid} do
     drain_http_posts()
 
-    Bus.publish_sync(:feishu_outbound, %{
+    Bus.publish_sync({:channel_outbound, @instance_id}, %{
       chat_id: "ou_123",
       content: "内部进度",
       metadata: %{"_progress" => true}
@@ -421,7 +473,8 @@ defmodule Nex.Agent.Channel.FeishuTest do
     assert :ok = GenServer.call(pid, {:ingest_event, payload})
 
     assert_receive {:bus_message, :inbound, inbound}
-    assert inbound.channel == "feishu"
+    assert inbound.channel == @instance_id
+    assert inbound.metadata["channel_type"] == "feishu"
     assert inbound.text =~ "Shanghai Tower"
     assert inbound.metadata["message_type"] == "location"
     assert inbound.metadata["raw_content_json"]["name"] == "Shanghai Tower"
@@ -539,7 +592,10 @@ defmodule Nex.Agent.Channel.FeishuTest do
     assert %Envelope{} = inbound
     assert inbound.metadata["message_type"] == "image"
     assert inbound.media_refs == []
-    assert [%Attachment{platform_ref: %{"image_key" => "img_abc"}, mime_type: "image/png"}] = inbound.attachments
+
+    assert [%Attachment{platform_ref: %{"image_key" => "img_abc"}, mime_type: "image/png"}] =
+             inbound.attachments
+
     assert Enum.all?(inbound.attachments, &File.exists?(&1.local_path))
   end
 

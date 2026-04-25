@@ -20,6 +20,7 @@ defmodule Nex.Agent do
           model: String.t(),
           api_key: String.t() | nil,
           base_url: String.t() | nil,
+          provider_options: keyword(),
           tools: map(),
           workspace: String.t(),
           cwd: String.t(),
@@ -34,6 +35,7 @@ defmodule Nex.Agent do
     :model,
     :api_key,
     :base_url,
+    :provider_options,
     :tools,
     :workspace,
     :cwd,
@@ -53,26 +55,33 @@ defmodule Nex.Agent do
     :ok = Onboarding.ensure_workspace_initialized(workspace)
     :ok = Skills.load()
 
+    default_model_runtime =
+      if runtime_config, do: Nex.Agent.Config.default_model_runtime(runtime_config)
+
     provider =
       Keyword.get(opts, :provider) ||
-        if(runtime_config,
-          do: Nex.Agent.Config.provider_to_atom(runtime_config.provider),
-          else: :anthropic
-        )
+        if(default_model_runtime, do: default_model_runtime.provider, else: :anthropic)
 
     model =
       Keyword.get(opts, :model) ||
-        if(runtime_config, do: runtime_config.model, else: default_model(provider))
+        if(default_model_runtime,
+          do: default_model_runtime.model_id,
+          else: default_model(provider)
+        )
 
     api_key =
       Keyword.get(opts, :api_key) ||
-        if(runtime_config, do: Nex.Agent.Config.get_current_api_key(runtime_config), else: nil) ||
+        if(default_model_runtime, do: default_model_runtime.api_key, else: nil) ||
         default_api_key(provider)
 
     base_url =
       Keyword.get(opts, :base_url) ||
-        if(runtime_config, do: Nex.Agent.Config.get_current_base_url(runtime_config), else: nil) ||
+        if(default_model_runtime, do: default_model_runtime.base_url, else: nil) ||
         default_base_url(provider)
+
+    provider_options =
+      Keyword.get(opts, :provider_options) ||
+        if(default_model_runtime, do: default_model_runtime.provider_options, else: [])
 
     max_iterations =
       Keyword.get(opts, :max_iterations) ||
@@ -98,6 +107,7 @@ defmodule Nex.Agent do
          model: model,
          api_key: api_key,
          base_url: base_url,
+         provider_options: provider_options,
          tools: tools,
          workspace: workspace,
          cwd: cwd,
@@ -115,6 +125,7 @@ defmodule Nex.Agent do
     model = Keyword.get(opts, :model, agent.model)
     api_key = Keyword.get(opts, :api_key) || agent.api_key || default_api_key(provider)
     base_url = Keyword.get(opts, :base_url, agent.base_url || default_base_url(provider))
+    provider_options = Keyword.get(opts, :provider_options, agent.provider_options || [])
     workspace = Keyword.get(opts, :workspace, agent.workspace || Workspace.root())
     cwd = Keyword.get(opts, :cwd, agent.cwd || File.cwd!())
     max_iterations = Keyword.get(opts, :max_iterations, agent.max_iterations)
@@ -147,6 +158,7 @@ defmodule Nex.Agent do
         model: model,
         api_key: api_key,
         base_url: base_url,
+        provider_options: provider_options,
         tools: tools,
         cwd: cwd,
         max_iterations: max_iterations,
@@ -186,6 +198,7 @@ defmodule Nex.Agent do
            | session: session,
              workspace: workspace,
              cwd: cwd,
+             provider_options: provider_options,
              runtime_version: runtime_snapshot && runtime_snapshot.version
          }}
 
@@ -205,6 +218,7 @@ defmodule Nex.Agent do
            | session: session,
              workspace: workspace,
              cwd: cwd,
+             provider_options: provider_options,
              runtime_version: runtime_snapshot && runtime_snapshot.version
          }}
     end
@@ -229,17 +243,12 @@ defmodule Nex.Agent do
     :ok
   end
 
-  defp default_model(:anthropic), do: "claude-sonnet-4-20250514"
-  defp default_model(:openai), do: "gpt-4o"
-  defp default_model(:openai_codex), do: "gpt-5.3-codex"
-  defp default_model(:openai_codex_custom), do: "gpt-5.4"
-  defp default_model(:ollama), do: "llama3.1"
-  defp default_model(_), do: "claude-sonnet-4-20250514"
+  defp default_model(provider), do: ProviderProfile.default_model(provider)
 
-  defp default_api_key(:anthropic), do: System.get_env("ANTHROPIC_API_KEY")
-  defp default_api_key(:openai), do: System.get_env("OPENAI_API_KEY")
-  defp default_api_key(:openai_codex), do: ProviderProfile.default_api_key(:openai_codex)
-  defp default_api_key(:openai_codex_custom), do: ProviderProfile.default_api_key(:openai_codex_custom)
+  defp default_api_key(provider)
+       when provider in [:anthropic, :openai, :openai_codex, :openai_codex_custom],
+       do: ProviderProfile.default_api_key(provider)
+
   defp default_api_key(:ollama), do: nil
   defp default_api_key(_), do: nil
 
@@ -249,8 +258,10 @@ defmodule Nex.Agent do
   defp env_var_name(:openai_codex_custom), do: "~/.codex/auth.json + ~/.codex/config.toml"
   defp env_var_name(_), do: "API_KEY"
 
-  defp default_base_url(:openai_codex), do: ProviderProfile.default_base_url(:openai_codex)
-  defp default_base_url(:openai_codex_custom), do: ProviderProfile.default_base_url(:openai_codex_custom)
+  defp default_base_url(provider)
+       when provider in [:openai_codex, :openai_codex_custom, :openrouter, :ollama],
+       do: ProviderProfile.default_base_url(provider)
+
   defp default_base_url(_), do: nil
 
   defp parse_session_key(nil), do: {"feishu", "default"}

@@ -3,10 +3,17 @@ defmodule Nex.Agent.Channel.DiscordTest do
 
   alias Nex.Agent.{Bus, Config}
   alias Nex.Agent.Channel.Discord
+  alias Nex.Agent.Channel.Discord.StreamConverter
+
+  @instance_id "discord_test"
 
   setup do
     if Process.whereis(Bus) == nil do
       start_supervised!({Bus, name: Bus})
+    end
+
+    if Process.whereis(Nex.Agent.ChannelRegistry) == nil do
+      start_supervised!(Nex.Agent.Channel.Registry)
     end
 
     Bus.subscribe(:inbound)
@@ -24,14 +31,15 @@ defmodule Nex.Agent.Channel.DiscordTest do
       {:ok, %{"id" => "patched"}}
     end
 
-    config = %Config{Config.default() | discord: %{"enabled" => false}}
-
-    if Process.whereis(Discord), do: GenServer.stop(Discord)
+    channel_config = %{"type" => "discord", "enabled" => false, "token" => "discord-token"}
+    config = %Config{Config.default() | channel: %{@instance_id => channel_config}}
 
     pid =
       start_supervised!(
         {Discord,
+         instance_id: @instance_id,
          config: config,
+         channel_config: channel_config,
          http_post_fun: http_post_fun,
          http_patch_fun: http_patch_fun}
       )
@@ -46,7 +54,7 @@ defmodule Nex.Agent.Channel.DiscordTest do
   test "outbound newmsg text creates multiple Discord messages", %{pid: pid} do
     send(
       pid,
-      {:bus_message, :discord_outbound,
+      {:bus_message, {:channel_outbound, @instance_id},
        %{chat_id: "123", content: "first\n<newmsg/>\nsecond", metadata: %{}}}
     )
 
@@ -58,15 +66,42 @@ defmodule Nex.Agent.Channel.DiscordTest do
     assert url2 =~ "/channels/123/messages"
   end
 
+  test "stream converter only treats standalone newmsg as boundary", %{pid: _pid} do
+    assert {:ok, converter} = StreamConverter.start(@instance_id, "123", %{})
+    assert_receive {:http_post, _url, %{"content" => "🤔 Thinking..."}, _headers}
+
+    assert {:ok, converter} = StreamConverter.push_text(converter, "我搜一下。\n<new")
+    assert_receive {:http_patch, _url, %{"content" => "我搜一下。"}, _headers}
+
+    assert {:ok, converter} = StreamConverter.push_text(converter, "msg/>\n\nsecond")
+    assert {:ok, converter} = StreamConverter.finish(converter)
+
+    assert converter.completed
+    assert_receive {:http_post, _url, %{"content" => "second"}, _headers}
+    refute converter.active_text =~ "<newmsg/>"
+  end
+
+  test "stream converter preserves non-standalone newmsg text", %{pid: _pid} do
+    assert {:ok, converter} = StreamConverter.start(@instance_id, "123", %{})
+    assert_receive {:http_post, _url, %{"content" => "🤔 Thinking..."}, _headers}
+
+    assert {:ok, converter} = StreamConverter.push_text(converter, "Use <newmsg/> token")
+    assert {:ok, converter} = StreamConverter.finish(converter)
+
+    assert converter.completed
+    assert_receive {:http_patch, _url, %{"content" => "Use <newmsg/> token"}, _headers}
+    refute_receive {:http_post, _url, %{"content" => "token"}, _headers}
+  end
+
   test "deliver_message returns created message_id", %{pid: _pid} do
-    assert {:ok, "msg_" <> _rest} = Discord.deliver_message("123", "hello", %{})
+    assert {:ok, "msg_" <> _rest} = Discord.deliver_message(@instance_id, "123", "hello", %{})
 
     assert_receive {:http_post, url, %{"content" => "hello"}, _headers}
     assert url =~ "/channels/123/messages"
   end
 
   test "update_message patches existing Discord message", %{pid: _pid} do
-    assert :ok = Discord.update_message("123", "msg_1", "hello updated", %{})
+    assert :ok = Discord.update_message(@instance_id, "123", "msg_1", "hello updated", %{})
 
     assert_receive {:http_patch, url, %{"content" => "hello updated"}, headers}
     assert url =~ "/channels/123/messages/msg_1"
@@ -80,7 +115,11 @@ defmodule Nex.Agent.Channel.DiscordTest do
     | alice | 10 |
     """
 
-    send(pid, {:bus_message, :discord_outbound, %{chat_id: "123", content: table, metadata: %{}}})
+    send(
+      pid,
+      {:bus_message, {:channel_outbound, @instance_id},
+       %{chat_id: "123", content: table, metadata: %{}}}
+    )
 
     assert_receive {:http_post, _url, %{"content" => content}, _headers}
     # With tables: false, table lines are treated as paragraphs, no code block wrapping
@@ -133,7 +172,8 @@ defmodule Nex.Agent.Channel.DiscordTest do
     assert thread_url =~ "/threads"
 
     assert_receive {:bus_message, :inbound, inbound}
-    assert inbound.channel == "discord"
+    assert inbound.channel == @instance_id
+    assert inbound.metadata["channel_type"] == "discord"
     # chat_id is the auto-created thread ID, not the original channel
     refute inbound.chat_id == "123"
     assert inbound.sender_id == "user-1"
@@ -173,7 +213,9 @@ defmodule Nex.Agent.Channel.DiscordTest do
          "s" => 2,
          "d" => %{
            "id" => "guild-1",
-           "threads" => [%{"id" => "thread-1", "type" => 11, "guild_id" => "guild-1", "parent_id" => "123"}]
+           "threads" => [
+             %{"id" => "thread-1", "type" => 11, "guild_id" => "guild-1", "parent_id" => "123"}
+           ]
          }
        })}
     )
@@ -198,7 +240,8 @@ defmodule Nex.Agent.Channel.DiscordTest do
     )
 
     assert_receive {:bus_message, :inbound, inbound}
-    assert inbound.channel == "discord"
+    assert inbound.channel == @instance_id
+    assert inbound.metadata["channel_type"] == "discord"
     assert inbound.chat_id == "thread-1"
     assert inbound.text == "follow up question"
   end
@@ -286,7 +329,8 @@ defmodule Nex.Agent.Channel.DiscordTest do
     assert callback_url =~ "/interactions/interaction-1/interaction-token/callback"
 
     assert_receive {:bus_message, :inbound, inbound}
-    assert inbound.channel == "discord"
+    assert inbound.channel == @instance_id
+    assert inbound.metadata["channel_type"] == "discord"
     assert inbound.chat_id == "123"
     assert inbound.text == "/status"
     assert %Nex.Agent.Command.Invocation{name: "status", source: :native} = inbound.command
@@ -295,7 +339,7 @@ defmodule Nex.Agent.Channel.DiscordTest do
   test "discord outbound with interaction token edits original interaction response", %{pid: pid} do
     send(
       pid,
-      {:bus_message, :discord_outbound,
+      {:bus_message, {:channel_outbound, @instance_id},
        %{
          chat_id: "123",
          content: "Status: idle",
@@ -342,10 +386,14 @@ defmodule Nex.Agent.Channel.DiscordTest do
   end
 
   test "discord init strips Bot prefix from configured token" do
-    config = %Config{Config.default() | discord: %{"enabled" => false, "token" => "Bot discord-token"}}
+    channel_config = %{"type" => "discord", "enabled" => false, "token" => "Bot discord-token"}
+    config = %Config{Config.default() | channel: %{@instance_id => channel_config}}
+
     {:ok, state, {:continue, :connect}} =
       Discord.init(
+        instance_id: @instance_id,
         config: config,
+        channel_config: channel_config,
         http_post_fun: fn _url, _body, _headers -> {:ok, %{"id" => "msg_1"}} end,
         http_patch_fun: fn _url, _body, _headers -> {:ok, %{"id" => "patched"}} end
       )
@@ -353,12 +401,13 @@ defmodule Nex.Agent.Channel.DiscordTest do
     assert state.token == "discord-token"
   end
 
-  test "deliver_message adds Bot prefix once when config token already contains Bot prefix", %{pid: pid} do
+  test "deliver_message adds Bot prefix once when config token already contains Bot prefix", %{
+    pid: pid
+  } do
     :sys.replace_state(pid, fn state -> %{state | token: "Bot discord-token", enabled: true} end)
 
-    assert {:ok, "msg_" <> _} = Discord.deliver_message("123", "hello", %{})
+    assert {:ok, "msg_" <> _} = Discord.deliver_message(@instance_id, "123", "hello", %{})
     assert_receive {:http_post, _url, %{"content" => "hello"}, headers}
     assert {"authorization", "Bot discord-token"} in headers
   end
-
 end

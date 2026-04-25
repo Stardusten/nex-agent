@@ -130,11 +130,10 @@ defmodule Nex.Agent.LLM.Providers.OpenAICodexTest do
 
     config = %Config{
       Config.default()
-      | provider: "openai-codex",
-        tools: %{
+      | tools: %{
           "web_search" => %{
-            "provider" => "codex",
-            "providers" => %{"codex" => %{"mode" => "live"}}
+            "strategy" => "provider_native",
+            "mode" => "live"
           }
         }
     }
@@ -182,11 +181,10 @@ defmodule Nex.Agent.LLM.Providers.OpenAICodexTest do
 
     config = %Config{
       Config.default()
-      | provider: "openai-codex",
-        tools: %{
+      | tools: %{
           "image_generation" => %{
-            "provider" => "codex",
-            "providers" => %{"codex" => %{"output_format" => "webp"}}
+            "strategy" => "provider_native",
+            "output_format" => "webp"
           }
         }
     }
@@ -224,7 +222,10 @@ defmodule Nex.Agent.LLM.Providers.OpenAICodexTest do
 
   test "ProviderProfile.default_api_key(:openai_codex) resolves through Codex facade" do
     tmp_dir =
-      Path.join(System.tmp_dir!(), "nex-agent-codex-profile-#{System.unique_integer([:positive])}")
+      Path.join(
+        System.tmp_dir!(),
+        "nex-agent-codex-profile-#{System.unique_integer([:positive])}"
+      )
 
     auth_path = Path.join([tmp_dir, "auth.json"])
     previous_home = System.get_env("CODEX_HOME")

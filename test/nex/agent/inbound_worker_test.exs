@@ -1,12 +1,28 @@
 defmodule Nex.Agent.InboundWorkerTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{Bus, InboundWorker, Memory, RunControl, Runner, Runtime, Session, Skills}
+  alias Nex.Agent.{
+    Bus,
+    Config,
+    InboundWorker,
+    Memory,
+    RunControl,
+    Runner,
+    Runtime,
+    Session,
+    Skills
+  }
+
   alias Nex.Agent.Channel.{Discord, Feishu}
   alias Nex.Agent.ControlPlane.Query, as: ControlPlaneQuery
   alias Nex.Agent.Inbound.Envelope
   alias Nex.Agent.Media.Attachment
   alias Nex.Agent.Stream.Result
+
+  @feishu_instance "feishu_test"
+  @discord_instance "discord_test"
+  @feishu_topic {:channel_outbound, @feishu_instance}
+  @discord_topic {:channel_outbound, @discord_instance}
 
   setup do
     workspace =
@@ -26,6 +42,10 @@ defmodule Nex.Agent.InboundWorkerTest do
 
     if Process.whereis(Bus) == nil do
       start_supervised!({Bus, name: Bus})
+    end
+
+    if Process.whereis(Nex.Agent.ChannelRegistry) == nil do
+      start_supervised!(Nex.Agent.Channel.Registry)
     end
 
     if Process.whereis(Nex.Agent.TaskSupervisor) == nil do
@@ -51,11 +71,7 @@ defmodule Nex.Agent.InboundWorkerTest do
     worker_name = String.to_atom("inbound_worker_test_#{System.unique_integer([:positive])}")
     parent = self()
 
-    config = %Nex.Agent.Config{
-      Nex.Agent.Config.default()
-      | feishu: %{"enabled" => true, "streaming" => true},
-        discord: %{"enabled" => true, "streaming" => true}
-    }
+    config = default_worker_config()
 
     prompt_fun = fn agent, prompt, opts ->
       Process.put(:llm_call_count, 0)
@@ -108,8 +124,8 @@ defmodule Nex.Agent.InboundWorkerTest do
          [[name: worker_name, config: config, agent_prompt_fun: prompt_fun]]}
     })
 
-    Bus.subscribe(:feishu_outbound)
-    Bus.subscribe(:discord_outbound)
+    Bus.subscribe(@feishu_topic)
+    Bus.subscribe(@discord_topic)
 
     on_exit(fn ->
       Application.delete_env(:nex_agent, :workspace_path)
@@ -124,7 +140,7 @@ defmodule Nex.Agent.InboundWorkerTest do
       :bus_message,
       :inbound,
       %Envelope{
-        channel: "feishu",
+        channel: @feishu_instance,
         chat_id: "chat-commands",
         sender_id: "tester",
         text: "/commands",
@@ -163,13 +179,16 @@ defmodule Nex.Agent.InboundWorkerTest do
       {:ok, "done", %{agent | workspace: workspace}}
     end
 
-    start_supervised!({InboundWorker, name: worker_name, agent_prompt_fun: prompt_fun})
+    start_supervised!(
+      {InboundWorker,
+       name: worker_name, config: default_worker_config(), agent_prompt_fun: prompt_fun}
+    )
 
     send(Process.whereis(worker_name), {
       :bus_message,
       :inbound,
       %Envelope{
-        channel: "feishu",
+        channel: @feishu_instance,
         chat_id: "chat-unknown-slash",
         sender_id: "tester",
         text: "/code keep this literal",
@@ -195,13 +214,16 @@ defmodule Nex.Agent.InboundWorkerTest do
       raise "slash command should not call llm"
     end
 
-    start_supervised!({InboundWorker, name: worker_name, agent_prompt_fun: prompt_fun})
+    start_supervised!(
+      {InboundWorker,
+       name: worker_name, config: default_worker_config(), agent_prompt_fun: prompt_fun}
+    )
 
     send(Process.whereis(worker_name), {
       :bus_message,
       :inbound,
       %Envelope{
-        channel: "feishu",
+        channel: @feishu_instance,
         chat_id: "chat-new",
         sender_id: "tester",
         text: "/new",
@@ -213,7 +235,7 @@ defmodule Nex.Agent.InboundWorkerTest do
       }
     })
 
-    assert_receive {:bus_message, :feishu_outbound, payload}, 1_000
+    assert_receive {:bus_message, @feishu_topic, payload}, 1_000
     assert payload.content == "New session started."
     refute_received :prompt_called
   end
@@ -225,7 +247,7 @@ defmodule Nex.Agent.InboundWorkerTest do
       :bus_message,
       :inbound,
       %Envelope{
-        channel: "feishu",
+        channel: @feishu_instance,
         chat_id: "chat-1",
         sender_id: "tester",
         text: "hello",
@@ -271,13 +293,16 @@ defmodule Nex.Agent.InboundWorkerTest do
       {:ok, "done", agent}
     end
 
-    start_supervised!({InboundWorker, name: worker_name, agent_prompt_fun: prompt_fun})
+    start_supervised!(
+      {InboundWorker,
+       name: worker_name, config: default_worker_config(), agent_prompt_fun: prompt_fun}
+    )
 
     send(Process.whereis(worker_name), {
       :bus_message,
       :inbound,
       %Envelope{
-        channel: "feishu",
+        channel: @feishu_instance,
         chat_id: "chat-1",
         sender_id: "tester",
         text: "看图",
@@ -288,7 +313,7 @@ defmodule Nex.Agent.InboundWorkerTest do
         attachments: [
           %Attachment{
             id: "media_test",
-            channel: "feishu",
+            channel: @feishu_instance,
             kind: :image,
             mime_type: "image/png",
             filename: "test.png",
@@ -341,14 +366,18 @@ defmodule Nex.Agent.InboundWorkerTest do
     end
 
     start_supervised!(
-      {InboundWorker, name: worker_name, agent_start_fun: start_fun, agent_prompt_fun: prompt_fun}
+      {InboundWorker,
+       name: worker_name,
+       config: default_worker_config(),
+       agent_start_fun: start_fun,
+       agent_prompt_fun: prompt_fun}
     )
 
     send(Process.whereis(worker_name), {
       :bus_message,
       :inbound,
       %Envelope{
-        channel: "feishu",
+        channel: @feishu_instance,
         chat_id: "chat-start",
         sender_id: "tester",
         text: "hello",
@@ -362,11 +391,11 @@ defmodule Nex.Agent.InboundWorkerTest do
 
     assert_receive {:agent_start_opts, opts}, 1_000
     assert Keyword.get(opts, :workspace) == workspace
-    assert Keyword.get(opts, :channel) == "feishu"
+    assert Keyword.get(opts, :channel) == @feishu_instance
     assert Keyword.get(opts, :chat_id) == "chat-start"
 
     assert_receive {:prompt_agent, %Nex.Agent{} = agent, "hello"}, 1_000
-    assert agent.session_key == "feishu:chat-start"
+    assert agent.session_key == "#{@feishu_instance}:chat-start"
   end
 
   test "stale owner late result is dropped after stop and does not emit outbound", %{
@@ -388,7 +417,10 @@ defmodule Nex.Agent.InboundWorkerTest do
       end
     end
 
-    start_supervised!({InboundWorker, name: worker_name, agent_prompt_fun: prompt_fun})
+    start_supervised!(
+      {InboundWorker,
+       name: worker_name, config: default_worker_config(), agent_prompt_fun: prompt_fun}
+    )
 
     worker = Process.whereis(worker_name)
 
@@ -396,7 +428,7 @@ defmodule Nex.Agent.InboundWorkerTest do
       :bus_message,
       :inbound,
       %Envelope{
-        channel: "feishu",
+        channel: @feishu_instance,
         chat_id: "chat-stale",
         sender_id: "tester",
         text: "long",
@@ -415,7 +447,7 @@ defmodule Nex.Agent.InboundWorkerTest do
       :bus_message,
       :inbound,
       %Envelope{
-        channel: "feishu",
+        channel: @feishu_instance,
         chat_id: "chat-stale",
         sender_id: "tester",
         text: "/stop",
@@ -427,15 +459,15 @@ defmodule Nex.Agent.InboundWorkerTest do
       }
     })
 
-    assert_receive {:bus_message, :feishu_outbound, stop_payload}, 1_000
+    assert_receive {:bus_message, @feishu_topic, stop_payload}, 1_000
     assert stop_payload.content =~ "Stopped 1 task(s)"
 
     send(
       worker,
-      {:async_result, {Path.expand(workspace), "feishu:chat-stale"}, owner_run_id,
+      {:async_result, {Path.expand(workspace), "#{@feishu_instance}:chat-stale"}, owner_run_id,
        {:ok, "late final", %Nex.Agent{workspace: workspace}},
        %Envelope{
-         channel: "feishu",
+         channel: @feishu_instance,
          chat_id: "chat-stale",
          sender_id: "tester",
          text: "long",
@@ -447,7 +479,7 @@ defmodule Nex.Agent.InboundWorkerTest do
        }}
     )
 
-    refute_receive {:bus_message, :feishu_outbound, _payload}, 300
+    refute_receive {:bus_message, @feishu_topic, _payload}, 300
   end
 
   test "busy ordinary message becomes a real follow-up llm turn and does not queue into owner run",
@@ -472,14 +504,18 @@ defmodule Nex.Agent.InboundWorkerTest do
       end
     end
 
-    start_supervised!({InboundWorker, name: worker_name, agent_prompt_fun: prompt_fun})
+    start_supervised!(
+      {InboundWorker,
+       name: worker_name, config: default_worker_config(), agent_prompt_fun: prompt_fun}
+    )
+
     worker = Process.whereis(worker_name)
 
     send(worker, {
       :bus_message,
       :inbound,
       %Envelope{
-        channel: "feishu",
+        channel: @feishu_instance,
         chat_id: "chat-follow-up",
         sender_id: "tester",
         text: "start long run",
@@ -497,7 +533,7 @@ defmodule Nex.Agent.InboundWorkerTest do
       :bus_message,
       :inbound,
       %Envelope{
-        channel: "feishu",
+        channel: @feishu_instance,
         chat_id: "chat-follow-up",
         sender_id: "tester",
         text: "下载多少了？",
@@ -522,7 +558,7 @@ defmodule Nex.Agent.InboundWorkerTest do
     assert Keyword.get(follow_up_opts, :skip_skills) == true
     refute Keyword.has_key?(follow_up_opts, :owner_run_id)
 
-    assert_receive {:bus_message, :feishu_outbound, payload}, 1_000
+    assert_receive {:bus_message, @feishu_topic, payload}, 1_000
     assert payload.metadata["_from_follow_up"] == true
     assert payload.content == "follow-up done"
 
@@ -531,7 +567,7 @@ defmodule Nex.Agent.InboundWorkerTest do
     assert eventually_observed?(workspace, "inbound.follow_up.started")
     assert eventually_observed?(workspace, "inbound.follow_up.finished")
 
-    assert_receive {:bus_message, :feishu_outbound, final_payload}, 1_000
+    assert_receive {:bus_message, @feishu_topic, final_payload}, 1_000
     assert final_payload.content == "owner done"
     assert eventually_observed?(workspace, "inbound.owner.dispatch.finished")
   end
@@ -565,14 +601,18 @@ defmodule Nex.Agent.InboundWorkerTest do
       end
     end
 
-    start_supervised!({InboundWorker, name: worker_name, agent_prompt_fun: prompt_fun})
+    start_supervised!(
+      {InboundWorker,
+       name: worker_name, config: default_worker_config(), agent_prompt_fun: prompt_fun}
+    )
+
     worker = Process.whereis(worker_name)
 
     send(
       worker,
       {:bus_message, :inbound,
        %Envelope{
-         channel: "feishu",
+         channel: @feishu_instance,
          chat_id: "chat-follow-up-single",
          sender_id: "tester",
          text: "start long run",
@@ -590,7 +630,7 @@ defmodule Nex.Agent.InboundWorkerTest do
       worker,
       {:bus_message, :inbound,
        %Envelope{
-         channel: "feishu",
+         channel: @feishu_instance,
          chat_id: "chat-follow-up-single",
          sender_id: "tester",
          text: "first",
@@ -609,7 +649,7 @@ defmodule Nex.Agent.InboundWorkerTest do
       worker,
       {:bus_message, :inbound,
        %Envelope{
-         channel: "feishu",
+         channel: @feishu_instance,
          chat_id: "chat-follow-up-single",
          sender_id: "tester",
          text: "second",
@@ -627,10 +667,10 @@ defmodule Nex.Agent.InboundWorkerTest do
 
     send(second_follow_up_pid, {follow_up_gate, :continue})
 
-    assert_receive {:bus_message, :feishu_outbound, payload}, 1_000
+    assert_receive {:bus_message, @feishu_topic, payload}, 1_000
     assert payload.content == "latest follow-up"
     assert payload.metadata["_from_follow_up"] == true
-    refute_receive {:bus_message, :feishu_outbound, %{content: "first"}}, 300
+    refute_receive {:bus_message, @feishu_topic, %{content: "first"}}, 300
   end
 
   test "/status stays deterministic, /btw uses follow-up llm turn, and /queue on idle starts next owner turn",
@@ -654,14 +694,18 @@ defmodule Nex.Agent.InboundWorkerTest do
       end
     end
 
-    start_supervised!({InboundWorker, name: worker_name, agent_prompt_fun: prompt_fun})
+    start_supervised!(
+      {InboundWorker,
+       name: worker_name, config: default_worker_config(), agent_prompt_fun: prompt_fun}
+    )
+
     worker = Process.whereis(worker_name)
 
     send(worker, {
       :bus_message,
       :inbound,
       %Envelope{
-        channel: "feishu",
+        channel: @feishu_instance,
         chat_id: "chat-status",
         sender_id: "tester",
         text: "/status",
@@ -673,7 +717,7 @@ defmodule Nex.Agent.InboundWorkerTest do
       }
     })
 
-    assert_receive {:bus_message, :feishu_outbound, idle_payload}, 1_000
+    assert_receive {:bus_message, @feishu_topic, idle_payload}, 1_000
     assert idle_payload.content =~ "Status: idle"
     assert idle_payload.content =~ "Evidence: recent warnings/errors=0"
     assert eventually_observed?(workspace, "inbound.status.requested")
@@ -682,7 +726,7 @@ defmodule Nex.Agent.InboundWorkerTest do
       :bus_message,
       :inbound,
       %Envelope{
-        channel: "feishu",
+        channel: @feishu_instance,
         chat_id: "chat-status",
         sender_id: "tester",
         text: "/btw side question",
@@ -703,7 +747,7 @@ defmodule Nex.Agent.InboundWorkerTest do
     assert Keyword.get(btw_opts, :tools_filter) == :follow_up
     assert Keyword.get(btw_opts, :schedule_memory_refresh) == false
 
-    assert_receive {:bus_message, :feishu_outbound, btw_payload}, 1_000
+    assert_receive {:bus_message, @feishu_topic, btw_payload}, 1_000
     assert btw_payload.content == "btw follow-up done"
     assert btw_payload.metadata["_from_follow_up"] == true
 
@@ -711,7 +755,7 @@ defmodule Nex.Agent.InboundWorkerTest do
       :bus_message,
       :inbound,
       %Envelope{
-        channel: "feishu",
+        channel: @feishu_instance,
         chat_id: "chat-status",
         sender_id: "tester",
         text: "/queue next task",
@@ -723,10 +767,10 @@ defmodule Nex.Agent.InboundWorkerTest do
       }
     })
 
-    assert_receive {:bus_message, :feishu_outbound, queue_payload}, 1_000
+    assert_receive {:bus_message, @feishu_topic, queue_payload}, 1_000
     assert queue_payload.content =~ "Queued for next owner turn"
     assert_receive {:owner_prompt, "next task"}, 1_000
-    assert_receive {:bus_message, :feishu_outbound, final_payload}, 1_000
+    assert_receive {:bus_message, @feishu_topic, final_payload}, 1_000
     assert final_payload.content == "next task done"
 
     assert eventually_observed?(workspace, "inbound.queue.changed")
@@ -752,7 +796,7 @@ defmodule Nex.Agent.InboundWorkerTest do
               %{"reason" => "user asked to stop"},
               %{
                 workspace: workspace,
-                session_key: "feishu:chat-interrupt-tool",
+                session_key: "#{@feishu_instance}:chat-interrupt-tool",
                 server: worker_name,
                 requester_pid: self()
               }
@@ -768,14 +812,18 @@ defmodule Nex.Agent.InboundWorkerTest do
       end
     end
 
-    start_supervised!({InboundWorker, name: worker_name, agent_prompt_fun: prompt_fun})
+    start_supervised!(
+      {InboundWorker,
+       name: worker_name, config: default_worker_config(), agent_prompt_fun: prompt_fun}
+    )
+
     worker = Process.whereis(worker_name)
 
     send(
       worker,
       {:bus_message, :inbound,
        %Envelope{
-         channel: "feishu",
+         channel: @feishu_instance,
          chat_id: "chat-interrupt-tool",
          sender_id: "tester",
          text: "start long run",
@@ -794,7 +842,7 @@ defmodule Nex.Agent.InboundWorkerTest do
       worker,
       {:bus_message, :inbound,
        %Envelope{
-         channel: "feishu",
+         channel: @feishu_instance,
          chat_id: "chat-interrupt-tool",
          sender_id: "tester",
          text: "/btw stop it",
@@ -811,10 +859,10 @@ defmodule Nex.Agent.InboundWorkerTest do
     assert_receive {:interrupt_tool_result, {:ok, %{cancelled?: true, run_id: ^owner_run_id}}},
                    1_000
 
-    assert_receive {:bus_message, :feishu_outbound, payload}, 1_000
+    assert_receive {:bus_message, @feishu_topic, payload}, 1_000
     assert payload.content == "stopped"
     assert eventually_observed?(workspace, "inbound.interrupt.requested")
-    refute_receive {:bus_message, :feishu_outbound, %{content: "owner should be cancelled"}}, 300
+    refute_receive {:bus_message, @feishu_topic, %{content: "owner should be cancelled"}}, 300
   end
 
   test "public request_interrupt API accepts workspace plus session_key", %{workspace: workspace} do
@@ -829,14 +877,18 @@ defmodule Nex.Agent.InboundWorkerTest do
       {:ok, "owner should be cancelled", %{agent | workspace: workspace}}
     end
 
-    start_supervised!({InboundWorker, name: worker_name, agent_prompt_fun: prompt_fun})
+    start_supervised!(
+      {InboundWorker,
+       name: worker_name, config: default_worker_config(), agent_prompt_fun: prompt_fun}
+    )
+
     worker = Process.whereis(worker_name)
 
     send(
       worker,
       {:bus_message, :inbound,
        %Envelope{
-         channel: "feishu",
+         channel: @feishu_instance,
          chat_id: "chat-public-interrupt",
          sender_id: "tester",
          text: "start long run",
@@ -853,12 +905,12 @@ defmodule Nex.Agent.InboundWorkerTest do
     assert {:ok, %{cancelled?: true, run_id: ^owner_run_id}} =
              InboundWorker.request_interrupt(
                workspace,
-               "feishu:chat-public-interrupt",
+               "#{@feishu_instance}:chat-public-interrupt",
                :user_stop,
                server: worker_name
              )
 
-    refute_receive {:bus_message, :feishu_outbound, %{content: "owner should be cancelled"}}, 300
+    refute_receive {:bus_message, @feishu_topic, %{content: "owner should be cancelled"}}, 300
   end
 
   test "owner dispatch timeout is written to ControlPlane", %{workspace: workspace} do
@@ -871,14 +923,18 @@ defmodule Nex.Agent.InboundWorkerTest do
       {:ok, "late", %{agent | workspace: workspace}}
     end
 
-    start_supervised!({InboundWorker, name: worker_name, agent_prompt_fun: prompt_fun})
+    start_supervised!(
+      {InboundWorker,
+       name: worker_name, config: default_worker_config(), agent_prompt_fun: prompt_fun}
+    )
+
     worker = Process.whereis(worker_name)
 
     send(
       worker,
       {:bus_message, :inbound,
        %Envelope{
-         channel: "feishu",
+         channel: @feishu_instance,
          chat_id: "chat-timeout",
          sender_id: "tester",
          text: "start long run",
@@ -892,7 +948,7 @@ defmodule Nex.Agent.InboundWorkerTest do
 
     assert_receive {:owner_started, owner_run_id}, 1_000
 
-    key = {Path.expand(workspace), "feishu:chat-timeout"}
+    key = {Path.expand(workspace), "#{@feishu_instance}:chat-timeout"}
     %{active_tasks: %{^key => %{pid: pid}}} = :sys.get_state(worker)
     send(worker, {:check_timeout, key, pid})
 
@@ -912,13 +968,16 @@ defmodule Nex.Agent.InboundWorkerTest do
       raise "owner crash"
     end
 
-    start_supervised!({InboundWorker, name: worker_name, agent_prompt_fun: prompt_fun})
+    start_supervised!(
+      {InboundWorker,
+       name: worker_name, config: default_worker_config(), agent_prompt_fun: prompt_fun}
+    )
 
     send(
       Process.whereis(worker_name),
       {:bus_message, :inbound,
        %Envelope{
-         channel: "feishu",
+         channel: @feishu_instance,
          chat_id: "chat-crash",
          sender_id: "tester",
          text: "start crash run",
@@ -980,14 +1039,18 @@ defmodule Nex.Agent.InboundWorkerTest do
     prompt_fun = fn agent, _prompt, _opts -> {:ok, "done", agent} end
 
     start_supervised!(
-      {InboundWorker, name: worker_name, agent_start_fun: start_fun, agent_prompt_fun: prompt_fun}
+      {InboundWorker,
+       name: worker_name,
+       config: default_worker_config(),
+       agent_start_fun: start_fun,
+       agent_prompt_fun: prompt_fun}
     )
 
     send(Process.whereis(worker_name), {
       :bus_message,
       :inbound,
       %Envelope{
-        channel: "feishu",
+        channel: @feishu_instance,
         chat_id: "chat-other",
         sender_id: "tester",
         text: "hello",
@@ -1063,13 +1126,16 @@ defmodule Nex.Agent.InboundWorkerTest do
       end
     end
 
-    start_supervised!({InboundWorker, name: worker_name, agent_prompt_fun: prompt_fun})
+    start_supervised!(
+      {InboundWorker,
+       name: worker_name, config: default_worker_config(), agent_prompt_fun: prompt_fun}
+    )
 
     send(Process.whereis(worker_name), {
       :bus_message,
       :inbound,
       %Envelope{
-        channel: "feishu",
+        channel: @feishu_instance,
         chat_id: "chat-1",
         sender_id: "tester",
         text: "123",
@@ -1126,13 +1192,16 @@ defmodule Nex.Agent.InboundWorkerTest do
       {:ok, "final reply", %{agent | session: updated_session, workspace: workspace}}
     end
 
-    start_supervised!({InboundWorker, name: worker_name, agent_prompt_fun: prompt_fun})
+    start_supervised!(
+      {InboundWorker,
+       name: worker_name, config: default_worker_config(), agent_prompt_fun: prompt_fun}
+    )
 
     send(Process.whereis(worker_name), {
       :bus_message,
       :inbound,
       %Envelope{
-        channel: "feishu",
+        channel: @feishu_instance,
         chat_id: "chat-memory",
         sender_id: "tester",
         text: "hello",
@@ -1144,7 +1213,7 @@ defmodule Nex.Agent.InboundWorkerTest do
       }
     })
 
-    assert_receive {:bus_message, :feishu_outbound, payload}, 1_000
+    assert_receive {:bus_message, @feishu_topic, payload}, 1_000
     assert payload.content == "final reply"
     assert Memory.read_long_term(workspace: workspace) == "# Memory\n"
 
@@ -1158,10 +1227,10 @@ defmodule Nex.Agent.InboundWorkerTest do
   test "feishu stream sink updates card incrementally and suppresses default final outbound" do
     parent = self()
 
-    worker_config = %Nex.Agent.Config{
-      Nex.Agent.Config.default()
-      | feishu: %{"enabled" => true, "streaming" => true}
-    }
+    worker_config =
+      config_with_channels(%{
+        @feishu_instance => %{"type" => "feishu", "enabled" => true, "streaming" => true}
+      })
 
     http_post_fun = fn url, body, headers ->
       send(parent, {:http_post, url, body, headers})
@@ -1186,20 +1255,27 @@ defmodule Nex.Agent.InboundWorkerTest do
       {:ok, %{"code" => 0, "data" => %{}}}
     end
 
-    config = %Nex.Agent.Config{Nex.Agent.Config.default() | feishu: %{"enabled" => false}}
+    channel_config = %{
+      "type" => "feishu",
+      "enabled" => false,
+      "app_id" => "cli_test",
+      "app_secret" => "sec_test"
+    }
 
-    if Process.whereis(Feishu), do: GenServer.stop(Feishu)
+    config = config_with_channels(%{@feishu_instance => channel_config})
 
     start_supervised!(
       {Feishu,
+       instance_id: @feishu_instance,
        config: config,
+       channel_config: channel_config,
        http_post_fun: http_post_fun,
        http_put_fun: http_put_fun,
        http_post_multipart_fun: fn _url, _body, _headers -> {:error, :unused} end,
        http_get_fun: fn _url, _headers -> {:error, :unused} end}
     )
 
-    :sys.replace_state(Process.whereis(Feishu), fn state ->
+    :sys.replace_state(Nex.Agent.Channel.Registry.whereis(@feishu_instance), fn state ->
       %{state | enabled: true, app_id: "cli_test", app_secret: "sec_test"}
     end)
 
@@ -1228,7 +1304,7 @@ defmodule Nex.Agent.InboundWorkerTest do
       :bus_message,
       :inbound,
       %Envelope{
-        channel: "feishu",
+        channel: @feishu_instance,
         chat_id: "chat-stream",
         sender_id: "tester",
         text: "hello",
@@ -1266,16 +1342,16 @@ defmodule Nex.Agent.InboundWorkerTest do
              put_body["content"] =~ "你好，哥"
            end)
 
-    refute_receive {:bus_message, :feishu_outbound, _payload}, 300
+    refute_receive {:bus_message, @feishu_topic, _payload}, 300
   end
 
   test "feishu stream sink batches rapid deltas before updating card" do
     parent = self()
 
-    worker_config = %Nex.Agent.Config{
-      Nex.Agent.Config.default()
-      | feishu: %{"enabled" => true, "streaming" => true}
-    }
+    worker_config =
+      config_with_channels(%{
+        @feishu_instance => %{"type" => "feishu", "enabled" => true, "streaming" => true}
+      })
 
     http_post_fun = fn url, body, headers ->
       send(parent, {:http_post, url, body, headers})
@@ -1300,20 +1376,27 @@ defmodule Nex.Agent.InboundWorkerTest do
       {:ok, %{"code" => 0, "data" => %{}}}
     end
 
-    config = %Nex.Agent.Config{Nex.Agent.Config.default() | feishu: %{"enabled" => false}}
+    channel_config = %{
+      "type" => "feishu",
+      "enabled" => false,
+      "app_id" => "cli_test",
+      "app_secret" => "sec_test"
+    }
 
-    if Process.whereis(Feishu), do: GenServer.stop(Feishu)
+    config = config_with_channels(%{@feishu_instance => channel_config})
 
     start_supervised!(
       {Feishu,
+       instance_id: @feishu_instance,
        config: config,
+       channel_config: channel_config,
        http_post_fun: http_post_fun,
        http_put_fun: http_put_fun,
        http_post_multipart_fun: fn _url, _body, _headers -> {:error, :unused} end,
        http_get_fun: fn _url, _headers -> {:error, :unused} end}
     )
 
-    :sys.replace_state(Process.whereis(Feishu), fn state ->
+    :sys.replace_state(Nex.Agent.Channel.Registry.whereis(@feishu_instance), fn state ->
       %{state | enabled: true, app_id: "cli_test", app_secret: "sec_test"}
     end)
 
@@ -1341,7 +1424,7 @@ defmodule Nex.Agent.InboundWorkerTest do
       :bus_message,
       :inbound,
       %Envelope{
-        channel: "feishu",
+        channel: @feishu_instance,
         chat_id: "chat-stream-batch",
         sender_id: "tester",
         text: "hello",
@@ -1366,16 +1449,18 @@ defmodule Nex.Agent.InboundWorkerTest do
   test "discord stream sink edits current message and opens a new message on newmsg" do
     parent = self()
 
-    worker_config = %Nex.Agent.Config{
-      Nex.Agent.Config.default()
-      | discord: %{"enabled" => true, "streaming" => true}
-    }
+    worker_config =
+      config_with_channels(%{
+        @discord_instance => %{"type" => "discord", "enabled" => true, "streaming" => true}
+      })
 
-    if Process.whereis(Discord), do: GenServer.stop(Discord)
+    channel_config = %{"type" => "discord", "enabled" => false, "token" => "discord-token"}
 
     start_supervised!(
       {Discord,
-       config: %Nex.Agent.Config{Nex.Agent.Config.default() | discord: %{"enabled" => false}},
+       instance_id: @discord_instance,
+       config: config_with_channels(%{@discord_instance => channel_config}),
+       channel_config: channel_config,
        http_post_fun: fn url, body, headers ->
          send(parent, {:discord_http_post, url, body, headers})
          {:ok, %{"id" => "msg_" <> Integer.to_string(System.unique_integer([:positive]))}}
@@ -1386,7 +1471,7 @@ defmodule Nex.Agent.InboundWorkerTest do
        end}
     )
 
-    :sys.replace_state(Process.whereis(Discord), fn state ->
+    :sys.replace_state(Nex.Agent.Channel.Registry.whereis(@discord_instance), fn state ->
       %{state | enabled: true, token: "discord-token"}
     end)
 
@@ -1413,7 +1498,7 @@ defmodule Nex.Agent.InboundWorkerTest do
       :bus_message,
       :inbound,
       %Envelope{
-        channel: "discord",
+        channel: @discord_instance,
         chat_id: "discord-chat",
         sender_id: "tester",
         text: "hello",
@@ -1440,7 +1525,7 @@ defmodule Nex.Agent.InboundWorkerTest do
     assert "第二段" in contents or Enum.any?(contents, &String.contains?(&1, "第二段"))
     assert length(message_posts) >= 2
 
-    refute_receive {:bus_message, :discord_outbound, _payload}, 300
+    refute_receive {:bus_message, @discord_topic, _payload}, 300
   end
 
   defp collect_discord_posts(acc, timeout) do
@@ -1457,7 +1542,7 @@ defmodule Nex.Agent.InboundWorkerTest do
 
   defp collect_feishu_payloads(acc) do
     receive do
-      {:bus_message, :feishu_outbound, payload} ->
+      {:bus_message, @feishu_topic, payload} ->
         collect_feishu_payloads([payload | acc])
     after
       200 -> Enum.reverse(acc)
@@ -1507,6 +1592,34 @@ defmodule Nex.Agent.InboundWorkerTest do
 
   defp observations(workspace, tag) do
     ControlPlaneQuery.query(%{"tag" => tag}, workspace: workspace)
+  end
+
+  defp config_with_channels(channels) do
+    %Config{
+      Config.default()
+      | channel: channels,
+        provider: %{
+          "providers" => %{
+            "ollama-local" => %{
+              "type" => "ollama",
+              "base_url" => "http://localhost:11434"
+            }
+          }
+        },
+        model: %{
+          "default_model" => "test-model",
+          "cheap_model" => "test-model",
+          "advisor_model" => "test-model",
+          "models" => %{"test-model" => %{"provider" => "ollama-local", "id" => "test-model"}}
+        }
+    }
+  end
+
+  defp default_worker_config do
+    config_with_channels(%{
+      @feishu_instance => %{"type" => "feishu", "enabled" => true, "streaming" => true},
+      @discord_instance => %{"type" => "discord", "enabled" => true, "streaming" => true}
+    })
   end
 
   defp stream_client_from_response(fun) when is_function(fun, 2) do

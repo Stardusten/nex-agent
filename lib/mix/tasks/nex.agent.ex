@@ -119,11 +119,9 @@ defmodule Mix.Tasks.Nex.Agent do
     Mix.shell().info("  mix nex.agent evolve")
     Mix.shell().info("Configuration:")
     Mix.shell().info("  mix nex.agent config show [--config PATH]")
-    Mix.shell().info("  mix nex.agent config set provider VALUE [--config PATH]")
-    Mix.shell().info("  mix nex.agent config set model VALUE [--config PATH]")
-    Mix.shell().info("  mix nex.agent config set api_key PROVIDER KEY [--config PATH]")
-    Mix.shell().info("  mix nex.agent config set defaults.workspace PATH [--config PATH]")
+    Mix.shell().info("  mix nex.agent config set workspace PATH [--config PATH]")
     Mix.shell().info("  mix nex.agent config set gateway.port PORT [--config PATH]")
+    Mix.shell().info("  mix nex.agent config set max_iterations COUNT [--config PATH]")
     Mix.shell().info("")
     Mix.shell().info("Global options:")
     Mix.shell().info("  -c, --config PATH      Use a specific config file")
@@ -174,20 +172,18 @@ defmodule Mix.Tasks.Nex.Agent do
     Mix.shell().info("")
     Mix.shell().info("Next steps:")
     Mix.shell().info("  mix nex.agent config show")
-    Mix.shell().info("  mix nex.agent config set provider <provider>")
-    Mix.shell().info("  mix nex.agent config set model <model>")
-    Mix.shell().info("  mix nex.agent config set api_key <provider> <key>")
+    Mix.shell().info("  edit config.json provider.providers and model.models")
     Mix.shell().info("  mix nex.agent gateway")
   end
 
   defp run_evolve(target) do
     ensure_app_started()
     config = Config.load(config_path: target.config_path)
+    model_runtime = Config.default_model_runtime(config)
 
     Mix.shell().info("=== Evolution Cycle ===")
     Mix.shell().info("Workspace: #{target.workspace}")
-    Mix.shell().info("Provider: #{config.provider}")
-    Mix.shell().info("Model: #{config.model}")
+    print_model_runtime(model_runtime)
     Mix.shell().info("")
 
     # Show pre-evolution state
@@ -259,12 +255,12 @@ defmodule Mix.Tasks.Nex.Agent do
 
   defp run_status(target) do
     config = Config.load()
+    model_runtime = Config.default_model_runtime(config)
     gateway_running = gateway_running?(target)
 
     Mix.shell().info("Config: #{target.config_path}")
     Mix.shell().info("Workspace: #{target.workspace}")
-    Mix.shell().info("Provider: #{config.provider}")
-    Mix.shell().info("Model: #{config.model}")
+    print_model_runtime(model_runtime)
     Mix.shell().info("Gateway port: #{Config.gateway_port(config)}")
     Mix.shell().info("Gateway: #{if(gateway_running, do: "running", else: "stopped")}")
     Mix.shell().info("Enabled channels: #{enabled_channels(config) |> format_list()}")
@@ -470,33 +466,28 @@ defmodule Mix.Tasks.Nex.Agent do
     case args do
       ["config", "show"] ->
         config = Config.load()
+        model_runtime = Config.default_model_runtime(config)
         Mix.shell().info("Config: #{target.config_path}")
         Mix.shell().info("Workspace: #{target.workspace}")
-        Mix.shell().info("Provider: #{config.provider}")
-        Mix.shell().info("Model: #{config.model}")
+        print_model_runtime(model_runtime)
         Mix.shell().info("Gateway port: #{Config.gateway_port(config)}")
+        Mix.shell().info("Max iterations: #{Config.get_max_iterations(config)}")
+        Mix.shell().info("Enabled channels: #{enabled_channels(config) |> format_list()}")
 
-      ["config", "set", "provider", value] ->
-        persist_config_update(:provider, value)
-        Mix.shell().info("Updated provider = #{value}")
-
-      ["config", "set", "model", value] ->
-        persist_config_update(:model, value)
-        Mix.shell().info("Updated model = #{value}")
-
-      ["config", "set", "api_key", provider, key] ->
-        persist_config_update(:api_key, {provider, key})
-        Mix.shell().info("Updated #{provider} API key")
-
-      ["config", "set", "defaults.workspace", value] ->
+      ["config", "set", "workspace", value] ->
         workspace = Path.expand(value)
         persist_config_update(:default_workspace, workspace)
-        Mix.shell().info("Updated defaults.workspace = #{workspace}")
+        Mix.shell().info("Updated workspace = #{workspace}")
 
       ["config", "set", "gateway.port", value] ->
         port = parse_positive_integer!(value, "gateway.port")
         persist_config_update(:gateway_port, port)
         Mix.shell().info("Updated gateway.port = #{port}")
+
+      ["config", "set", "max_iterations", value] ->
+        max_iterations = parse_positive_integer!(value, "max_iterations")
+        persist_config_update(:max_iterations, max_iterations)
+        Mix.shell().info("Updated max_iterations = #{max_iterations}")
 
       _ ->
         Mix.raise("Unknown config command")
@@ -509,27 +500,11 @@ defmodule Mix.Tasks.Nex.Agent do
     |> Config.save()
   end
 
-  defp parse_boolean!(value) when is_binary(value) do
-    case String.downcase(String.trim(value)) do
-      "true" -> true
-      "false" -> false
-      _ -> Mix.raise("Invalid boolean: #{value} (expected true/false)")
-    end
-  end
-
   defp parse_positive_integer!(value, field) when is_binary(value) do
     case Integer.parse(String.trim(value)) do
       {parsed, ""} when parsed > 0 -> parsed
       _ -> Mix.raise("Invalid #{field}: #{value} (expected positive integer)")
     end
-  end
-
-  defp parse_csv_list(value) when is_binary(value) do
-    value
-    |> String.split(",")
-    |> Enum.map(&String.trim/1)
-    |> Enum.reject(&(&1 == ""))
-    |> Enum.uniq()
   end
 
   defp run_single(opts, target) do
@@ -541,12 +516,15 @@ defmodule Mix.Tasks.Nex.Agent do
       Mix.raise("Invalid configuration")
     end
 
+    model_runtime = default_model_runtime!(config)
+
     {:ok, agent} =
       Nex.Agent.start(
-        provider: Config.provider_to_atom(config.provider),
-        model: config.model,
-        api_key: Config.get_current_api_key(config),
-        base_url: Config.get_current_base_url(config),
+        provider: model_runtime.provider,
+        model: model_runtime.model_id,
+        api_key: model_runtime.api_key,
+        base_url: model_runtime.base_url,
+        provider_options: model_runtime.provider_options,
         tools: config.tools,
         workspace: target.workspace,
         max_iterations: Config.get_max_iterations(config)
@@ -567,12 +545,15 @@ defmodule Mix.Tasks.Nex.Agent do
 
     Mix.shell().info("Nex Agent (type 'exit' to quit)")
 
+    model_runtime = default_model_runtime!(config)
+
     {:ok, agent} =
       Nex.Agent.start(
-        provider: Config.provider_to_atom(config.provider),
-        model: config.model,
-        api_key: Config.get_current_api_key(config),
-        base_url: Config.get_current_base_url(config),
+        provider: model_runtime.provider,
+        model: model_runtime.model_id,
+        api_key: model_runtime.api_key,
+        base_url: model_runtime.base_url,
+        provider_options: model_runtime.provider_options,
         tools: config.tools,
         workspace: target.workspace,
         max_iterations: Config.get_max_iterations(config)
@@ -685,16 +666,30 @@ defmodule Mix.Tasks.Nex.Agent do
   end
 
   defp enabled_channels(config) do
-    []
-    |> maybe_enabled("feishu", Config.feishu_enabled?(config))
-    |> maybe_enabled("discord", Config.discord_enabled?(config))
+    config
+    |> Config.enabled_channel_instances()
+    |> Enum.map(fn {id, instance} -> "#{id}(#{Map.get(instance, "type", "?")})" end)
   end
-
-  defp maybe_enabled(channels, name, true), do: channels ++ [name]
-  defp maybe_enabled(channels, _name, false), do: channels
 
   defp format_list([]), do: "(none)"
   defp format_list(list), do: Enum.join(list, ", ")
+
+  defp print_model_runtime(nil) do
+    Mix.shell().info("Provider: (invalid)")
+    Mix.shell().info("Model: (invalid)")
+  end
+
+  defp print_model_runtime(runtime) when is_map(runtime) do
+    Mix.shell().info("Provider: #{runtime.provider_key} (#{runtime.provider_type})")
+    Mix.shell().info("Model: #{runtime.model_key} -> #{runtime.model_id}")
+  end
+
+  defp default_model_runtime!(config) do
+    case Config.default_model_runtime(config) do
+      nil -> Mix.raise("Invalid configuration: model.default_model is not resolvable")
+      runtime -> runtime
+    end
+  end
 
   defp service_label(:bus), do: "Bus"
   defp service_label(:cron), do: "Cron"

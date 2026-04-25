@@ -1,532 +1,230 @@
 defmodule Nex.Agent.Config do
   @moduledoc """
-  Configuration management - loads config from ~/.nex/agent/config.json.
+  Configuration management for the runtime config contract.
   """
 
-  alias Nex.Agent.Auth.Codex
   alias Nex.Agent.LLM.ProviderProfile
-
-  @channel_names ~w(feishu discord)
 
   @default_config_path Path.join(System.get_env("HOME", "~"), ".nex/agent/config.json")
 
-  defstruct provider: "openai",
-            model: "gpt-4o",
-            providers: %{},
-            tools: %{},
-            defaults: %{},
-            skill_runtime: %{},
-            request_trace: %{},
-            gateway: %{},
-            feishu: %{},
-            discord: %{}
+  @provider_type_atoms %{
+    "openai-compatible" => :openai,
+    "openai" => :openai,
+    "anthropic" => :anthropic,
+    "openai-codex" => :openai_codex,
+    "openai-codex-custom" => :openai_codex_custom,
+    "openrouter" => :openrouter,
+    "ollama" => :ollama
+  }
 
-  @type t :: %__MODULE__{
-          provider: String.t(),
-          model: String.t(),
-          providers: map(),
-          tools: map(),
-          defaults: map(),
-          skill_runtime: map(),
-          request_trace: map(),
-          gateway: map(),
-          feishu: map(),
-          discord: map()
+  defstruct max_iterations: 40,
+            workspace: nil,
+            channel: %{},
+            gateway: %{},
+            provider: %{},
+            model: %{},
+            tools: %{}
+
+  @type model_runtime :: %{
+          model_key: String.t(),
+          model_id: String.t(),
+          provider_key: String.t(),
+          provider_type: String.t(),
+          provider: atom(),
+          api_key: String.t() | nil,
+          base_url: String.t() | nil,
+          provider_options: keyword()
         }
 
-  @doc """
-  Get the default configuration file path.
-  """
+  @type t :: %__MODULE__{
+          max_iterations: pos_integer() | nil,
+          workspace: String.t() | nil,
+          channel: map(),
+          gateway: map(),
+          provider: map(),
+          model: map(),
+          tools: map()
+        }
+
   @spec default_config_path() :: String.t()
   def default_config_path, do: @default_config_path
 
-  @doc """
-  Get the configuration file path.
-  """
   @spec config_path(keyword()) :: String.t()
   def config_path(opts \\ []) when is_list(opts) do
     Keyword.get(opts, :config_path) ||
       Application.get_env(:nex_agent, :config_path, @default_config_path)
   end
 
-  @doc """
-  Load the configuration file.
-  """
   @spec load(keyword()) :: t()
   def load(opts \\ []) when is_list(opts) do
     path = config_path(opts)
 
     if File.exists?(path) do
-      case File.read!(path) |> Jason.decode() do
-        {:ok, data} when is_map(data) ->
-          %__MODULE__{
-            provider: Map.get(data, "provider", "openai"),
-            model: Map.get(data, "model", "gpt-4o"),
-            providers: Map.merge(default_providers(), Map.get(data, "providers", %{})),
-            tools: Map.get(data, "tools", %{}),
-            defaults: Map.merge(default_defaults(), Map.get(data, "defaults", %{})),
-            skill_runtime:
-              Map.merge(default_skill_runtime(), Map.get(data, "skill_runtime", %{})),
-            request_trace:
-              Map.merge(default_request_trace(), Map.get(data, "request_trace", %{})),
-            gateway: Map.merge(default_gateway(), Map.get(data, "gateway", %{})),
-            feishu: Map.merge(default_feishu(), Map.get(data, "feishu", %{})),
-            discord: Map.merge(default_discord(), Map.get(data, "discord", %{}))
-          }
-
-        _ ->
-          default()
+      case path |> File.read!() |> Jason.decode() do
+        {:ok, data} when is_map(data) -> from_map(data)
+        _ -> invalid()
       end
     else
       default()
     end
   end
 
-  @doc """
-  Save the configuration file.
-  """
   @spec save(t(), keyword()) :: :ok | {:error, term()}
   def save(%__MODULE__{} = config, opts \\ []) when is_list(opts) do
     path = config_path(opts)
     File.mkdir_p!(Path.dirname(path))
 
     data = %{
+      "max_iterations" => config.max_iterations,
+      "workspace" => config.workspace,
+      "channel" => config.channel,
+      "gateway" => config.gateway,
       "provider" => config.provider,
       "model" => config.model,
-      "providers" => config.providers,
-      "tools" => config.tools,
-      "defaults" => config.defaults,
-      "skill_runtime" => config.skill_runtime,
-      "request_trace" => config.request_trace,
-      "gateway" => config.gateway,
-      "feishu" => config.feishu,
-      "discord" => config.discord
+      "tools" => config.tools
     }
 
     File.write(path, Jason.encode!(data, pretty: true))
   end
 
-  @doc """
-  Get the default configuration.
-  """
   @spec default() :: t()
   def default do
     %__MODULE__{
-      provider: "openai",
-      model: "gpt-4o",
-      providers: default_providers(),
-      defaults: default_defaults(),
-      skill_runtime: default_skill_runtime(),
-      request_trace: default_request_trace(),
+      max_iterations: 40,
+      workspace: nil,
+      channel: %{},
       gateway: default_gateway(),
-      feishu: default_feishu(),
-      discord: default_discord()
+      provider: %{
+        "providers" => %{
+          "openai" => %{"type" => "openai-compatible", "api_key" => nil, "base_url" => nil},
+          "anthropic" => %{"type" => "anthropic", "api_key" => nil, "base_url" => nil},
+          "openai-codex" => %{
+            "type" => "openai-codex",
+            "api_key" => nil,
+            "base_url" => ProviderProfile.default_base_url(:openai_codex)
+          },
+          "openai-codex-custom" => %{
+            "type" => "openai-codex-custom",
+            "api_key" => nil,
+            "base_url" => ProviderProfile.default_base_url(:openai_codex_custom)
+          },
+          "openrouter" => %{
+            "type" => "openrouter",
+            "api_key" => nil,
+            "base_url" => "https://openrouter.ai/api/v1"
+          },
+          "ollama" => %{
+            "type" => "ollama",
+            "api_key" => nil,
+            "base_url" => "http://localhost:11434"
+          }
+        }
+      },
+      model: %{
+        "default_model" => "gpt-4o",
+        "cheap_model" => "gpt-4o",
+        "advisor_model" => "gpt-4o",
+        "models" => %{"gpt-4o" => %{"provider" => "openai", "id" => "gpt-4o"}}
+      },
+      tools: %{}
     }
   end
 
-  @doc """
-  Get the Feishu configuration.
-  """
-  @spec feishu(t()) :: map()
-  def feishu(%__MODULE__{} = config) do
-    Map.merge(default_feishu(), config.feishu || %{})
+  @spec from_map(map()) :: t()
+  def from_map(data) when is_map(data) do
+    %__MODULE__{
+      max_iterations: normalize_max_iterations(Map.get(data, "max_iterations")),
+      workspace: normalize_optional_string(Map.get(data, "workspace")),
+      channel: normalize_channels(Map.get(data, "channel")),
+      gateway: normalize_gateway(Map.get(data, "gateway")),
+      provider: normalize_provider_root(Map.get(data, "provider")),
+      model: normalize_model_root(Map.get(data, "model")),
+      tools: normalize_tools(Map.get(data, "tools"))
+    }
   end
 
-  @doc """
-  Whether Feishu is enabled.
-  """
-  @spec feishu_enabled?(t()) :: boolean()
-  def feishu_enabled?(%__MODULE__{} = config) do
+  @spec model_role(t(), atom() | String.t()) :: model_runtime() | nil
+  def model_role(%__MODULE__{} = config, role) do
+    role_key =
+      case role do
+        :default -> "default_model"
+        :cheap -> "cheap_model"
+        :advisor -> "advisor_model"
+        role when is_atom(role) -> Atom.to_string(role) <> "_model"
+        role when is_binary(role) -> role
+      end
+
+    with model_key when is_binary(model_key) and model_key != "" <-
+           Map.get(config.model || %{}, role_key),
+         {:ok, runtime} <- resolve_model_runtime(config, model_key) do
+      runtime
+    else
+      _ -> nil
+    end
+  end
+
+  @spec default_model_runtime(t()) :: model_runtime() | nil
+  def default_model_runtime(%__MODULE__{} = config), do: model_role(config, :default)
+
+  @spec cheap_model_runtime(t()) :: model_runtime() | nil
+  def cheap_model_runtime(%__MODULE__{} = config), do: model_role(config, :cheap)
+
+  @spec advisor_model_runtime(t()) :: model_runtime() | nil
+  def advisor_model_runtime(%__MODULE__{} = config), do: model_role(config, :advisor)
+
+  @spec channel_instances(t()) :: %{optional(String.t()) => map()}
+  def channel_instances(%__MODULE__{} = config), do: config.channel || %{}
+
+  @spec enabled_channel_instances(t()) :: %{optional(String.t()) => map()}
+  def enabled_channel_instances(%__MODULE__{} = config) do
     config
-    |> feishu()
-    |> Map.get("enabled", false)
-    |> Kernel.==(true)
+    |> channel_instances()
+    |> Enum.filter(fn {_id, instance} -> Map.get(instance, "enabled", false) == true end)
+    |> Map.new()
   end
 
-  @doc """
-  Get the Feishu `app_id`.
-  """
-  @spec feishu_app_id(t()) :: String.t() | nil
-  def feishu_app_id(%__MODULE__{} = config) do
-    case Map.get(feishu(config), "app_id") do
-      app_id when is_binary(app_id) and app_id != "" -> app_id
-      _ -> nil
-    end
+  @spec channel_instance(t(), String.t() | atom()) :: map() | nil
+  def channel_instance(%__MODULE__{} = config, instance_id) do
+    Map.get(config.channel || %{}, to_string(instance_id))
   end
 
-  @doc """
-  Get the Feishu `app_secret`.
-  """
-  @spec feishu_app_secret(t()) :: String.t() | nil
-  def feishu_app_secret(%__MODULE__{} = config) do
-    case Map.get(feishu(config), "app_secret") do
-      app_secret when is_binary(app_secret) and app_secret != "" -> app_secret
-      _ -> nil
-    end
-  end
-
-  @doc """
-  Get the Feishu `allow_from` list.
-  """
-  @spec feishu_allow_from(t()) :: [String.t()]
-  def feishu_allow_from(%__MODULE__{} = config) do
-    case Map.get(feishu(config), "allow_from") do
-      list when is_list(list) -> Enum.map(list, &to_string/1)
-      _ -> []
-    end
-  end
-
-  @doc """
-  Get the Feishu `encrypt_key`.
-  """
-  @spec feishu_encrypt_key(t()) :: String.t() | nil
-  def feishu_encrypt_key(%__MODULE__{} = config) do
-    case Map.get(feishu(config), "encrypt_key") do
-      key when is_binary(key) and key != "" -> key
-      _ -> nil
-    end
-  end
-
-  @doc """
-  Get the Feishu `verification_token`.
-  """
-  @spec feishu_verification_token(t()) :: String.t() | nil
-  def feishu_verification_token(%__MODULE__{} = config) do
-    case Map.get(feishu(config), "verification_token") do
-      token when is_binary(token) and token != "" -> token
-      _ -> nil
-    end
-  end
-
-  @doc """
-  Get the API key for the specified provider.
-  """
-  @spec get_api_key(t(), String.t()) :: String.t() | nil
-  def get_api_key(%__MODULE__{} = config, provider) do
-    case Map.get(config.providers, provider) do
-      %{"api_key" => key} when is_binary(key) and key != "" -> key
-      _ -> provider_env_api_key(provider)
-    end
-  end
-
-  @doc """
-  Get the base URL for the specified provider.
-  """
-  @spec get_base_url(t(), String.t()) :: String.t() | nil
-  def get_base_url(%__MODULE__{} = config, provider) do
-    case Map.get(config.providers, provider) do
-      %{"base_url" => url} when is_binary(url) and url != "" -> url
-      _ -> provider_default_base_url(provider)
-    end
-  end
-
-  @doc """
-  Get the API key for the current provider.
-  """
-  @spec get_current_api_key(t()) :: String.t() | nil
-  def get_current_api_key(%__MODULE__{provider: provider} = config) do
-    get_api_key(config, provider)
-  end
-
-  @doc """
-  Get the base URL for the current provider.
-  """
-  @spec get_current_base_url(t()) :: String.t() | nil
-  def get_current_base_url(%__MODULE__{provider: provider} = config) do
-    get_base_url(config, provider)
-  end
-
-  @doc """
-  Get tool configuration value.
-  Supports reading from:
-  - Direct value in config.json: "brave_api_key": "xxx"
-  - Environment variable: "brave_api_key": {"env": "BRAVE_API_KEY"}
-  """
-  @spec get_tool_config(t(), String.t()) :: String.t() | nil
-  def get_tool_config(%__MODULE__{tools: tools}, key) do
-    case Map.get(tools, key) do
-      nil ->
-        nil
-
-      %{"env" => env_var} when is_binary(env_var) ->
-        System.get_env(env_var)
-
-      value when is_binary(value) ->
-        value
+  @spec channel_runtime(t(), String.t() | atom()) :: map()
+  def channel_runtime(%__MODULE__{} = config, instance_id) do
+    case channel_instance(config, instance_id) do
+      %{} = instance ->
+        %{
+          "type" => Map.get(instance, "type"),
+          "streaming" => Map.get(instance, "streaming", default_streaming(instance)) == true
+        }
 
       _ ->
-        nil
+        %{"type" => nil, "streaming" => false}
     end
   end
 
-  @doc """
-  Get normalized backend selection for `web_search`.
-  """
-  @spec web_search_provider_config(t() | nil) :: map()
-  def web_search_provider_config(%__MODULE__{tools: tools}) when is_map(tools) do
-    raw =
-      case Map.get(tools, "web_search") do
-        %{} = config -> config
-        _ -> %{}
-      end
-
-    providers =
-      default_web_search_providers()
-      |> deep_merge_provider_configs(Map.get(raw, "providers"))
-
-    %{
-      "provider" => normalize_tool_provider(Map.get(raw, "provider"), ["duckduckgo", "codex"], "duckduckgo"),
-      "providers" => %{
-        "duckduckgo" => normalize_web_search_duckduckgo_provider(Map.get(providers, "duckduckgo")),
-        "codex" => normalize_web_search_codex_provider(Map.get(providers, "codex"))
-      }
-    }
-  end
-
-  def web_search_provider_config(_config) do
-    %{
-      "provider" => "duckduckgo",
-      "providers" => default_web_search_providers()
-    }
-  end
-
-  @doc """
-  Get normalized backend selection for `image_generation`.
-  """
-  @spec image_generation_provider_config(t() | nil) :: map()
-  def image_generation_provider_config(%__MODULE__{tools: tools}) when is_map(tools) do
-    raw =
-      case Map.get(tools, "image_generation") do
-        %{} = config -> config
-        _ -> %{}
-      end
-
-    providers =
-      default_image_generation_providers()
-      |> deep_merge_provider_configs(Map.get(raw, "providers"))
-
-    %{
-      "provider" => normalize_tool_provider(Map.get(raw, "provider"), ["codex", "nanobanana"], "codex"),
-      "providers" => %{
-        "codex" => normalize_image_generation_codex_provider(Map.get(providers, "codex")),
-        "nanobanana" => Map.get(providers, "nanobanana", %{})
-      }
-    }
-  end
-
-  def image_generation_provider_config(_config) do
-    %{
-      "provider" => "codex",
-      "providers" => default_image_generation_providers()
-    }
-  end
-
-  @doc """
-  Get the Skill Runtime configuration.
-  """
-  @spec skill_runtime(t()) :: map()
-  def skill_runtime(%__MODULE__{} = config) do
-    Map.merge(default_skill_runtime(), config.skill_runtime || %{})
-  end
-
-  @doc """
-  Get runtime-facing configuration for a single channel.
-  """
-  @spec channel_runtime(t(), String.t() | atom()) :: map()
-  def channel_runtime(%__MODULE__{} = config, channel) do
-    case to_string(channel) do
-      "feishu" -> %{"streaming" => Map.get(feishu(config), "streaming", true) == true}
-      "discord" -> %{"streaming" => Map.get(discord(config), "streaming", false) == true}
-      _ -> %{"streaming" => false}
-    end
-  end
-
-  @doc """
-  Build runtime-facing configuration for all supported channels.
-  """
   @spec channels_runtime(t()) :: %{optional(String.t()) => map()}
   def channels_runtime(%__MODULE__{} = config) do
-    Enum.into(@channel_names, %{}, fn channel ->
-      {channel, channel_runtime(config, channel)}
-    end)
+    config
+    |> channel_instances()
+    |> Enum.into(%{}, fn {id, _instance} -> {id, channel_runtime(config, id)} end)
   end
 
-  @doc """
-  Whether a channel should flush assistant text incrementally.
-  """
   @spec channel_streaming?(t(), String.t() | atom()) :: boolean()
-  def channel_streaming?(%__MODULE__{} = config, channel) do
+  def channel_streaming?(%__MODULE__{} = config, instance_id) do
     config
-    |> channel_runtime(channel)
+    |> channel_runtime(instance_id)
     |> Map.get("streaming", false)
     |> Kernel.==(true)
   end
 
-  @doc """
-  Get the Request Trace configuration.
-  """
-  @spec request_trace(t()) :: map()
-  def request_trace(%__MODULE__{} = config) do
-    Map.merge(default_request_trace(), config.request_trace || %{})
-  end
-
-  @doc """
-  Update the configuration.
-  """
-  @spec set(t(), atom(), term()) :: t()
-  def set(%__MODULE__{} = config, :provider, value) when is_binary(value) do
-    %{config | provider: value}
-  end
-
-  def set(%__MODULE__{} = config, :model, value) when is_binary(value) do
-    %{config | model: value}
-  end
-
-  def set(%__MODULE__{} = config, :default_workspace, value) when is_binary(value) do
-    defaults = Map.merge(default_defaults(), config.defaults || %{})
-    %{config | defaults: Map.put(defaults, "workspace", value)}
-  end
-
-  def set(%__MODULE__{} = config, :gateway_port, value) when is_integer(value) and value > 0 do
-    gateway = Map.merge(default_gateway(), config.gateway || %{})
-    %{config | gateway: Map.put(gateway, "port", value)}
-  end
-
-  def set(%__MODULE__{} = config, :api_key, {provider, key}) when is_binary(provider) do
-    providers =
-      Map.update(
-        config.providers,
-        provider,
-        %{"api_key" => key, "base_url" => nil},
-        fn p ->
-          Map.put(p || %{}, "api_key", key)
-        end
-      )
-
-    %{config | providers: providers}
-  end
-
-  def set(%__MODULE__{} = config, :feishu_enabled, value) when is_boolean(value) do
-    %{config | feishu: Map.put(feishu(config), "enabled", value)}
-  end
-
-  def set(%__MODULE__{} = config, :feishu_app_id, value) when is_binary(value) do
-    %{config | feishu: Map.put(feishu(config), "app_id", value)}
-  end
-
-  def set(%__MODULE__{} = config, :feishu_app_secret, value) when is_binary(value) do
-    %{config | feishu: Map.put(feishu(config), "app_secret", value)}
-  end
-
-  def set(%__MODULE__{} = config, :feishu_encrypt_key, value) when is_binary(value) do
-    %{config | feishu: Map.put(feishu(config), "encrypt_key", value)}
-  end
-
-  def set(%__MODULE__{} = config, :feishu_verification_token, value) when is_binary(value) do
-    %{config | feishu: Map.put(feishu(config), "verification_token", value)}
-  end
-
-  def set(%__MODULE__{} = config, :feishu_allow_from, value) when is_list(value) do
-    allow_from =
-      value
-      |> Enum.map(&to_string/1)
-      |> Enum.map(&String.trim/1)
-      |> Enum.reject(&(&1 == ""))
-      |> Enum.uniq()
-
-    %{config | feishu: Map.put(feishu(config), "allow_from", allow_from)}
-  end
-
-  # Discord setters
-
-  def set(%__MODULE__{} = config, :discord_enabled, value) when is_boolean(value) do
-    %{config | discord: Map.put(discord(config), "enabled", value)}
-  end
-
-  def set(%__MODULE__{} = config, :discord_token, value) when is_binary(value) do
-    %{config | discord: Map.put(discord(config), "token", normalize_discord_token(value))}
-  end
-
-  def set(%__MODULE__{} = config, :discord_allow_from, value) when is_list(value) do
-    allow_from =
-      value
-      |> Enum.map(&to_string/1)
-      |> Enum.map(&String.trim/1)
-      |> Enum.reject(&(&1 == ""))
-      |> Enum.uniq()
-
-    %{config | discord: Map.put(discord(config), "allow_from", allow_from)}
-  end
-
-  def set(%__MODULE__{} = config, :base_url, {provider, url}) when is_binary(provider) do
-    providers =
-      Map.update(
-        config.providers,
-        provider,
-        %{"api_key" => nil, "base_url" => url},
-        fn p ->
-          Map.put(p || %{}, "base_url", url)
-        end
-      )
-
-    %{config | providers: providers}
-  end
-
-  @doc """
-  Get the Discord configuration.
-  """
-  @spec discord(t()) :: map()
-  def discord(%__MODULE__{} = config) do
-    config
-    |> Map.get(:discord, %{})
-    |> then(&Map.merge(default_discord(), &1))
-    |> Map.update("token", "", &normalize_discord_token/1)
-  end
-
-  @doc """
-  Whether Discord is enabled.
-  """
-  @spec discord_enabled?(t()) :: boolean()
-  def discord_enabled?(%__MODULE__{} = config) do
-    config |> discord() |> Map.get("enabled", false) |> Kernel.==(true)
-  end
-
-  @doc """
-  Get the Discord `allow_from` list.
-  """
-  @spec discord_allow_from(t()) :: [String.t()]
-  def discord_allow_from(%__MODULE__{} = config) do
-    case Map.get(discord(config), "allow_from") do
-      list when is_list(list) -> Enum.map(list, &to_string/1)
-      _ -> []
-    end
-  end
-
-  @doc """
-  Get the maximum iteration count.
-  """
-  @spec get_max_iterations(t()) :: pos_integer()
-  def get_max_iterations(%__MODULE__{} = config) do
-    case Map.get(config.defaults || %{}, "max_iterations") do
-      n when is_integer(n) and n > 0 -> n
-      _ -> 40
-    end
-  end
-
-  @doc """
-  Get the configured default workspace, if any.
-  """
-  @spec configured_workspace(t()) :: String.t() | nil
-  def configured_workspace(%__MODULE__{} = config) do
-    case Map.get(config.defaults || %{}, "workspace") do
-      workspace when is_binary(workspace) and workspace != "" -> workspace
+  @spec channel_type(t(), String.t() | atom()) :: String.t() | nil
+  def channel_type(%__MODULE__{} = config, instance_id) do
+    case channel_instance(config, instance_id) do
+      %{} = instance -> Map.get(instance, "type")
       _ -> nil
     end
   end
 
-  @doc """
-  Get the configured gateway port.
-  """
   @spec gateway_port(t()) :: pos_integer()
   def gateway_port(%__MODULE__{} = config) do
     case Map.get(config.gateway || %{}, "port") do
@@ -544,60 +242,381 @@ defmodule Nex.Agent.Config do
     end
   end
 
-  @doc """
-  Convert provider string to atom safely.
-  Returns :openai for unknown providers to prevent atom leaks.
-  """
-  @spec provider_to_atom(String.t()) :: atom()
-  def provider_to_atom(provider) when is_binary(provider) do
-    case provider do
-      "anthropic" -> :anthropic
-      "openai" -> :openai
-      "openai-codex" -> :openai_codex
-      "openai-codex-custom" -> :openai_codex_custom
-      "openrouter" -> :openrouter
-      "ollama" -> :ollama
-      _ -> :openai
+  @spec get_max_iterations(t()) :: pos_integer()
+  def get_max_iterations(%__MODULE__{} = config) do
+    case config.max_iterations do
+      n when is_integer(n) and n > 0 -> n
+      _ -> 40
     end
   end
 
-  def provider_to_atom(provider) when is_atom(provider), do: provider
+  @spec configured_workspace(t()) :: String.t() | nil
+  def configured_workspace(%__MODULE__{} = config), do: config.workspace
 
-  @doc """
-  Validate whether the configuration is valid.
-  """
-  @spec valid?(t()) :: boolean()
-  def valid?(%__MODULE__{provider: provider} = config) do
-    provider_valid? =
-      case get_api_key(config, provider) do
-        nil -> provider == "ollama"
-        _ -> true
-      end
-
-    provider_valid? and feishu_valid?(config) and discord_valid?(config)
+  @spec get_tool_config(t(), String.t()) :: String.t() | nil
+  def get_tool_config(%__MODULE__{tools: tools}, key) do
+    tools
+    |> Map.get(key)
+    |> resolve_secret()
   end
 
-  defp provider_env_api_key("anthropic"), do: System.get_env("ANTHROPIC_API_KEY")
-  defp provider_env_api_key("openai"), do: System.get_env("OPENAI_API_KEY")
+  @spec web_search_provider_config(t() | nil) :: map()
+  def web_search_provider_config(%__MODULE__{tools: tools}) when is_map(tools) do
+    raw = Map.get(tools, "web_search", %{})
 
-  defp provider_env_api_key("openai-codex"),
-    do: ProviderProfile.default_api_key(:openai_codex)
+    %{
+      "strategy" => normalize_strategy(Map.get(raw, "strategy")),
+      "mode" => normalize_web_search_mode(Map.get(raw, "mode")),
+      "allowed_domains" => normalize_allowed_domains(Map.get(raw, "allowed_domains")),
+      "user_location" => normalize_user_location(Map.get(raw, "user_location"))
+    }
+  end
 
-  defp provider_env_api_key("openai-codex-custom"),
-    do: ProviderProfile.default_api_key(:openai_codex_custom)
+  def web_search_provider_config(_config) do
+    %{
+      "strategy" => "auto",
+      "mode" => "live",
+      "allowed_domains" => [],
+      "user_location" => nil
+    }
+  end
 
-  defp provider_env_api_key("ollama"), do: nil
-  defp provider_env_api_key(_), do: nil
+  @spec image_generation_provider_config(t() | nil) :: map()
+  def image_generation_provider_config(%__MODULE__{tools: tools}) when is_map(tools) do
+    raw = Map.get(tools, "image_generation", %{})
 
-  defp provider_default_base_url("openai-codex"),
-    do: ProviderProfile.default_base_url(:openai_codex)
+    %{
+      "strategy" => normalize_strategy(Map.get(raw, "strategy")),
+      "output_format" => normalize_image_generation_output_format(Map.get(raw, "output_format"))
+    }
+  end
 
-  defp provider_default_base_url("openai-codex-custom"),
-    do: ProviderProfile.default_base_url(:openai_codex_custom)
+  def image_generation_provider_config(_config) do
+    %{"strategy" => "auto", "output_format" => "png"}
+  end
 
-  defp provider_default_base_url("openrouter"), do: "https://openrouter.ai/api/v1"
-  defp provider_default_base_url("ollama"), do: "http://localhost:11434"
-  defp provider_default_base_url(_), do: nil
+  @spec request_trace(t()) :: map()
+  def request_trace(%__MODULE__{}), do: %{"enabled" => false}
+
+  @spec skill_runtime(t()) :: map()
+  def skill_runtime(%__MODULE__{}) do
+    %{
+      "enabled" => false,
+      "trace_dir" => "skill_runtime/runs",
+      "index_dir" => "skill_runtime/index",
+      "cache_dir" => "skill_runtime/cache",
+      "snapshots_dir" => "skill_runtime/snapshots",
+      "max_selected_skills" => 2,
+      "prefilter_limit" => 20,
+      "post_run_analysis" => true,
+      "github_indexes" => []
+    }
+  end
+
+  @spec set(t(), atom(), term()) :: t()
+  def set(%__MODULE__{} = config, :default_workspace, value) when is_binary(value) do
+    %{config | workspace: Path.expand(value)}
+  end
+
+  def set(%__MODULE__{} = config, :gateway_port, value) when is_integer(value) and value > 0 do
+    %{config | gateway: Map.put(config.gateway || %{}, "port", value)}
+  end
+
+  def set(%__MODULE__{} = config, :max_iterations, value) when is_integer(value) and value > 0 do
+    %{config | max_iterations: value}
+  end
+
+  @spec valid?(t()) :: boolean()
+  def valid?(%__MODULE__{} = config) do
+    valid_new_shape?(config) and valid_default_model?(config) and valid_channels?(config)
+  end
+
+  @spec provider_type_to_atom(String.t() | atom() | nil) :: atom()
+  def provider_type_to_atom(type) when is_atom(type), do: type
+
+  def provider_type_to_atom(type) when is_binary(type) do
+    Map.get(@provider_type_atoms, type, :openai)
+  end
+
+  def provider_type_to_atom(_type), do: :openai
+
+  defp invalid do
+    %__MODULE__{
+      max_iterations: nil,
+      workspace: nil,
+      channel: %{},
+      gateway: %{},
+      provider: %{},
+      model: %{},
+      tools: %{}
+    }
+  end
+
+  defp resolve_model_runtime(%__MODULE__{} = config, model_key) do
+    models = Map.get(config.model || %{}, "models", %{})
+    model_config = Map.get(models, model_key)
+
+    with %{} <- model_config,
+         provider_key when is_binary(provider_key) and provider_key != "" <-
+           Map.get(model_config, "provider"),
+         provider_config when is_map(provider_config) <-
+           get_in(config.provider || %{}, ["providers", provider_key]) do
+      provider_type = Map.get(provider_config, "type", "openai-compatible")
+      provider = provider_type_to_atom(provider_type)
+      model_id = normalize_optional_string(Map.get(model_config, "id")) || model_key
+
+      {:ok,
+       %{
+         model_key: model_key,
+         model_id: model_id,
+         provider_key: provider_key,
+         provider_type: provider_type,
+         provider: provider,
+         api_key: provider_api_key(provider, provider_config),
+         base_url: provider_base_url(provider, provider_config),
+         provider_options: provider_options(provider_config, model_config)
+       }}
+    else
+      _ -> {:error, :unknown_model}
+    end
+  end
+
+  defp provider_api_key(:openai_codex, provider_config) do
+    resolve_secret(Map.get(provider_config, "api_key")) ||
+      ProviderProfile.default_api_key(:openai_codex)
+  end
+
+  defp provider_api_key(:openai_codex_custom, provider_config) do
+    resolve_secret(Map.get(provider_config, "api_key")) ||
+      ProviderProfile.default_api_key(:openai_codex_custom)
+  end
+
+  defp provider_api_key(:anthropic, provider_config),
+    do: resolve_secret(Map.get(provider_config, "api_key")) || System.get_env("ANTHROPIC_API_KEY")
+
+  defp provider_api_key(:openai, provider_config),
+    do: resolve_secret(Map.get(provider_config, "api_key")) || System.get_env("OPENAI_API_KEY")
+
+  defp provider_api_key(:ollama, _provider_config), do: nil
+
+  defp provider_api_key(_provider, provider_config),
+    do: resolve_secret(Map.get(provider_config, "api_key"))
+
+  defp provider_base_url(:openai_codex, provider_config) do
+    normalize_optional_string(Map.get(provider_config, "base_url")) ||
+      ProviderProfile.default_base_url(:openai_codex)
+  end
+
+  defp provider_base_url(:openai_codex_custom, provider_config) do
+    normalize_optional_string(Map.get(provider_config, "base_url")) ||
+      ProviderProfile.default_base_url(:openai_codex_custom)
+  end
+
+  defp provider_base_url(:openrouter, provider_config) do
+    normalize_optional_string(Map.get(provider_config, "base_url")) ||
+      "https://openrouter.ai/api/v1"
+  end
+
+  defp provider_base_url(:ollama, provider_config) do
+    normalize_optional_string(Map.get(provider_config, "base_url")) ||
+      "http://localhost:11434"
+  end
+
+  defp provider_base_url(_provider, provider_config),
+    do: normalize_optional_string(Map.get(provider_config, "base_url"))
+
+  defp provider_options(provider_config, model_config) do
+    provider_options =
+      provider_config
+      |> Map.drop(["type", "api_key", "base_url"])
+      |> stringify_map_keys()
+
+    model_options =
+      model_config
+      |> Map.drop(["provider", "id"])
+      |> stringify_map_keys()
+
+    provider_options
+    |> Map.merge(model_options)
+    |> Enum.map(fn {key, value} -> {String.to_atom(key), value} end)
+  end
+
+  defp valid_new_shape?(%__MODULE__{} = config) do
+    is_integer(config.max_iterations) and config.max_iterations > 0 and
+      is_map(config.channel) and is_map(config.gateway) and is_map(config.provider) and
+      is_map(config.model) and is_map(config.tools)
+  end
+
+  defp valid_default_model?(%__MODULE__{} = config) do
+    case default_model_runtime(config) do
+      nil -> false
+      %{provider: :ollama} -> true
+      %{api_key: key} when is_binary(key) and key != "" -> true
+      _ -> false
+    end
+  end
+
+  defp valid_channels?(%__MODULE__{} = config) do
+    config
+    |> channel_instances()
+    |> Enum.all?(fn {_id, instance} -> valid_channel_instance?(instance) end)
+  end
+
+  defp valid_channel_instance?(%{"enabled" => true, "type" => "feishu"} = instance) do
+    present?(Map.get(instance, "app_id")) and present?(Map.get(instance, "app_secret"))
+  end
+
+  defp valid_channel_instance?(%{"enabled" => true, "type" => "discord"} = instance) do
+    present?(Map.get(instance, "token"))
+  end
+
+  defp valid_channel_instance?(%{"type" => type}) when type in ["feishu", "discord"], do: true
+  defp valid_channel_instance?(_instance), do: false
+
+  defp normalize_max_iterations(value) when is_integer(value) and value > 0, do: value
+
+  defp normalize_max_iterations(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {parsed, ""} when parsed > 0 -> parsed
+      _ -> nil
+    end
+  end
+
+  defp normalize_max_iterations(_value), do: nil
+
+  defp normalize_channels(channels) when is_map(channels) do
+    channels
+    |> stringify_map_keys()
+    |> Enum.reduce(%{}, fn {id, instance}, acc ->
+      case normalize_channel_instance(instance) do
+        nil -> acc
+        normalized -> Map.put(acc, id, normalized)
+      end
+    end)
+  end
+
+  defp normalize_channels(_channels), do: %{}
+
+  defp normalize_channel_instance(%{} = instance) do
+    instance = stringify_map_keys(instance)
+
+    case normalize_optional_string(Map.get(instance, "type")) do
+      type when type in ["feishu", "discord"] ->
+        instance
+        |> Map.put("type", type)
+        |> Map.put("enabled", Map.get(instance, "enabled", false) == true)
+        |> normalize_channel_secret("token")
+        |> normalize_channel_secret("app_secret")
+
+      _ ->
+        nil
+    end
+  end
+
+  defp normalize_channel_instance(_instance), do: nil
+
+  defp normalize_channel_secret(instance, key) do
+    case Map.get(instance, key) do
+      %{} = secret -> Map.put(instance, key, resolve_secret(secret))
+      _ -> instance
+    end
+  end
+
+  defp normalize_gateway(gateway) when is_map(gateway) do
+    gateway
+    |> stringify_map_keys()
+    |> Map.put_new("port", 18_790)
+  end
+
+  defp normalize_gateway(_gateway), do: default_gateway()
+
+  defp normalize_provider_root(%{} = provider) do
+    providers =
+      provider
+      |> stringify_map_keys()
+      |> Map.get("providers", %{})
+      |> normalize_provider_entries()
+
+    %{"providers" => providers}
+  end
+
+  defp normalize_provider_root(_provider), do: %{}
+
+  defp normalize_provider_entries(providers) when is_map(providers) do
+    providers
+    |> stringify_map_keys()
+    |> Enum.reduce(%{}, fn {key, config}, acc ->
+      case normalize_provider_entry(config) do
+        nil -> acc
+        normalized -> Map.put(acc, key, normalized)
+      end
+    end)
+  end
+
+  defp normalize_provider_entries(_providers), do: %{}
+
+  defp normalize_provider_entry(%{} = config) do
+    config = stringify_map_keys(config)
+    type = normalize_optional_string(Map.get(config, "type"))
+
+    if Map.has_key?(@provider_type_atoms, type) do
+      config
+      |> Map.put("type", type)
+      |> Map.update("api_key", nil, &normalize_secret_spec/1)
+      |> Map.update("base_url", nil, &normalize_optional_string/1)
+    end
+  end
+
+  defp normalize_provider_entry(_config), do: nil
+
+  defp normalize_model_root(%{} = model) do
+    model = stringify_map_keys(model)
+
+    %{
+      "default_model" => normalize_optional_string(Map.get(model, "default_model")),
+      "cheap_model" => normalize_optional_string(Map.get(model, "cheap_model")),
+      "advisor_model" => normalize_optional_string(Map.get(model, "advisor_model")),
+      "models" => normalize_model_entries(Map.get(model, "models"))
+    }
+  end
+
+  defp normalize_model_root(_model), do: %{}
+
+  defp normalize_model_entries(models) when is_map(models) do
+    models
+    |> stringify_map_keys()
+    |> Enum.reduce(%{}, fn {key, config}, acc ->
+      case normalize_model_entry(key, config) do
+        nil -> acc
+        normalized -> Map.put(acc, key, normalized)
+      end
+    end)
+  end
+
+  defp normalize_model_entries(_models), do: %{}
+
+  defp normalize_model_entry(key, %{} = config) do
+    config = stringify_map_keys(config)
+
+    case normalize_optional_string(Map.get(config, "provider")) do
+      nil ->
+        nil
+
+      provider ->
+        config
+        |> Map.put("provider", provider)
+        |> Map.put("id", normalize_optional_string(Map.get(config, "id")) || key)
+    end
+  end
+
+  defp normalize_model_entry(_key, _config), do: nil
+
+  defp normalize_tools(tools) when is_map(tools), do: stringify_map_keys(tools)
+  defp normalize_tools(_tools), do: %{}
+
+  defp normalize_strategy("provider_native"), do: "provider_native"
+  defp normalize_strategy("local"), do: "local"
+  defp normalize_strategy(_), do: "auto"
 
   defp normalize_web_search_mode("cached"), do: "cached"
   defp normalize_web_search_mode("disabled"), do: "disabled"
@@ -607,84 +626,12 @@ defmodule Nex.Agent.Config do
   defp normalize_image_generation_output_format("webp"), do: "webp"
   defp normalize_image_generation_output_format(_), do: "png"
 
-  defp normalize_tool_provider(provider, allowed, default) when is_binary(provider) do
-    provider = String.trim(provider)
-    if provider in allowed, do: provider, else: default
-  end
+  defp normalize_secret_spec(%{} = secret), do: stringify_map_keys(secret)
+  defp normalize_secret_spec(value), do: normalize_optional_string(value)
 
-  defp normalize_tool_provider(provider, allowed, default) when is_atom(provider) do
-    provider |> Atom.to_string() |> normalize_tool_provider(allowed, default)
-  end
-
-  defp normalize_tool_provider(_provider, _allowed, default), do: default
-
-  defp default_web_search_providers do
-    %{
-      "duckduckgo" => %{},
-      "codex" => %{
-        "mode" => "live",
-        "allowed_domains" => [],
-        "user_location" => nil
-      }
-    }
-  end
-
-  defp default_image_generation_providers do
-    %{
-      "codex" => %{"output_format" => "png"},
-      "nanobanana" => %{}
-    }
-  end
-
-  defp normalize_web_search_codex_provider(%{} = provider) do
-    %{
-      "mode" => normalize_web_search_mode(Map.get(provider, "mode")),
-      "allowed_domains" => normalize_allowed_domains(Map.get(provider, "allowed_domains")),
-      "user_location" => normalize_user_location(Map.get(provider, "user_location"))
-    }
-  end
-
-  defp normalize_web_search_codex_provider(_provider),
-    do: default_web_search_providers()["codex"]
-
-  defp normalize_web_search_duckduckgo_provider(%{}), do: %{}
-  defp normalize_web_search_duckduckgo_provider(_provider), do: %{}
-
-  defp normalize_image_generation_codex_provider(%{} = provider) do
-    %{
-      "output_format" => normalize_image_generation_output_format(Map.get(provider, "output_format"))
-    }
-  end
-
-  defp normalize_image_generation_codex_provider(_provider),
-    do: default_image_generation_providers()["codex"]
-
-  defp deep_merge_provider_configs(base, nil), do: base
-
-  defp deep_merge_provider_configs(base, overrides) when is_map(base) and is_map(overrides) do
-    Map.merge(base, stringify_map_keys(overrides), fn _key, left, right ->
-      if is_map(left) and is_map(right) do
-        Map.merge(left, stringify_map_keys(right))
-      else
-        right
-      end
-    end)
-  end
-
-  defp deep_merge_provider_configs(base, _overrides), do: base
-
-  defp stringify_map_keys(map) when is_map(map) do
-    Map.new(map, fn {key, value} ->
-      value =
-        if is_map(value) do
-          stringify_map_keys(value)
-        else
-          value
-        end
-
-      {to_string(key), value}
-    end)
-  end
+  defp resolve_secret(%{"env" => env_var}) when is_binary(env_var), do: System.get_env(env_var)
+  defp resolve_secret(%{env: env_var}) when is_binary(env_var), do: System.get_env(env_var)
+  defp resolve_secret(value), do: normalize_optional_string(value)
 
   defp normalize_allowed_domains(domains) when is_list(domains) do
     domains
@@ -717,94 +664,38 @@ defmodule Nex.Agent.Config do
 
   defp normalize_user_location(_location), do: nil
 
-  defp feishu_valid?(%__MODULE__{} = config) do
-    if feishu_enabled?(config) do
-      not is_nil(feishu_app_id(config)) and not is_nil(feishu_app_secret(config))
-    else
-      true
-    end
+  defp stringify_map_keys(map) when is_map(map) do
+    Map.new(map, fn {key, value} ->
+      value =
+        cond do
+          is_map(value) -> stringify_map_keys(value)
+          is_list(value) -> Enum.map(value, &stringify_nested/1)
+          true -> value
+        end
+
+      {to_string(key), value}
+    end)
   end
 
-  defp discord_valid?(%__MODULE__{} = config) do
-    if discord_enabled?(config) do
-      token = Map.get(discord(config), "token", "")
-      is_binary(token) and token != ""
-    else
-      true
-    end
+  defp stringify_nested(value) when is_map(value), do: stringify_map_keys(value)
+  defp stringify_nested(value), do: value
+
+  defp normalize_optional_string(value) when is_binary(value) do
+    value = String.trim(value)
+    if value == "", do: nil, else: value
   end
 
-  defp default_providers do
-    %{
-      "anthropic" => %{"api_key" => nil, "base_url" => nil},
-      "openai" => %{"api_key" => nil, "base_url" => nil},
-      "openai-codex" => %{"api_key" => nil, "base_url" => Codex.default_base_url()},
-      "openai-codex-custom" => %{"api_key" => nil, "base_url" => nil},
-      "openrouter" => %{"api_key" => nil, "base_url" => "https://openrouter.ai/api/v1"},
-      "ollama" => %{"api_key" => nil, "base_url" => "http://localhost:11434"}
-    }
-  end
+  defp normalize_optional_string(value) when is_atom(value) and not is_nil(value),
+    do: Atom.to_string(value)
 
-  defp default_defaults do
-    %{
-      "max_iterations" => 40,
-      "workspace" => nil
-    }
-  end
+  defp normalize_optional_string(_value), do: nil
 
-  defp default_skill_runtime do
-    %{
-      "enabled" => false,
-      "trace_dir" => "skill_runtime/runs",
-      "index_dir" => "skill_runtime/index",
-      "cache_dir" => "skill_runtime/cache",
-      "snapshots_dir" => "skill_runtime/snapshots",
-      "max_selected_skills" => 2,
-      "prefilter_limit" => 20,
-      "post_run_analysis" => true,
-      "github_indexes" => []
-    }
-  end
+  defp default_gateway, do: %{"port" => 18_790}
 
-  defp default_request_trace do
-    %{"enabled" => false}
-  end
+  defp default_streaming(%{"type" => "feishu"}), do: true
+  defp default_streaming(%{"type" => "discord"}), do: false
+  defp default_streaming(_instance), do: false
 
-  defp default_gateway do
-    %{
-      "port" => 18_790
-    }
-  end
-
-  defp default_feishu do
-    %{
-      "enabled" => false,
-      "app_id" => "",
-      "app_secret" => "",
-      "encrypt_key" => "",
-      "verification_token" => "",
-      "allow_from" => [],
-      "streaming" => true
-    }
-  end
-
-  defp default_discord do
-    %{
-      "enabled" => false,
-      "token" => "",
-      "allow_from" => [],
-      "streaming" => false,
-      "guild_id" => nil
-    }
-  end
-
-  defp normalize_discord_token(token) when is_binary(token) do
-    token
-    |> String.trim()
-    |> String.replace_prefix("Bot ", "")
-    |> String.replace_prefix("bot ", "")
-  end
-
-  defp normalize_discord_token(_token), do: ""
-
+  defp present?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present?(_value), do: false
 end

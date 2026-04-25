@@ -64,21 +64,30 @@ defmodule Nex.Agent.Evolution.Executor do
     end
   end
 
-  def apply_realization(%{"execution" => %{"tool" => "memory_write", "args" => args}} = realization, ctx) do
+  def apply_realization(
+        %{"execution" => %{"tool" => "memory_write", "args" => args}} = realization,
+        ctx
+      ) do
     case MemoryWrite.execute(args, ctx) do
       {:ok, result} -> {:ok, Map.put(realization, "result", result)}
       {:error, reason} -> {:error, reason}
     end
   end
 
-  def apply_realization(%{"execution" => %{"tool" => "soul_update", "args" => args}} = realization, ctx) do
+  def apply_realization(
+        %{"execution" => %{"tool" => "soul_update", "args" => args}} = realization,
+        ctx
+      ) do
     case SoulUpdate.execute(args, ctx) do
       {:ok, result} -> {:ok, Map.put(realization, "result", result)}
       {:error, reason} -> {:error, reason}
     end
   end
 
-  def apply_realization(%{"execution" => %{"tool" => "skill_create", "args" => args}} = realization, ctx) do
+  def apply_realization(
+        %{"execution" => %{"tool" => "skill_create", "args" => args}} = realization,
+        ctx
+      ) do
     case SkillCreate.execute(args, ctx) do
       {:ok, result} -> {:ok, Map.put(realization, "result", result)}
       {:error, reason} -> {:error, reason}
@@ -298,7 +307,8 @@ defmodule Nex.Agent.Evolution.Executor do
       true ->
         {:ok,
          %{
-           "summary" => bounded_string(Map.get(result, "summary", "Owner-approved code realization"), 240),
+           "summary" =>
+             bounded_string(Map.get(result, "summary", "Owner-approved code realization"), 240),
            "files" => files,
            "patch" => patch,
            "deploy_reason" =>
@@ -316,7 +326,8 @@ defmodule Nex.Agent.Evolution.Executor do
         "type" => "function",
         "function" => %{
           "name" => "code_candidate_realization",
-          "description" => "Return a bounded patch proposal and deploy reason for the approved code candidate.",
+          "description" =>
+            "Return a bounded patch proposal and deploy reason for the approved code candidate.",
           "parameters" => %{
             "type" => "object",
             "properties" => %{
@@ -362,41 +373,53 @@ defmodule Nex.Agent.Evolution.Executor do
         end
       )
 
-    provider = Map.get(ctx, :provider) || Map.get(ctx, "provider") || config.provider
-    provider_name = if is_atom(provider), do: Atom.to_string(provider), else: to_string(provider)
+    model_runtime = Config.default_model_runtime(config)
 
     [
-      provider: Config.provider_to_atom(provider),
-      model: Map.get(ctx, :model) || Map.get(ctx, "model") || config.model,
+      provider:
+        Map.get(ctx, :provider) || Map.get(ctx, "provider") ||
+          (model_runtime && model_runtime.provider),
+      model:
+        Map.get(ctx, :model) || Map.get(ctx, "model") || (model_runtime && model_runtime.model_id),
       api_key:
         Map.get(ctx, :api_key) || Map.get(ctx, "api_key") ||
-          Config.get_api_key(config, provider_name),
+          (model_runtime && model_runtime.api_key),
       base_url:
         Map.get(ctx, :base_url) || Map.get(ctx, "base_url") ||
-          Config.get_base_url(config, provider_name)
+          (model_runtime && model_runtime.base_url),
+      provider_options:
+        Map.get(ctx, :provider_options) || Map.get(ctx, "provider_options") ||
+          (model_runtime && model_runtime.provider_options)
     ]
   end
 
   defp llm_call_fun(ctx) do
-    Map.get(ctx, :llm_call_fun) || Map.get(ctx, "llm_call_fun") || &Runner.call_llm_for_consolidation/2
+    Map.get(ctx, :llm_call_fun) || Map.get(ctx, "llm_call_fun") ||
+      (&Runner.call_llm_for_consolidation/2)
   end
 
-  defp find_fun(ctx), do: Map.get(ctx, :find_fun) || Map.get(ctx, "find_fun") || &Find.execute/2
-  defp read_fun(ctx), do: Map.get(ctx, :read_fun) || Map.get(ctx, "read_fun") || &Read.execute/2
+  defp find_fun(ctx), do: Map.get(ctx, :find_fun) || Map.get(ctx, "find_fun") || (&Find.execute/2)
+  defp read_fun(ctx), do: Map.get(ctx, :read_fun) || Map.get(ctx, "read_fun") || (&Read.execute/2)
 
   defp apply_patch_fun(ctx) do
-    Map.get(ctx, :apply_patch_fun) || Map.get(ctx, "apply_patch_fun") || &ApplyPatch.execute/2
+    Map.get(ctx, :apply_patch_fun) || Map.get(ctx, "apply_patch_fun") || (&ApplyPatch.execute/2)
   end
 
   defp self_update_fun(ctx) do
-    Map.get(ctx, :self_update_fun) || Map.get(ctx, "self_update_fun") || &SelfUpdate.execute/2
+    Map.get(ctx, :self_update_fun) || Map.get(ctx, "self_update_fun") || (&SelfUpdate.execute/2)
   end
 
   defp ensure_deploy_succeeded(%{status: :deployed}), do: :ok
   defp ensure_deploy_succeeded(%{"status" => "deployed"}), do: :ok
-  defp ensure_deploy_succeeded(%{"status" => status}), do: {:error, "self_update returned status #{status}"}
-  defp ensure_deploy_succeeded(%{status: status}), do: {:error, "self_update returned status #{inspect(status)}"}
-  defp ensure_deploy_succeeded(other), do: {:error, "unexpected self_update result #{inspect(other)}"}
+
+  defp ensure_deploy_succeeded(%{"status" => status}),
+    do: {:error, "self_update returned status #{status}"}
+
+  defp ensure_deploy_succeeded(%{status: status}),
+    do: {:error, "self_update returned status #{inspect(status)}"}
+
+  defp ensure_deploy_succeeded(other),
+    do: {:error, "unexpected self_update result #{inspect(other)}"}
 
   defp bounded_content(summary, rationale) do
     [summary, rationale]

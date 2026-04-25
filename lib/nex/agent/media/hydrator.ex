@@ -27,7 +27,7 @@ defmodule Nex.Agent.Media.Hydrator do
     end)
   end
 
-  defp hydrate_ref(%Ref{channel: "feishu", kind: :image} = ref, opts) do
+  defp hydrate_ref(%Ref{kind: :image} = ref, opts) do
     fetch_binary_fun = Keyword.fetch!(opts, :fetch_binary_fun)
 
     with {:ok, body, mime_type} <- fetch_binary_fun.(ref),

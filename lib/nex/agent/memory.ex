@@ -152,6 +152,7 @@ defmodule Nex.Agent.Memory do
   def refresh(session, provider, model, opts \\ []) do
     api_key = Keyword.get(opts, :api_key)
     base_url = Keyword.get(opts, :base_url)
+    provider_options = Keyword.get(opts, :provider_options, [])
     workspace = Keyword.get(opts, :workspace)
     memory_opts = workspace_opts(workspace)
     pending_messages = pending_memory_messages(session)
@@ -174,6 +175,7 @@ defmodule Nex.Agent.Memory do
             model: model,
             api_key: api_key,
             base_url: base_url,
+            provider_options: provider_options,
             tools: save_memory_tool(),
             tool_choice: tool_choice_for(provider, "save_memory")
           ]

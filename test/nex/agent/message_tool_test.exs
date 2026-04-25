@@ -7,32 +7,39 @@ defmodule Nex.Agent.MessageToolTest do
   alias Nex.Agent.Tool.Message
   alias Nex.Agent.Tool.Registry
 
+  @instance_id "feishu_kai"
+  @topic {:channel_outbound, @instance_id}
+
   setup do
     if Process.whereis(Bus) == nil do
       start_supervised!({Bus, name: Bus})
+    end
+
+    if Process.whereis(Nex.Agent.ChannelRegistry) == nil do
+      start_supervised!(Nex.Agent.Channel.Registry)
     end
 
     if Process.whereis(Nex.Agent.Tool.Registry) == nil do
       start_supervised!({Registry, name: Registry})
     end
 
-    Bus.subscribe(:feishu_outbound)
+    Bus.subscribe(@topic)
 
     on_exit(fn ->
-      Bus.unsubscribe(:feishu_outbound)
+      Bus.unsubscribe(@topic)
     end)
 
     :ok
   end
 
   test "message tool preserves legacy behavior with plain content" do
-    assert {:ok, %{sent: true, channel: "feishu", chat_id: "ou_123"}} =
+    assert {:ok, %{sent: true, channel: @instance_id, chat_id: "ou_123"}} =
              Message.execute(
-               %{"content" => "hello", "channel" => "feishu", "chat_id" => "ou_123"},
+               %{"content" => "hello", "channel" => @instance_id, "chat_id" => "ou_123"},
                %{}
              )
 
-    assert_receive {:bus_message, :feishu_outbound, payload}
+    assert_receive {:bus_message, @topic, payload}
     assert payload.content == "hello"
     assert payload.metadata["_from_tool"] == true
     refute Map.has_key?(payload.metadata, "msg_type")
@@ -70,10 +77,10 @@ defmodule Nex.Agent.MessageToolTest do
   end
 
   test "message tool forwards explicit feishu structured message metadata" do
-    assert {:ok, %{sent: true, channel: "feishu", chat_id: "oc_123"}} =
+    assert {:ok, %{sent: true, channel: @instance_id, chat_id: "oc_123"}} =
              Message.execute(
                %{
-                 "channel" => "feishu",
+                 "channel" => @instance_id,
                  "chat_id" => "oc_123",
                  "msg_type" => "image",
                  "content_json" => %{"image_key" => "img_123"},
@@ -82,7 +89,7 @@ defmodule Nex.Agent.MessageToolTest do
                %{}
              )
 
-    assert_receive {:bus_message, :feishu_outbound, payload}
+    assert_receive {:bus_message, @topic, payload}
     assert payload.content == nil
     assert payload.metadata["msg_type"] == "image"
     assert payload.metadata["content_json"] == %{"image_key" => "img_123"}
@@ -117,13 +124,14 @@ defmodule Nex.Agent.MessageToolTest do
       end
     end
 
-    config = %Config{Config.default() | feishu: %{"enabled" => false}}
+    config = feishu_config(false)
 
     pid =
       start_supervised!(
         {Feishu,
-         name: Feishu,
+         instance_id: @instance_id,
          config: config,
+         channel_config: Config.channel_instance(config, @instance_id),
          http_post_fun: http_post_fun,
          http_post_multipart_fun: http_post_multipart_fun,
          http_get_fun: fn _url, _headers -> {:error, :unexpected} end}
@@ -133,9 +141,9 @@ defmodule Nex.Agent.MessageToolTest do
       %{state | enabled: true, app_id: "cli_test", app_secret: "sec_test"}
     end)
 
-    assert {:ok, %{sent: true, channel: "feishu", chat_id: "ou_sync"}} =
+    assert {:ok, %{sent: true, channel: @instance_id, chat_id: "ou_sync"}} =
              Message.execute(
-               %{"content" => "sync hello", "channel" => "feishu", "chat_id" => "ou_sync"},
+               %{"content" => "sync hello", "channel" => @instance_id, "chat_id" => "ou_sync"},
                %{}
              )
 
@@ -175,13 +183,14 @@ defmodule Nex.Agent.MessageToolTest do
       end
     end
 
-    config = %Config{Config.default() | feishu: %{"enabled" => false}}
+    config = feishu_config(false)
 
     pid =
       start_supervised!(
         {Feishu,
-         name: Feishu,
+         instance_id: @instance_id,
          config: config,
+         channel_config: Config.channel_instance(config, @instance_id),
          http_post_fun: http_post_fun,
          http_post_multipart_fun: http_post_multipart_fun,
          http_get_fun: fn _url, _headers -> {:error, :unexpected} end}
@@ -198,14 +207,14 @@ defmodule Nex.Agent.MessageToolTest do
 
     on_exit(fn -> File.rm(path) end)
 
-    assert {:ok, %{sent: true, channel: "feishu", chat_id: "ou_sync_img"}} =
+    assert {:ok, %{sent: true, channel: @instance_id, chat_id: "ou_sync_img"}} =
              Message.execute(
                %{
-                 "channel" => "feishu",
+                 "channel" => @instance_id,
                  "chat_id" => "ou_sync_img",
                  "local_image_path" => path
                },
-               %{}
+               %{config: config}
              )
 
     assert_receive {:http_post, auth_url, _auth_body, _auth_headers}
@@ -256,13 +265,14 @@ defmodule Nex.Agent.MessageToolTest do
       end
     end
 
-    config = %Config{Config.default() | feishu: %{"enabled" => false}}
+    config = feishu_config(false)
 
     pid =
       start_supervised!(
         {Feishu,
-         name: Feishu,
+         instance_id: @instance_id,
          config: config,
+         channel_config: Config.channel_instance(config, @instance_id),
          http_post_fun: http_post_fun,
          http_post_multipart_fun: http_post_multipart_fun,
          http_get_fun: fn _url, _headers -> {:error, :unexpected} end}
@@ -279,16 +289,15 @@ defmodule Nex.Agent.MessageToolTest do
 
     on_exit(fn -> File.rm(path) end)
 
-    assert {:ok,
-            %{sent: true, channel: "feishu", chat_id: "ou_combo", delivered: ["message", "image"]}} =
+    assert {:ok, %{sent: true, channel: @instance_id, chat_id: "ou_combo"}} =
              Message.execute(
                %{
-                 "channel" => "feishu",
+                 "channel" => @instance_id,
                  "chat_id" => "ou_combo",
                  "content" => "海报已生成，见下图。",
                  "local_image_path" => path
                },
-               %{}
+               %{config: config}
              )
 
     assert_receive {:http_post, url1, _body1, _headers1}
@@ -324,7 +333,7 @@ defmodule Nex.Agent.MessageToolTest do
     assert {:ok, outbound} =
              Message.from_tool_args(
                %{
-                 "channel" => "feishu",
+                 "channel" => @instance_id,
                  "chat_id" => "ou_workspace",
                  "attachment_path" => "relative-image.png",
                  "attachment_kind" => "image"
@@ -343,5 +352,16 @@ defmodule Nex.Agent.MessageToolTest do
     after
       400 -> Enum.reverse(acc)
     end
+  end
+
+  defp feishu_config(enabled) do
+    channel_config = %{
+      "type" => "feishu",
+      "enabled" => enabled,
+      "app_id" => "cli_test",
+      "app_secret" => "sec_test"
+    }
+
+    %Config{Config.default() | channel: %{@instance_id => channel_config}}
   end
 end

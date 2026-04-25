@@ -25,7 +25,6 @@ defmodule Nex.Agent.InboundWorker do
   alias Nex.Agent.Channel.Discord
   alias Nex.Agent.Channel.Discord.StreamConverter, as: DiscordStreamConverter
   alias Nex.Agent.Channel.Discord.StreamState, as: DiscordStreamState
-  alias Nex.Agent.Channel.Feishu
   alias Nex.Agent.Channel.Feishu.StreamConverter
   alias Nex.Agent.Channel.Feishu.StreamState, as: FeishuStreamState
   alias Nex.Agent.ControlPlane.{Query, Redactor}
@@ -555,7 +554,7 @@ defmodule Nex.Agent.InboundWorker do
 
     with false <- cmd == "",
          {:command, %Invocation{} = invocation, definition} when is_map(definition) <-
-           resolve_command(envelope, workspace) do
+           resolve_command(envelope, workspace, state.config) do
       dispatch_command(state, key, session_key, workspace, envelope, invocation, definition)
     else
       true ->
@@ -569,8 +568,21 @@ defmodule Nex.Agent.InboundWorker do
     end
   end
 
-  defp resolve_command(%Envelope{} = envelope, workspace) do
-    Command.resolve(envelope, runtime_command_definitions(workspace))
+  defp resolve_command(%Envelope{} = envelope, workspace, %Config{} = config) do
+    definitions = runtime_command_definitions(workspace)
+    channel_type = Config.channel_type(config, envelope.channel)
+
+    typed_envelope =
+      if is_binary(channel_type) and channel_type != "" do
+        %{envelope | channel: channel_type}
+      else
+        envelope
+      end
+
+    case Command.resolve(typed_envelope, definitions) do
+      :no_match -> Command.resolve(envelope, definitions)
+      {:command, invocation, definition} -> {:command, invocation, definition}
+    end
   end
 
   defp dispatch_command(
@@ -640,7 +652,7 @@ defmodule Nex.Agent.InboundWorker do
   end
 
   defp handle_commands_command(state, %Envelope{} = envelope) do
-    commands = commands_for_channel(envelope.channel, payload_workspace(envelope))
+    commands = commands_for_channel(envelope.channel, payload_workspace(envelope), state.config)
     publish_outbound(envelope, render_commands_help(commands))
     state
   end
@@ -888,10 +900,11 @@ defmodule Nex.Agent.InboundWorker do
     metadata = extract_metadata(envelope)
     channel_runtime = channel_runtime(envelope, channel, config)
     streaming? = Map.get(channel_runtime, "streaming", false) == true
+    channel_type = Map.get(channel_runtime, "type")
 
     cond do
-      channel == "feishu" and streaming? ->
-        if Process.whereis(Feishu) do
+      channel_type == "feishu" and streaming? ->
+        if Nex.Agent.Channel.Registry.whereis(channel) do
           trace_id = "feishu-stream-#{System.unique_integer([:positive])}"
           started_at_ms = System.monotonic_time(:millisecond)
 
@@ -900,7 +913,7 @@ defmodule Nex.Agent.InboundWorker do
             |> Map.put("_feishu_stream_trace_id", trace_id)
             |> Map.put("_feishu_stream_started_at_ms", started_at_ms)
 
-          {:ok, converter} = StreamConverter.start(chat_id, metadata)
+          {:ok, converter} = StreamConverter.start(channel, chat_id, metadata)
 
           feishu_stream_trace(
             trace_id,
@@ -936,10 +949,10 @@ defmodule Nex.Agent.InboundWorker do
           nil
         end
 
-      channel == "discord" and streaming? ->
-        if Process.whereis(Discord) do
-          Discord.trigger_typing(chat_id)
-          {:ok, converter} = DiscordStreamConverter.start(chat_id, metadata)
+      channel_type == "discord" and streaming? ->
+        if Nex.Agent.Channel.Registry.whereis(channel) do
+          Discord.trigger_typing(channel, chat_id)
+          {:ok, converter} = DiscordStreamConverter.start(channel, chat_id, metadata)
 
           # Start 1s thinking timer for "🤔 Thinking... (Ns)" updates
           thinking_timer_ref = Process.send_after(parent, {:discord_thinking_tick, key}, 1_000)
@@ -971,7 +984,7 @@ defmodule Nex.Agent.InboundWorker do
           nil
         end
 
-      channel != "feishu" and streaming? ->
+      streaming? ->
         send(parent, {:stream_state_started, key, {:text_buffer, ""}})
 
         fn
@@ -1125,7 +1138,7 @@ defmodule Nex.Agent.InboundWorker do
         end
 
       :error ->
-        opts = agent_start_opts(session_key, workspace)
+        opts = agent_start_opts(session_key, workspace, state.config)
 
         Logger.info(
           "InboundWorker creating new agent session=#{session_key} for key=#{inspect(key)}"
@@ -1141,18 +1154,19 @@ defmodule Nex.Agent.InboundWorker do
     end
   end
 
-  defp agent_start_opts(session_key, workspace) do
+  defp agent_start_opts(session_key, workspace, fallback_config) do
     [channel, chat_id] = String.split(session_key, ":", parts: 2)
     snapshot = runtime_snapshot_for_workspace(workspace)
-    config = if snapshot, do: snapshot.config, else: Config.load()
-    provider = Config.provider_to_atom(config.provider)
+    config = if snapshot, do: snapshot.config, else: fallback_config
+    model_runtime = Config.default_model_runtime(config)
     home = System.get_env("HOME", File.cwd!())
 
     [
-      provider: provider,
-      model: config.model,
-      api_key: Config.get_current_api_key(config),
-      base_url: Config.get_current_base_url(config),
+      provider: model_runtime && model_runtime.provider,
+      model: model_runtime && model_runtime.model_id,
+      api_key: model_runtime && model_runtime.api_key,
+      base_url: model_runtime && model_runtime.base_url,
+      provider_options: model_runtime && model_runtime.provider_options,
       tools: config.tools,
       workspace: workspace,
       runtime_snapshot: snapshot,
@@ -1184,18 +1198,42 @@ defmodule Nex.Agent.InboundWorker do
     end
   end
 
-  defp commands_for_channel(channel, workspace) do
-    workspace
+  defp commands_for_channel(channel, workspace, %Config{} = config) do
+    snapshot = runtime_snapshot_for_workspace(workspace)
+    channel_keys = command_channel_keys(channel, snapshot, config)
+
+    snapshot
     |> runtime_command_definitions()
     |> Enum.filter(fn definition ->
       channels = Map.get(definition, "channels", [])
-      channels == [] or to_string(channel) in channels
+      channels == [] or Enum.any?(channel_keys, &(&1 in channels))
     end)
   end
 
-  defp runtime_command_definitions(workspace) do
-    case runtime_snapshot_for_workspace(workspace) do
-      %Snapshot{commands: %{definitions: definitions}}
+  defp command_channel_keys(channel, %Snapshot{config: %Config{} = config}, _fallback_config) do
+    [to_string(channel), Config.channel_type(config, channel)]
+    |> Enum.filter(&is_binary/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
+  end
+
+  defp command_channel_keys(channel, _snapshot, %Config{} = config) do
+    [to_string(channel), Config.channel_type(config, channel)]
+    |> Enum.filter(&is_binary/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
+  end
+
+  defp command_channel_keys(channel, _snapshot, _config), do: [to_string(channel)]
+
+  defp runtime_command_definitions(%Snapshot{commands: %{definitions: definitions}})
+       when is_list(definitions) and definitions != [] do
+    definitions
+  end
+
+  defp runtime_command_definitions(_snapshot) do
+    case Runtime.current() do
+      {:ok, %Snapshot{commands: %{definitions: definitions}}}
       when is_list(definitions) and definitions != [] ->
         definitions
 

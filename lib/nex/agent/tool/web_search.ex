@@ -68,18 +68,20 @@ defmodule Nex.Agent.Tool.WebSearch do
 
   defp execute_with_backend(query, count, opts) do
     provider_config = provider_config(opts)
-    provider = Map.get(provider_config, "provider", "duckduckgo")
-    selected_config = selected_provider_config(provider_config)
+    strategy = Map.get(provider_config, "strategy", "auto")
 
-    case provider do
-      "codex" ->
-        OpenAICodex.web_search(query, count, normalize_ctx(opts), selected_config)
+    cond do
+      Map.get(provider_config, "mode") == "disabled" ->
+        {:error, "web_search is disabled. [Analyze the error and try a different approach.]"}
 
-      "duckduckgo" ->
+      strategy == "provider_native" ->
+        OpenAICodex.web_search(query, count, normalize_ctx(opts), provider_config)
+
+      strategy in ["auto", "local"] ->
         do_search(query, count, request_fun(opts), cancel_ref(opts), observe_context(opts))
 
-      _ ->
-        {:error, invalid_provider_error(provider)}
+      true ->
+        {:error, invalid_strategy_error(strategy)}
     end
   end
 
@@ -252,15 +254,9 @@ defmodule Nex.Agent.Tool.WebSearch do
 
   defp provider_config(_opts), do: Config.web_search_provider_config(nil)
 
-  defp selected_provider_config(provider_config) do
-    provider = Map.get(provider_config, "provider", "duckduckgo")
-    providers = Map.get(provider_config, "providers", %{})
-    Map.get(providers, provider, %{})
-  end
-
-  defp invalid_provider_error(provider),
+  defp invalid_strategy_error(strategy),
     do:
-      "web_search provider #{inspect(provider)} is not supported. [Analyze the error and try a different approach.]"
+      "web_search strategy #{inspect(strategy)} is not supported. [Analyze the error and try a different approach.]"
 
   defp normalize_ctx(opts) when is_map(opts), do: opts
   defp normalize_ctx(opts) when is_list(opts), do: Enum.into(opts, %{})

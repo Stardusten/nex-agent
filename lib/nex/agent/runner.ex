@@ -41,7 +41,13 @@ defmodule Nex.Agent.Runner do
   Run agent loop with session and prompt.
   """
   def run(session, prompt, opts \\ []) do
-    do_run(session, prompt, opts)
+    reset_stream_format_state()
+
+    try do
+      do_run(session, prompt, opts)
+    after
+      reset_stream_format_state()
+    end
   end
 
   defp do_run(session, prompt, opts) do
@@ -51,16 +57,23 @@ defmodule Nex.Agent.Runner do
 
     max_iterations = Keyword.get(opts, :max_iterations, @default_max_iterations)
 
+    default_model_runtime =
+      if runtime_config, do: Nex.Agent.Config.default_model_runtime(runtime_config)
+
     provider =
       Keyword.get(opts, :provider) ||
-        if(runtime_config,
-          do: Nex.Agent.Config.provider_to_atom(runtime_config.provider),
-          else: :anthropic
-        )
+        if(default_model_runtime, do: default_model_runtime.provider, else: :anthropic)
 
     model =
       Keyword.get(opts, :model) ||
-        if(runtime_config, do: runtime_config.model, else: "claude-sonnet-4-20250514")
+        if(default_model_runtime,
+          do: default_model_runtime.model_id,
+          else: Nex.Agent.LLM.ProviderProfile.default_model(provider)
+        )
+
+    provider_options =
+      Keyword.get(opts, :provider_options) ||
+        if(default_model_runtime, do: default_model_runtime.provider_options, else: [])
 
     run_id = Keyword.get(opts, :run_id, generate_run_id())
     cancel_ref = Keyword.get(opts, :cancel_ref, make_ref())
@@ -70,6 +83,7 @@ defmodule Nex.Agent.Runner do
       |> Keyword.put(:workspace, workspace)
       |> Keyword.put(:provider, provider)
       |> Keyword.put(:model, model)
+      |> Keyword.put(:provider_options, provider_options)
       |> Keyword.put(:run_id, run_id)
       |> Keyword.put(:cancel_ref, cancel_ref)
       |> maybe_put_opt(:runtime_snapshot, runtime_snapshot)
@@ -763,7 +777,8 @@ defmodule Nex.Agent.Runner do
 
   defp do_persist_generated_images(_images, _opts), do: []
 
-  defp persist_generated_image(%{"result" => result} = image, out_dir, idx) when is_binary(result) do
+  defp persist_generated_image(%{"result" => result} = image, out_dir, idx)
+       when is_binary(result) do
     mime_type = Map.get(image, "mime_type", "image/png")
     ext = image_extension(mime_type)
     path = Path.join(out_dir, "image_#{idx}.#{ext}")
@@ -797,7 +812,9 @@ defmodule Nex.Agent.Runner do
   end
 
   defp maybe_put_generated_images(metadata, []), do: metadata
-  defp maybe_put_generated_images(metadata, images), do: Map.put(metadata, :generated_images, images)
+
+  defp maybe_put_generated_images(metadata, images),
+    do: Map.put(metadata, :generated_images, images)
 
   defp normalize_tool_calls(tool_calls) do
     Enum.map(tool_calls, fn tc ->
@@ -829,7 +846,9 @@ defmodule Nex.Agent.Runner do
         notice = render_tool_call_notice(tool_calls)
 
         if notice != "" do
+          maybe_flush_text_before_tool_notice(opts)
           _ = sink.({:text, notice})
+          remember_stream_text_suffix({:text, notice})
           Process.put(:_last_stream_was_tool_notice, true)
         end
 
@@ -936,6 +955,7 @@ defmodule Nex.Agent.Runner do
       sink when is_function(sink, 1) ->
         maybe_flush_tool_notice_separator(opts)
         _ = sink.({:text, text})
+        remember_stream_text_suffix({:text, text})
         Keyword.put(opts, :_llm_text_streamed, true)
 
       _ ->
@@ -1449,6 +1469,12 @@ defmodule Nex.Agent.Runner do
   defp runtime_system_prompt(%Snapshot{} = snapshot), do: snapshot.prompt.system_prompt
   defp runtime_system_prompt(_), do: nil
 
+  defp default_model_runtime(%Snapshot{config: %Nex.Agent.Config{} = config}) do
+    Nex.Agent.Config.default_model_runtime(config)
+  end
+
+  defp default_model_runtime(_snapshot), do: nil
+
   defp runtime_snapshot_from_opts(opts) do
     case Keyword.get(opts, :runtime_snapshot) do
       %Snapshot{} = snapshot ->
@@ -1480,6 +1506,7 @@ defmodule Nex.Agent.Runner do
         model: Keyword.get(opts, :model),
         api_key: Keyword.get(opts, :api_key),
         base_url: Keyword.get(opts, :base_url),
+        provider_options: Keyword.get(opts, :provider_options, []),
         tools: Keyword.get(opts, :tools, []),
         temperature: Keyword.get(opts, :temperature, 1.0),
         max_tokens: Keyword.get(opts, :max_tokens, 4096),
@@ -1738,6 +1765,7 @@ defmodule Nex.Agent.Runner do
       model: Keyword.get(opts, :model),
       api_key: Keyword.get(opts, :api_key),
       base_url: Keyword.get(opts, :base_url),
+      provider_options: Keyword.get(opts, :provider_options, []),
       tools: Keyword.get(opts, :tools, %{}),
       cwd: Keyword.get(opts, :cwd, File.cwd!()),
       workspace: Keyword.get(opts, :workspace),
@@ -1756,7 +1784,9 @@ defmodule Nex.Agent.Runner do
     []
     |> maybe_put_opt(:provider, Keyword.get(opts, :provider))
     |> maybe_put_opt(:base_url, Keyword.get(opts, :base_url))
+    |> maybe_put_opt(:provider_options, Keyword.get(opts, :provider_options))
     |> maybe_put_opt(:config, runtime_snapshot && runtime_snapshot.config)
+    |> maybe_put_opt(:model_runtime, default_model_runtime(runtime_snapshot))
     |> maybe_put_opt(:surface, filter)
   end
 
@@ -1982,6 +2012,7 @@ defmodule Nex.Agent.Runner do
         model: Keyword.get(opts, :model),
         api_key: Keyword.get(opts, :api_key),
         base_url: Keyword.get(opts, :base_url),
+        provider_options: Keyword.get(opts, :provider_options, []),
         tools: Keyword.get(opts, :tools, []),
         tool_choice: tool_choice
       ]
@@ -2005,7 +2036,8 @@ defmodule Nex.Agent.Runner do
           "runner.consolidation.llm.call.finished",
           %{
             "finish_reason" => to_string(Map.get(response, :finish_reason) || "stop"),
-            "has_tool_calls" => is_list(Map.get(response, :tool_calls) || Map.get(response, "tool_calls")),
+            "has_tool_calls" =>
+              is_list(Map.get(response, :tool_calls) || Map.get(response, "tool_calls")),
             "content_summary" => String.slice(to_string(Map.get(response, :content, "")), 0, 100)
           },
           opts
@@ -2213,6 +2245,7 @@ defmodule Nex.Agent.Runner do
         model: Keyword.get(opts, :model),
         api_key: Keyword.get(opts, :api_key),
         base_url: Keyword.get(opts, :base_url),
+        provider_options: Keyword.get(opts, :provider_options, []),
         workspace: workspace,
         req_llm_stream_text_fun: Keyword.get(opts, :req_llm_stream_text_fun),
         llm_call_fun: Keyword.get(opts, :llm_call_fun)
@@ -2562,7 +2595,7 @@ defmodule Nex.Agent.Runner do
            tool_calls: Enum.reverse(state.tool_calls),
            finish_reason: state.finish_reason,
            usage: state.usage,
-            model: state.model,
+           model: state.model,
            response_metadata: state.response_metadata,
            streamed_text: state.streamed_text
          }}
@@ -2634,10 +2667,30 @@ defmodule Nex.Agent.Runner do
     case Keyword.get(opts, :stream_sink) do
       sink when is_function(sink, 1) ->
         _ = sink.(event)
+        remember_stream_text_suffix(event)
         :ok
 
       _ ->
         :ok
+    end
+  end
+
+  defp maybe_flush_text_before_tool_notice(opts) do
+    cond do
+      Process.get(:_last_stream_was_tool_notice) ->
+        :ok
+
+      is_nil(Process.get(:_stream_text_suffix)) ->
+        :ok
+
+      String.ends_with?(Process.get(:_stream_text_suffix), "\n\n") ->
+        :ok
+
+      String.ends_with?(Process.get(:_stream_text_suffix), "\n") ->
+        maybe_call_stream_sink(opts, {:text, "\n"})
+
+      true ->
+        maybe_call_stream_sink(opts, {:text, "\n\n"})
     end
   end
 
@@ -2652,6 +2705,20 @@ defmodule Nex.Agent.Runner do
     end
 
     :ok
+  end
+
+  defp remember_stream_text_suffix({:text, text}) when is_binary(text) and text != "" do
+    previous = Process.get(:_stream_text_suffix, "")
+    suffix = previous <> text
+
+    Process.put(:_stream_text_suffix, String.slice(suffix, -2, 2))
+  end
+
+  defp remember_stream_text_suffix(_event), do: :ok
+
+  defp reset_stream_format_state do
+    Process.delete(:_last_stream_was_tool_notice)
+    Process.delete(:_stream_text_suffix)
   end
 
   defp cancelled?(opts) do

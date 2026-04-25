@@ -103,12 +103,14 @@ defmodule Nex.Agent.Gateway do
 
   @impl true
   def handle_call(:status, _from, state) do
+    model_runtime = Nex.Agent.Config.default_model_runtime(state.config)
+
     status = %{
       status: state.status,
       started_at: state.started_at,
       config: %{
-        provider: state.config.provider,
-        model: state.config.model
+        provider: model_runtime && model_runtime.provider_key,
+        model: model_runtime && model_runtime.model_id
       },
       services: %{
         bus: Process.whereis(Nex.Agent.Bus) != nil,
@@ -117,8 +119,17 @@ defmodule Nex.Agent.Gateway do
         tool_registry: Process.whereis(Nex.Agent.Tool.Registry) != nil,
         inbound_worker: Process.whereis(Nex.Agent.InboundWorker) != nil,
         subagent: Process.whereis(Nex.Agent.Subagent) != nil,
-        feishu_channel: Process.whereis(Nex.Agent.Channel.Feishu) != nil,
-        discord_channel: Process.whereis(Nex.Agent.Channel.Discord) != nil
+        channels:
+          state.config
+          |> Nex.Agent.Config.channel_instances()
+          |> Enum.into(%{}, fn {id, instance} ->
+            {id,
+             %{
+               type: Map.get(instance, "type"),
+               enabled: Map.get(instance, "enabled", false) == true,
+               running: Nex.Agent.Channel.Registry.whereis(id) != nil
+             }}
+          end)
       }
     }
 
@@ -176,7 +187,6 @@ defmodule Nex.Agent.Gateway do
         _ = Nex.Agent.Heartbeat.start()
       end
 
-      # Start channels via DynamicSupervisor
       start_channels(config)
 
       {:ok, %{state | status: :running, started_at: System.system_time(:second)}}
@@ -201,9 +211,7 @@ defmodule Nex.Agent.Gateway do
     if Process.whereis(Nex.Agent.ChannelSupervisor) do
       specs = channel_specs(config)
 
-      Logger.info(
-        "[Gateway] Starting channels: #{inspect(Enum.map(specs, fn {module, _opts} -> module end))}"
-      )
+      Logger.info("[Gateway] Starting channels: #{inspect(Enum.map(specs, & &1.id))}")
 
       specs
       |> Enum.each(fn spec ->
@@ -218,47 +226,33 @@ defmodule Nex.Agent.Gateway do
             Logger.warning("[Gateway] Failed to start channel: #{inspect(reason)}")
         end
       end)
-
-      # Special: Feishu needs websocket started after the GenServer
-      if Nex.Agent.Config.feishu_enabled?(config) and Process.whereis(Nex.Agent.Channel.Feishu) do
-        _ = Nex.Agent.Channel.Feishu.start_websocket()
-      end
     else
       Logger.warning("[Gateway] ChannelSupervisor not running, skipping channel startup")
     end
   end
 
   defp reconcile_channels(old_config, new_config) do
-    channel_modules()
-    |> Enum.each(fn {module, enabled_fun, connection_fun} ->
-      old_enabled = apply(Nex.Agent.Config, enabled_fun, [old_config])
-      new_enabled = apply(Nex.Agent.Config, enabled_fun, [new_config])
-      old_connection = connection_fun.(old_config)
-      new_connection = connection_fun.(new_config)
+    old_instances = Nex.Agent.Config.enabled_channel_instances(old_config)
+    new_instances = Nex.Agent.Config.enabled_channel_instances(new_config)
 
-      cond do
-        old_enabled != new_enabled ->
-          if new_enabled do
-            start_channel(module, new_config)
-          else
-            stop_channel(module)
-          end
+    removed = Map.keys(old_instances) -- Map.keys(new_instances)
+    added = Map.keys(new_instances) -- Map.keys(old_instances)
+    common = Map.keys(old_instances) -- removed
 
-        new_enabled and old_connection != new_connection ->
-          restart_channel(module, new_config)
+    Enum.each(removed, &stop_channel_instance/1)
 
-        true ->
-          :ok
+    Enum.each(common, fn id ->
+      if Map.get(old_instances, id) != Map.get(new_instances, id) do
+        restart_channel_instance(id, new_config, Map.fetch!(new_instances, id))
       end
+    end)
+
+    Enum.each(added, fn id ->
+      start_channel_instance(id, new_config, Map.fetch!(new_instances, id))
     end)
   end
 
   defp stop_channels do
-    # Stop Feishu websocket first
-    if Process.whereis(Nex.Agent.Channel.Feishu) do
-      _ = Nex.Agent.Channel.Feishu.stop_websocket()
-    end
-
     if Process.whereis(Nex.Agent.ChannelSupervisor) do
       DynamicSupervisor.which_children(Nex.Agent.ChannelSupervisor)
       |> Enum.each(fn {_, pid, _, _} ->
@@ -267,25 +261,31 @@ defmodule Nex.Agent.Gateway do
     end
   end
 
-  defp start_channel(module, config) do
+  defp start_channel_instance(instance_id, config, instance_config) do
     if Process.whereis(Nex.Agent.ChannelSupervisor) do
-      case DynamicSupervisor.start_child(Nex.Agent.ChannelSupervisor, {module, config: config}) do
-        {:ok, _pid} ->
-          maybe_start_channel_socket(module)
+      case channel_module(instance_config) do
+        nil ->
+          :ok
 
-        {:error, {:already_started, _pid}} ->
-          maybe_start_channel_socket(module)
+        module ->
+          spec = channel_child_spec(module, instance_id, config, instance_config)
 
-        {:error, reason} ->
-          Logger.warning("[Gateway] Failed to start #{inspect(module)}: #{inspect(reason)}")
+          case DynamicSupervisor.start_child(Nex.Agent.ChannelSupervisor, spec) do
+            {:ok, _pid} ->
+              :ok
+
+            {:error, {:already_started, _pid}} ->
+              :ok
+
+            {:error, reason} ->
+              Logger.warning("[Gateway] Failed to start #{instance_id}: #{inspect(reason)}")
+          end
       end
     end
   end
 
-  defp stop_channel(module) do
-    maybe_stop_channel_socket(module)
-
-    case Process.whereis(module) do
+  defp stop_channel_instance(instance_id) do
+    case Nex.Agent.Channel.Registry.whereis(instance_id) do
       nil ->
         :ok
 
@@ -298,63 +298,47 @@ defmodule Nex.Agent.Gateway do
     end
   end
 
-  defp restart_channel(module, config) do
-    stop_channel(module)
-    start_channel(module, config)
+  defp restart_channel_instance(instance_id, config, instance_config) do
+    stop_channel_instance(instance_id)
+    start_channel_instance(instance_id, config, instance_config)
   end
-
-  defp maybe_start_channel_socket(Nex.Agent.Channel.Feishu) do
-    if Process.whereis(Nex.Agent.Channel.Feishu) do
-      _ = Nex.Agent.Channel.Feishu.start_websocket()
-    end
-  end
-
-  defp maybe_start_channel_socket(_module), do: :ok
-
-  defp maybe_stop_channel_socket(Nex.Agent.Channel.Feishu) do
-    if Process.whereis(Nex.Agent.Channel.Feishu) do
-      _ = Nex.Agent.Channel.Feishu.stop_websocket()
-    end
-  end
-
-  defp maybe_stop_channel_socket(_module), do: :ok
 
   defp channel_specs(config) do
-    specs = []
-
-    specs =
-      if Nex.Agent.Config.feishu_enabled?(config),
-        do: [{Nex.Agent.Channel.Feishu, config: config} | specs],
-        else: specs
-
-    specs =
-      if Nex.Agent.Config.discord_enabled?(config),
-        do: [{Nex.Agent.Channel.Discord, config: config} | specs],
-        else: specs
-
-    specs
+    config
+    |> Nex.Agent.Config.enabled_channel_instances()
+    |> Enum.flat_map(fn {instance_id, instance_config} ->
+      case channel_module(instance_config) do
+        nil -> []
+        module -> [channel_child_spec(module, instance_id, config, instance_config)]
+      end
+    end)
   end
 
-  defp channel_modules do
-    [
-      {Nex.Agent.Channel.Feishu, :feishu_enabled?, &Nex.Agent.Config.feishu/1},
-      {Nex.Agent.Channel.Discord, :discord_enabled?, &Nex.Agent.Config.discord/1}
-    ]
+  defp channel_child_spec(module, instance_id, config, instance_config) do
+    %{
+      id: {module, instance_id},
+      start:
+        {module, :start_link,
+         [[instance_id: instance_id, config: config, channel_config: instance_config]]}
+    }
   end
+
+  defp channel_module(%{"type" => "feishu"}), do: Nex.Agent.Channel.Feishu
+  defp channel_module(%{"type" => "discord"}), do: Nex.Agent.Channel.Discord
+  defp channel_module(_instance_config), do: nil
 
   defp do_send_message(message) do
     snapshot = runtime_snapshot()
     config = if snapshot, do: snapshot.config, else: Nex.Agent.Config.load()
-
-    api_key = Nex.Agent.Config.get_current_api_key(config)
-    base_url = Nex.Agent.Config.get_current_base_url(config)
+    model_runtime = Nex.Agent.Config.default_model_runtime(config)
 
     opts =
       [
-        provider: Nex.Agent.Config.provider_to_atom(config.provider),
-        model: config.model,
-        api_key: api_key,
-        base_url: base_url,
+        provider: model_runtime && model_runtime.provider,
+        model: model_runtime && model_runtime.model_id,
+        api_key: model_runtime && model_runtime.api_key,
+        base_url: model_runtime && model_runtime.base_url,
+        provider_options: model_runtime && model_runtime.provider_options,
         tools: config.tools
       ]
       |> maybe_put(:runtime_snapshot, snapshot)
