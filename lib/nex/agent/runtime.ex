@@ -9,6 +9,7 @@ defmodule Nex.Agent.Runtime do
   alias Nex.Agent.{Config, ContextBuilder, Skills, Workspace}
   alias Nex.Agent.Command.Catalog, as: CommandCatalog
   alias Nex.Agent.Runtime.Snapshot
+  alias Nex.Agent.Subagent.Profiles, as: SubagentProfiles
   alias Nex.Agent.Tool.Registry, as: ToolRegistry
 
   defstruct [
@@ -137,6 +138,7 @@ defmodule Nex.Agent.Runtime do
     with {:ok, config} <- call_builder(config_loader(opts, state), [opts]),
          {:ok, workspace} <- resolve_workspace(config, opts),
          {:ok, command_definitions} <- call_builder(command_builder(opts), []),
+         subagent_profiles = SubagentProfiles.load(config, workspace: workspace),
          {:ok, prompt, diagnostics} <-
            call_prompt_builder(prompt_builder(opts, state), [
              Keyword.put(opts, :workspace, workspace)
@@ -145,25 +147,25 @@ defmodule Nex.Agent.Runtime do
            call_tool_definitions_builder(
              tool_definitions_builder(opts, state),
              :all,
-             tool_definition_opts(config, workspace, :all)
+             tool_definition_opts(config, workspace, :all, subagent_profiles)
            ),
          {:ok, definitions_follow_up} <-
            call_tool_definitions_builder(
              tool_definitions_builder(opts, state),
              :follow_up,
-             tool_definition_opts(config, workspace, :follow_up)
+             tool_definition_opts(config, workspace, :follow_up, subagent_profiles)
            ),
          {:ok, definitions_subagent} <-
            call_tool_definitions_builder(
              tool_definitions_builder(opts, state),
              :subagent,
-             tool_definition_opts(config, workspace, :subagent)
+             tool_definition_opts(config, workspace, :subagent, subagent_profiles)
            ),
          {:ok, definitions_cron} <-
            call_tool_definitions_builder(
              tool_definitions_builder(opts, state),
              :cron,
-             tool_definition_opts(config, workspace, :cron)
+             tool_definition_opts(config, workspace, :cron, subagent_profiles)
            ),
          {:ok, always_instructions} <-
            call_builder(skills_builder(opts, state), [Keyword.put(opts, :workspace, workspace)]) do
@@ -187,6 +189,14 @@ defmodule Nex.Agent.Runtime do
           hash({definitions_all, definitions_follow_up, definitions_subagent, definitions_cron})
       }
 
+      subagent_definitions = SubagentProfiles.definitions(subagent_profiles)
+
+      subagents_data = %{
+        profiles: subagent_profiles,
+        definitions: subagent_definitions,
+        hash: hash(subagent_profiles)
+      }
+
       skills_data = %{
         always_instructions: always_instructions,
         hash: hash(always_instructions)
@@ -201,6 +211,7 @@ defmodule Nex.Agent.Runtime do
          commands: commands_data,
          prompt: prompt_data,
          tools: tools_data,
+         subagents: subagents_data,
          skills: skills_data,
          changed_paths: changed_paths(opts)
        }}
@@ -256,11 +267,12 @@ defmodule Nex.Agent.Runtime do
     call_builder(fun, [filter])
   end
 
-  defp tool_definition_opts(config, workspace, surface) do
+  defp tool_definition_opts(config, workspace, surface, subagent_profiles) do
     [
       config: config,
       workspace: workspace,
       surface: surface,
+      subagent_profiles: subagent_profiles,
       model_runtime: Config.default_model_runtime(config)
     ]
   end

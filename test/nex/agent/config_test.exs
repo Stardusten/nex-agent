@@ -42,6 +42,14 @@ defmodule Nex.Agent.ConfigTest do
 
     assert Config.default_model_runtime(config).provider_options[:temperature] == 0.2
     assert Config.default_model_runtime(config).provider_options[:reasoning_effort] == "low"
+
+    assert %{
+             "code_reviewer" => %{
+               "description" => "Review risky code",
+               "model_role" => "advisor",
+               "tools_filter" => "subagent"
+             }
+           } = Config.subagent_profile_config(config)
   end
 
   test "channel instances are keyed by instance id" do
@@ -324,6 +332,19 @@ defmodule Nex.Agent.ConfigTest do
             "provider" => "hy3-tencent",
             "id" => "hy3-preview",
             "reasoning_effort" => "low"
+          }
+        }
+      },
+      "subagents" => %{
+        "profiles" => %{
+          "code_reviewer" => %{
+            "description" => "Review risky code",
+            "prompt" => "Find correctness bugs first.",
+            "model_role" => "advisor",
+            "tools_filter" => "subagent",
+            "context_mode" => "parent_recent",
+            "return_mode" => "silent",
+            "allowed_tools" => ["read", "find"]
           }
         }
       },

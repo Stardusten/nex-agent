@@ -31,6 +31,7 @@ defmodule Nex.Agent.ToolAlignmentTest do
     Registry,
     SkillDiscover,
     SkillGet,
+    SpawnTask,
     SoulUpdate,
     ToolList
   }
@@ -191,6 +192,36 @@ defmodule Nex.Agent.ToolAlignmentTest do
     assert "versions" in action_enum
     assert "introspect" in action_enum
     assert "list_modules" in action_enum
+  end
+
+  test "spawn_task definition exposes runtime subagent profiles" do
+    definition =
+      SpawnTask.definition(
+        subagent_profiles: %{
+          "debugger" => %Nex.Agent.Subagent.Profile{
+            name: "debugger",
+            description: "Diagnose failures.",
+            prompt: "debug",
+            source: :test
+          },
+          "reviewer" => %Nex.Agent.Subagent.Profile{
+            name: "reviewer",
+            description: "Review code.",
+            prompt: "review",
+            source: :test
+          }
+        }
+      )
+
+    profile_schema = get_in(definition, [:parameters, :properties, :profile])
+
+    assert profile_schema.enum == ["debugger", "reviewer"]
+    assert profile_schema.description =~ "debugger: Diagnose failures."
+
+    refute Map.has_key?(definition.parameters.properties, :context_mode)
+    refute Map.has_key?(definition.parameters.properties, :return_mode)
+    refute Map.has_key?(definition.parameters.properties, :model_role)
+    refute Map.has_key?(definition.parameters.properties, :model_key)
   end
 
   test "follow-up tool surface keeps read-only discovery path without patch mutation" do

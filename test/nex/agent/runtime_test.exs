@@ -62,6 +62,9 @@ defmodule Nex.Agent.RuntimeTest do
     assert snapshot.tools.definitions_subagent != []
     assert snapshot.tools.definitions_cron != []
     assert is_binary(snapshot.tools.hash)
+    assert Map.has_key?(snapshot.subagents.profiles, "general")
+    assert Enum.any?(snapshot.subagents.definitions, &(&1["name"] == "code_reviewer"))
+    assert is_binary(snapshot.subagents.hash)
     assert snapshot.skills.always_instructions =~ "Runtime always skill instruction."
     assert is_binary(snapshot.skills.hash)
   end
@@ -105,6 +108,67 @@ defmodule Nex.Agent.RuntimeTest do
                         api_key: "sk-runtime-test"
                       }}
     end
+  end
+
+  test "runtime loads workspace subagent profiles and passes them to tool definitions", %{
+    workspace: workspace
+  } do
+    File.mkdir_p!(Path.join(workspace, "subagents"))
+
+    File.write!(
+      Path.join(workspace, "subagents/debugger.md"),
+      """
+      ---
+      name: debugger
+      description: Diagnose failures with read-only tools.
+      model_role: advisor
+      tools_filter: follow_up
+      ---
+
+      You are a debugger. Explain the likely root cause before suggesting a fix.
+      """
+    )
+
+    parent = self()
+
+    tool_builder = fn filter, opts ->
+      profiles = Keyword.fetch!(opts, :subagent_profiles)
+      send(parent, {:profiles, filter, Map.keys(profiles) |> Enum.sort()})
+      []
+    end
+
+    assert {:ok, %Snapshot{} = snapshot} =
+             Runtime.reload(workspace: workspace, tool_definitions_builder: tool_builder)
+
+    assert snapshot.subagents.profiles["debugger"].prompt =~ "You are a debugger."
+    assert Enum.any?(snapshot.subagents.definitions, &(&1["name"] == "debugger"))
+
+    assert_receive {:profiles, :all, names}
+    assert "debugger" in names
+    assert "general" in names
+
+    old_hash = snapshot.subagents.hash
+    old_definitions = snapshot.subagents.definitions
+
+    File.write!(
+      Path.join(workspace, "subagents/debugger.md"),
+      """
+      ---
+      name: debugger
+      description: Diagnose failures with read-only tools.
+      model_role: advisor
+      tools_filter: follow_up
+      ---
+
+      You are a debugger. Start with the smallest reproducible signal.
+      """
+    )
+
+    assert {:ok, %Snapshot{} = updated} =
+             Runtime.reload(workspace: workspace, tool_definitions_builder: tool_builder)
+
+    assert updated.subagents.definitions == old_definitions
+    assert updated.subagents.hash != old_hash
   end
 
   test "reload succeeds, increments version, broadcasts event, and records changed paths", %{

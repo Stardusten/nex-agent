@@ -181,13 +181,13 @@ defmodule Nex.Agent.Tool.Registry do
   end
 
   @impl true
-  def handle_call({:definitions, filter, _opts}, _from, %{tools: tools} = state) do
+  def handle_call({:definitions, filter, opts}, _from, %{tools: tools} = state) do
     defs =
       tools
       |> filter_tools(filter)
       |> Enum.sort_by(fn {name, _module} -> {definition_priority(name), name} end)
       |> Enum.map(fn {name, module} ->
-        module.definition()
+        tool_definition(module, opts)
         |> normalize_tool_definition(name)
       end)
       |> Enum.reject(&is_nil/1)
@@ -439,6 +439,14 @@ defmodule Nex.Agent.Tool.Registry do
 
       true ->
         :error
+    end
+  end
+
+  defp tool_definition(module, opts) do
+    cond do
+      function_exported?(module, :definition, 1) -> module.definition(opts)
+      function_exported?(module, :definition, 0) -> module.definition()
+      true -> nil
     end
   end
 

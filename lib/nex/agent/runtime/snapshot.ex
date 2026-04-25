@@ -26,6 +26,11 @@ defmodule Nex.Agent.Runtime.Snapshot do
             definitions_cron: [map()],
             hash: String.t()
           },
+          subagents: %{
+            profiles: %{optional(String.t()) => Nex.Agent.Subagent.Profile.t()},
+            definitions: [map()],
+            hash: String.t()
+          },
           skills: %{
             always_instructions: String.t(),
             hash: String.t()
@@ -51,6 +56,11 @@ defmodule Nex.Agent.Runtime.Snapshot do
               definitions_follow_up: [],
               definitions_subagent: [],
               definitions_cron: [],
+              hash: ""
+            },
+            subagents: %{
+              profiles: %{},
+              definitions: [],
               hash: ""
             },
             skills: %{

@@ -8,6 +8,26 @@ defmodule Nex.Agent.Tool.SpawnTask do
   def category, do: :evolution
 
   def definition do
+    definition([])
+  end
+
+  def definition(opts) do
+    profiles = Keyword.get(opts, :subagent_profiles, %{})
+    profile_names = profile_names(profiles)
+
+    profile_description =
+      if profile_names == [] do
+        "Subagent profile to use. Defaults to general."
+      else
+        profile_lines =
+          profiles
+          |> Map.values()
+          |> Enum.sort_by(& &1.name)
+          |> Enum.map_join("; ", fn profile -> "#{profile.name}: #{profile.description}" end)
+
+        "Subagent profile to use. Available profiles: #{profile_lines}"
+      end
+
     %{
       name: name(),
       description: description(),
@@ -15,7 +35,13 @@ defmodule Nex.Agent.Tool.SpawnTask do
         type: "object",
         properties: %{
           task: %{type: "string", description: "Description of the task to perform"},
-          label: %{type: "string", description: "Short label for the task"}
+          label: %{type: "string", description: "Short label for the task"},
+          profile: profile_schema(profile_names, profile_description),
+          context: %{
+            type: "string",
+            description:
+              "Optional concise context to provide to the subagent. Prefer only task-relevant facts."
+          }
         },
         required: ["task"]
       }
@@ -27,16 +53,22 @@ defmodule Nex.Agent.Tool.SpawnTask do
 
     spawn_opts = [
       label: label,
-      owner_run_id: Map.get(ctx, :run_id),
+      profile: args["profile"],
+      context: args["context"],
+      owner_run_id: Map.get(ctx, :owner_run_id) || Map.get(ctx, :run_id),
       session_key: Map.get(ctx, :session_key),
+      cancel_ref: Map.get(ctx, :cancel_ref),
       provider: Map.get(ctx, :provider),
       model: Map.get(ctx, :model),
       api_key: Map.get(ctx, :api_key),
       base_url: Map.get(ctx, :base_url),
+      provider_options: Map.get(ctx, :provider_options, []),
       workspace: Map.get(ctx, :workspace),
       cwd: Map.get(ctx, :cwd),
       project: Map.get(ctx, :project),
       metadata: Map.get(ctx, :metadata, %{}),
+      config: Map.get(ctx, :config),
+      runtime_snapshot: Map.get(ctx, :runtime_snapshot),
       channel: Map.get(ctx, :channel),
       chat_id: Map.get(ctx, :chat_id)
     ]
@@ -50,4 +82,21 @@ defmodule Nex.Agent.Tool.SpawnTask do
   end
 
   def execute(_args, _ctx), do: {:error, "task description is required"}
+
+  defp profile_names(profiles) when is_map(profiles) do
+    profiles
+    |> Map.keys()
+    |> Enum.map(&to_string/1)
+    |> Enum.sort()
+  end
+
+  defp profile_names(_), do: []
+
+  defp profile_schema([], description) do
+    %{type: "string", description: description}
+  end
+
+  defp profile_schema(names, description) do
+    %{type: "string", enum: names, description: description}
+  end
 end

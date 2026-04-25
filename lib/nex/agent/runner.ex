@@ -1367,8 +1367,10 @@ defmodule Nex.Agent.Runner do
         :follow_up -> registry_definitions(:follow_up, opts)
         :subagent -> registry_definitions(:subagent, opts)
         :cron -> registry_definitions(:cron, opts)
+        :base -> registry_definitions(:base, opts)
         _ -> registry_definitions(:all, opts)
       end
+      |> filter_tool_allowlist(Keyword.get(opts, :tool_allowlist))
 
     opts = Keyword.put(opts, :tools, tools)
 
@@ -1453,8 +1455,23 @@ defmodule Nex.Agent.Runner do
   defp snapshot_tool_definitions(%Snapshot{} = snapshot, :cron),
     do: snapshot.tools.definitions_cron
 
+  defp snapshot_tool_definitions(%Snapshot{}, :base),
+    do: []
+
   defp snapshot_tool_definitions(%Snapshot{} = snapshot, _filter),
     do: snapshot.tools.definitions_all
+
+  defp filter_tool_allowlist(definitions, nil), do: definitions
+
+  defp filter_tool_allowlist(definitions, allowlist) when is_list(allowlist) do
+    allowed = allowlist |> Enum.map(&to_string/1) |> MapSet.new()
+
+    Enum.filter(definitions, fn definition ->
+      MapSet.member?(allowed, tool_definition_name(definition))
+    end)
+  end
+
+  defp filter_tool_allowlist(definitions, _allowlist), do: definitions
 
   defp valid_tool_name?(name) when is_binary(name), do: Regex.match?(@valid_tool_name, name)
   defp valid_tool_name?(_), do: false
@@ -1693,17 +1710,22 @@ defmodule Nex.Agent.Runner do
   def parse_tool_arguments(args), do: parse_args(args)
 
   defp execute_tool(tool_name, args, ctx) do
-    if cancelled_ctx?(ctx) do
-      "Error: cancelled"
-    else
-      if String.starts_with?(tool_name, "skill_run__") do
+    cond do
+      cancelled_ctx?(ctx) ->
+        "Error: cancelled"
+
+      not tool_allowed?(tool_name, ctx) ->
+        "Error: tool #{tool_name} is not available for this run"
+
+      String.starts_with?(tool_name, "skill_run__") ->
         case SkillRuntime.execute_ephemeral_tool(tool_name, args, ctx) do
           {:ok, result} when is_binary(result) -> result
           {:ok, result} when is_map(result) -> Jason.encode!(result, pretty: true)
           {:ok, result} -> render_text(result)
           {:error, reason} -> "Error: #{reason}"
         end
-      else
+
+      true ->
         if Process.whereis(ToolRegistry) do
           case ToolRegistry.execute(tool_name, args, ctx) do
             {:ok, result} when is_binary(result) ->
@@ -1747,9 +1769,18 @@ defmodule Nex.Agent.Runner do
         else
           "Error: tool registry unavailable"
         end
-      end
     end
   end
+
+  defp tool_allowed?(_tool_name, %{tool_allowlist: nil}), do: true
+  defp tool_allowed?(_tool_name, %{"tool_allowlist" => nil}), do: true
+  defp tool_allowed?(_tool_name, ctx) when not is_map_key(ctx, :tool_allowlist), do: true
+
+  defp tool_allowed?(tool_name, %{tool_allowlist: allowlist}) when is_list(allowlist) do
+    tool_name in Enum.map(allowlist, &to_string/1)
+  end
+
+  defp tool_allowed?(_tool_name, _ctx), do: true
 
   defp build_tool_ctx(opts) do
     runtime_snapshot = Keyword.get(opts, :runtime_snapshot)
@@ -1766,6 +1797,7 @@ defmodule Nex.Agent.Runner do
       api_key: Keyword.get(opts, :api_key),
       base_url: Keyword.get(opts, :base_url),
       provider_options: Keyword.get(opts, :provider_options, []),
+      tool_allowlist: Keyword.get(opts, :tool_allowlist),
       tools: Keyword.get(opts, :tools, %{}),
       cwd: Keyword.get(opts, :cwd, File.cwd!()),
       workspace: Keyword.get(opts, :workspace),

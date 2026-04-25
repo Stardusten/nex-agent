@@ -23,6 +23,7 @@ defmodule Nex.Agent.Config do
             gateway: %{},
             provider: %{},
             model: %{},
+            subagents: %{},
             tools: %{}
 
   @type model_runtime :: %{
@@ -43,6 +44,7 @@ defmodule Nex.Agent.Config do
           gateway: map(),
           provider: map(),
           model: map(),
+          subagents: map(),
           tools: map()
         }
 
@@ -81,6 +83,7 @@ defmodule Nex.Agent.Config do
       "gateway" => config.gateway,
       "provider" => config.provider,
       "model" => config.model,
+      "subagents" => config.subagents,
       "tools" => config.tools
     }
 
@@ -126,6 +129,7 @@ defmodule Nex.Agent.Config do
         "advisor_model" => "gpt-4o",
         "models" => %{"gpt-4o" => %{"provider" => "openai", "id" => "gpt-4o"}}
       },
+      subagents: %{"profiles" => %{}},
       tools: %{}
     }
   end
@@ -139,6 +143,7 @@ defmodule Nex.Agent.Config do
       gateway: normalize_gateway(Map.get(data, "gateway")),
       provider: normalize_provider_root(Map.get(data, "provider")),
       model: normalize_model_root(Map.get(data, "model")),
+      subagents: normalize_subagents(Map.get(data, "subagents")),
       tools: normalize_tools(Map.get(data, "tools"))
     }
   end
@@ -171,6 +176,27 @@ defmodule Nex.Agent.Config do
 
   @spec advisor_model_runtime(t()) :: model_runtime() | nil
   def advisor_model_runtime(%__MODULE__{} = config), do: model_role(config, :advisor)
+
+  @spec model_runtime(t(), String.t()) :: {:ok, model_runtime()} | {:error, :unknown_model}
+  def model_runtime(%__MODULE__{} = config, model_key) when is_binary(model_key) do
+    resolve_model_runtime(config, model_key)
+  end
+
+  @spec subagent_profile_config(t()) :: %{optional(String.t()) => map()}
+  def subagent_profile_config(%__MODULE__{subagents: %{} = subagents}) do
+    profiles =
+      case Map.get(subagents, "profiles") do
+        %{} = profiles -> profiles
+        _ -> Map.drop(subagents, ["defaults"])
+      end
+
+    Enum.reduce(profiles, %{}, fn
+      {name, %{} = attrs}, acc -> Map.put(acc, to_string(name), stringify_map_keys(attrs))
+      {_name, _attrs}, acc -> acc
+    end)
+  end
+
+  def subagent_profile_config(%__MODULE__{}), do: %{}
 
   @spec channel_instances(t()) :: %{optional(String.t()) => map()}
   def channel_instances(%__MODULE__{} = config), do: config.channel || %{}
@@ -333,6 +359,7 @@ defmodule Nex.Agent.Config do
       gateway: %{},
       provider: %{},
       model: %{},
+      subagents: %{},
       tools: %{}
     }
   end
@@ -429,7 +456,7 @@ defmodule Nex.Agent.Config do
   defp valid_new_shape?(%__MODULE__{} = config) do
     is_integer(config.max_iterations) and config.max_iterations > 0 and
       is_map(config.channel) and is_map(config.gateway) and is_map(config.provider) and
-      is_map(config.model) and is_map(config.tools)
+      is_map(config.model) and is_map(config.subagents) and is_map(config.tools)
   end
 
   defp valid_default_model?(%__MODULE__{} = config) do
@@ -595,6 +622,28 @@ defmodule Nex.Agent.Config do
   end
 
   defp normalize_model_entry(_key, _config), do: nil
+
+  defp normalize_subagents(%{} = subagents) do
+    subagents
+    |> stringify_map_keys()
+    |> Map.update("profiles", %{}, fn
+      %{} = profiles -> normalize_subagent_profile_entries(profiles)
+      _ -> %{}
+    end)
+  end
+
+  defp normalize_subagents(_subagents), do: %{"profiles" => %{}}
+
+  defp normalize_subagent_profile_entries(profiles) when is_map(profiles) do
+    profiles
+    |> stringify_map_keys()
+    |> Enum.reduce(%{}, fn
+      {name, %{} = attrs}, acc -> Map.put(acc, name, stringify_map_keys(attrs))
+      {_name, _attrs}, acc -> acc
+    end)
+  end
+
+  defp normalize_subagent_profile_entries(_profiles), do: %{}
 
   defp normalize_tools(tools) when is_map(tools), do: stringify_map_keys(tools)
   defp normalize_tools(_tools), do: %{}

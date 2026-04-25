@@ -965,7 +965,9 @@ defmodule Nex.Agent.InboundWorker do
               channel: channel,
               chat_id: chat_id,
               stream_sink: stream_sink,
+              run_id: run.id,
               owner_run_id: run.id,
+              cancel_ref: run.cancel_ref,
               workspace: workspace,
               schedule_memory_refresh: false
             ]

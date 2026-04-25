@@ -151,6 +151,8 @@ defmodule Nex.Agent do
     stream_sink = Keyword.get(opts, :stream_sink)
     tools_filter = Keyword.get(opts, :tools_filter)
     media = Keyword.get(opts, :media)
+    run_id = Keyword.get(opts, :run_id) || Keyword.get(opts, :owner_run_id)
+    cancel_ref = Keyword.get(opts, :cancel_ref)
 
     runner_opts =
       [
@@ -173,6 +175,8 @@ defmodule Nex.Agent do
       |> maybe_put(:project, project)
       |> maybe_put(:stream_sink, stream_sink)
       |> maybe_put(:tools_filter, tools_filter)
+      |> maybe_put(:run_id, run_id)
+      |> maybe_put(:cancel_ref, cancel_ref)
       |> maybe_put(:media, media)
       |> maybe_put(:llm_stream_client, Keyword.get(opts, :llm_stream_client))
       |> maybe_put(:llm_call_fun, Keyword.get(opts, :llm_call_fun))
