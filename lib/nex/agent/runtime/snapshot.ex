@@ -35,6 +35,13 @@ defmodule Nex.Agent.Runtime.Snapshot do
             always_instructions: String.t(),
             hash: String.t()
           },
+          hooks: %{
+            entries: [map()],
+            diagnostics: [map()],
+            path: String.t() | nil,
+            version: pos_integer(),
+            hash: String.t()
+          },
           changed_paths: [String.t()]
         }
 
@@ -65,6 +72,13 @@ defmodule Nex.Agent.Runtime.Snapshot do
             },
             skills: %{
               always_instructions: "",
+              hash: ""
+            },
+            hooks: %{
+              entries: [],
+              diagnostics: [],
+              path: nil,
+              version: 1,
               hash: ""
             },
             changed_paths: []

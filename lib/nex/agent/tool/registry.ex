@@ -31,6 +31,7 @@ defmodule Nex.Agent.Tool.Registry do
     Nex.Agent.Tool.MemoryStatus,
     Nex.Agent.Tool.MemoryRebuild,
     Nex.Agent.Tool.MemoryWrite,
+    Nex.Agent.Tool.Hook,
     Nex.Agent.Tool.UserUpdate,
     Nex.Agent.Tool.SkillDiscover,
     Nex.Agent.Tool.SkillGet,

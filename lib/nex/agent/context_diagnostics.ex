@@ -3,11 +3,12 @@ defmodule Nex.Agent.ContextDiagnostics do
   Deterministic layer-boundary diagnostics for context files and write validation.
   """
 
-  @type layer :: :agents | :soul | :user | :tools | :memory | :unknown
+  @type layer :: :agents | :identity | :soul | :user | :tools | :memory | :unknown
 
   @type category ::
           :persona_style_instruction_in_memory
           | :user_profile_data_in_soul
+          | :identity_definition_in_soul
           | :outdated_capability_model_claim_in_agents
           | :identity_persona_instruction_in_user
 
@@ -36,6 +37,14 @@ defmodule Nex.Agent.ContextDiagnostics do
         ~r/(?:^-\s+\*\*(?:Name|Timezone|Role|Preferred Language|Language|Communication Style)\*\*:|\b(?:timezone|preferred\s+language|communication\s+style|my\s+name\s+is)\b)/im
     },
     %{
+      layer: :soul,
+      category: :identity_definition_in_soul,
+      message:
+        "SOUL.md contains durable identity definitions; core self-definition belongs to IDENTITY.md.",
+      pattern:
+        ~r/\b(?:i am|i'm|you are|you're|act as|pretend to be|behave as|your identity|agent identity|core identity)\b.{0,80}\b(?:claude|chatgpt|gpt[-\w]*|copilot|gemini|cursor|nanobot|llama|qwen|deepseek|assistant|agent|model|bot|ai|coding assistant|personal agent|runtime)\b/i
+    },
+    %{
       layer: :agents,
       category: :outdated_capability_model_claim_in_agents,
       message:
@@ -55,6 +64,7 @@ defmodule Nex.Agent.ContextDiagnostics do
 
   @write_blocked_categories MapSet.new([
                               :user_profile_data_in_soul,
+                              :identity_definition_in_soul,
                               :identity_persona_instruction_in_user
                             ])
 
@@ -104,6 +114,7 @@ defmodule Nex.Agent.ContextDiagnostics do
   def write_error_message([]), do: "Invalid content for layer write."
 
   defp layer_to_source(:agents), do: "AGENTS.md"
+  defp layer_to_source(:identity), do: "IDENTITY.md"
   defp layer_to_source(:soul), do: "SOUL.md"
   defp layer_to_source(:user), do: "USER.md"
   defp layer_to_source(:tools), do: "TOOLS.md"

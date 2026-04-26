@@ -6,6 +6,8 @@ defmodule Nex.Agent.Memory.Notice do
   require Log
 
   @prefix "🧠 Memory - "
+  @summary_max_chars 140
+  @truncation_suffix "..."
 
   @spec maybe_send(map(), keyword()) :: {:sent, :ok} | {:skipped, String.t()}
   def maybe_send(%{status: :updated} = result, opts) do
@@ -72,7 +74,7 @@ defmodule Nex.Agent.Memory.Notice do
     |> String.trim()
     |> case do
       "" -> "Memory updated."
-      summary -> String.slice(summary, 0, 140)
+      summary -> truncate_summary(summary)
     end
   end
 
@@ -109,6 +111,17 @@ defmodule Nex.Agent.Memory.Notice do
 
   defp notice_summary(nil), do: nil
   defp notice_summary(summary), do: summary(summary)
+
+  defp truncate_summary(summary) do
+    if String.length(summary) > @summary_max_chars do
+      summary
+      |> String.slice(0, @summary_max_chars - String.length(@truncation_suffix))
+      |> String.trim_trailing()
+      |> Kernel.<>(@truncation_suffix)
+    else
+      summary
+    end
+  end
 
   defp present?(value) when is_binary(value), do: String.trim(value) != ""
   defp present?(value), do: not is_nil(value)

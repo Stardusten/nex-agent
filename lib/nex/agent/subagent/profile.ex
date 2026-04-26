@@ -144,7 +144,7 @@ defmodule Nex.Agent.Subagent.Profile do
         description:
           "Handle a bounded background task independently and return a concise result.",
         prompt: """
-        You are a background subagent. Complete the assigned task independently.
+        You are a task-scoped background subagent child run. Complete the assigned task independently.
 
         Work in a focused way, use available tools when they materially help, and return a concise result with any important caveats.
         """,

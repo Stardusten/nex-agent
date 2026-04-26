@@ -4,7 +4,11 @@ defmodule Nex.Agent.Tool.SpawnTask do
   @behaviour Nex.Agent.Tool.Behaviour
 
   def name, do: "spawn_task"
-  def description, do: "Spawn a background subagent to handle a task independently."
+
+  def description do
+    "Spawn a task-scoped background subagent child run. It runs independently, returns an async task id, and reports completion through the subagent result path."
+  end
+
   def category, do: :evolution
 
   def definition do
@@ -35,7 +39,10 @@ defmodule Nex.Agent.Tool.SpawnTask do
         type: "object",
         properties: %{
           task: %{type: "string", description: "Description of the task to perform"},
-          label: %{type: "string", description: "Short label for the task"},
+          label: %{
+            type: "string",
+            description: "Short label visible to the subagent and completion result."
+          },
           profile: profile_schema(profile_names, profile_description),
           context: %{
             type: "string",
@@ -75,7 +82,9 @@ defmodule Nex.Agent.Tool.SpawnTask do
 
     if Process.whereis(Nex.Agent.Subagent) do
       {:ok, task_id} = Nex.Agent.Subagent.spawn_task(task_desc, spawn_opts)
-      {:ok, "Background task spawned: #{task_id} (#{label || "unlabeled"})"}
+
+      {:ok,
+       "Background subagent task started: #{task_id} (label: #{label || "unlabeled"}, child session: subagent:#{task_id}). This is a task-scoped child run; use the returned id, completion result, child session, or ControlPlane observations to verify it. `run.owner.current` only lists active owner runs."}
     else
       {:error, "Subagent service is not running"}
     end

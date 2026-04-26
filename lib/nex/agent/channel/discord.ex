@@ -11,7 +11,8 @@ defmodule Nex.Agent.Channel.Discord do
         "enabled" => true,
         "token" => "MTIz...",           # Raw bot token (without "Bot " prefix)
         "allow_from" => ["channel_id"], # Allowed channel IDs (empty = all)
-        "guild_id" => nil               # Optional: restrict to a guild
+        "guild_id" => nil,              # Optional: restrict to a guild
+        "show_table_as" => "ascii"      # raw | ascii | embed
       }
   """
 
@@ -19,16 +20,21 @@ defmodule Nex.Agent.Channel.Discord do
   require Logger
 
   alias Nex.Agent.{Bus, Config, HTTP}
+  alias Nex.Agent.ControlPlane.Log, as: ControlPlaneLog
   alias Nex.Agent.Command.Invocation
   alias Nex.Agent.Channel.Discord.WSClient
   alias Nex.Agent.Inbound.Envelope
   alias Nex.Agent.IMIR.Renderers.Discord, as: DiscordRenderer
   alias Nex.Agent.IMIR.Text, as: IMText
 
+  require ControlPlaneLog
+
   @discord_api "https://discord.com/api/v10"
   @gateway_url "wss://gateway.discord.gg/?v=10&encoding=json"
   @heartbeat_jitter 0.9
   @reconnect_delay_ms 5_000
+  @max_message_length 2000
+  @table_modes [:raw, :ascii, :embed]
   @eyes_emoji "👀"
   @done_emoji "✅"
   @error_emoji "❌"
@@ -44,6 +50,7 @@ defmodule Nex.Agent.Channel.Discord do
     :allow_from,
     :guild_id,
     :enabled,
+    :show_table_as,
     :http_post_fun,
     :http_patch_fun,
     :ws_pid,
@@ -63,6 +70,7 @@ defmodule Nex.Agent.Channel.Discord do
           allow_from: [String.t()],
           guild_id: String.t() | nil,
           enabled: boolean(),
+          show_table_as: :raw | :ascii | :embed,
           http_post_fun: (String.t(), map(), keyword() -> {:ok, map()} | {:error, term()}),
           http_patch_fun: (String.t(), map(), keyword() -> {:ok, map()} | {:error, term()}),
           ws_pid: pid() | nil,
@@ -168,6 +176,7 @@ defmodule Nex.Agent.Channel.Discord do
       allow_from: normalize_allow_from(Map.get(discord, "allow_from")),
       guild_id: Map.get(discord, "guild_id"),
       enabled: Map.get(discord, "enabled", false) == true,
+      show_table_as: normalize_table_mode(Map.get(discord, "show_table_as")),
       http_post_fun: Keyword.get(opts, :http_post_fun, &default_http_post/3),
       http_patch_fun: Keyword.get(opts, :http_patch_fun, &default_http_patch/3),
       sequence: nil,
@@ -721,7 +730,7 @@ defmodule Nex.Agent.Channel.Discord do
         content
         |> normalize_outbound_text()
         |> Enum.join("\n\n")
-        |> render_discord_content()
+        |> render_discord_body(state)
         |> edit_interaction_response(application_id, token, state)
         |> case do
           :ok ->
@@ -748,8 +757,8 @@ defmodule Nex.Agent.Channel.Discord do
     content
     |> normalize_outbound_text()
     |> Enum.each(fn segment ->
-      for chunk <- chunk_message(segment, 2000) do
-        case create_message(channel_id, chunk, %{}, state) do
+      for body <- render_discord_bodies(segment, state) do
+        case create_message(channel_id, body, %{}, state) do
           {:ok, _message_id} -> :ok
           {:error, reason} -> Logger.error("[Discord] Send failed: #{inspect(reason)}")
         end
@@ -758,15 +767,18 @@ defmodule Nex.Agent.Channel.Discord do
   end
 
   defp create_message(channel_id, content, metadata, state) do
-    content = render_discord_content(content)
+    body = render_discord_body(content, state)
+    observe_discord_outbound_body(channel_id, body, state)
 
-    with :ok <- validate_outbound_message(channel_id, content, state),
+    with :ok <- validate_outbound_message(channel_id, body, state),
          {:ok, response} <-
            state.http_post_fun.(
              "#{@discord_api}/channels/#{channel_id}/messages",
-             %{"content" => content},
+             body,
              request_headers(metadata, state)
            ) do
+      observe_discord_message_response(channel_id, response, state)
+
       case Map.get(response, "id") || Map.get(response, :id) do
         id when is_binary(id) and id != "" -> {:ok, id}
         _ -> {:error, {:missing_message_id, response}}
@@ -775,31 +787,84 @@ defmodule Nex.Agent.Channel.Discord do
   end
 
   defp edit_message(channel_id, message_id, content, metadata, state) do
-    content = render_discord_content(content)
+    body = render_discord_body(content, state)
 
-    with :ok <- validate_outbound_message(channel_id, content, state),
+    with :ok <- validate_outbound_message(channel_id, body, state),
          true <- (is_binary(message_id) and message_id != "") or {:error, :invalid_message_id},
          {:ok, _response} <-
            state.http_patch_fun.(
              "#{@discord_api}/channels/#{channel_id}/messages/#{message_id}",
-             %{"content" => content},
+             body,
              request_headers(metadata, state)
            ) do
       :ok
     end
   end
 
-  defp render_discord_content(content) when is_binary(content),
-    do: DiscordRenderer.render_text(content)
+  defp render_discord_bodies(content, state) when is_binary(content) do
+    content
+    |> DiscordRenderer.render_payload(show_table_as: state.show_table_as)
+    |> discord_payload_to_bodies()
+  end
 
-  defp render_discord_content(content), do: content
+  defp render_discord_bodies(content, state), do: [render_discord_body(content, state)]
 
-  defp validate_outbound_message(channel_id, content, state) do
+  defp render_discord_body(%{} = body, _state) do
+    content = Map.get(body, "content", Map.get(body, :content, ""))
+    embeds = Map.get(body, "embeds", Map.get(body, :embeds, []))
+
+    %{
+      "content" => to_string(content || ""),
+      "embeds" => if(is_list(embeds), do: embeds, else: [])
+    }
+  end
+
+  defp render_discord_body(content, state) when is_binary(content) do
+    content
+    |> DiscordRenderer.render_payload(show_table_as: state.show_table_as)
+    |> discord_payload_to_body()
+  end
+
+  defp render_discord_body(content, _state),
+    do: %{"content" => to_string(content || ""), "embeds" => []}
+
+  defp discord_payload_to_bodies(%{content: content, embeds: embeds}) do
+    content_chunks = IMText.chunk_message(content || "", @max_message_length)
+    embed_batches = Enum.chunk_every(embeds || [], 10)
+
+    cond do
+      embed_batches == [] ->
+        Enum.map(content_chunks, &%{"content" => &1, "embeds" => []})
+
+      length(content_chunks) <= 1 and length(embed_batches) == 1 ->
+        [%{"content" => List.first(content_chunks) || "", "embeds" => List.first(embed_batches)}]
+
+      true ->
+        Enum.map(content_chunks, &%{"content" => &1, "embeds" => []}) ++
+          Enum.map(embed_batches, &%{"content" => "", "embeds" => &1})
+    end
+  end
+
+  defp discord_payload_to_body(%{content: content, embeds: embeds}) do
+    content = content || ""
+    embeds = embeds || []
+
+    if String.length(content) <= @max_message_length do
+      %{"content" => content, "embeds" => embeds}
+    else
+      content
+      |> IMText.chunk_message(@max_message_length)
+      |> List.first()
+      |> then(&%{"content" => &1 || "", "embeds" => embeds})
+    end
+  end
+
+  defp validate_outbound_message(channel_id, body, state) do
     cond do
       not is_binary(channel_id) or channel_id == "" ->
         {:error, :invalid_channel_id}
 
-      not is_binary(content) or String.trim(content) == "" ->
+      not valid_discord_body?(body) ->
         {:error, :invalid_content}
 
       state.token in [nil, ""] ->
@@ -810,6 +875,76 @@ defmodule Nex.Agent.Channel.Discord do
     end
   end
 
+  defp valid_discord_body?(%{"content" => content, "embeds" => embeds}) do
+    (is_binary(content) and String.trim(content) != "") or
+      (is_list(embeds) and embeds != [])
+  end
+
+  defp valid_discord_body?(_body), do: false
+
+  defp observe_discord_outbound_body(
+         channel_id,
+         %{"content" => content, "embeds" => embeds},
+         state
+       ) do
+    embeds = if is_list(embeds), do: embeds, else: []
+    content = to_string(content || "")
+    field_count = Enum.reduce(embeds, 0, &(&2 + embed_field_count(&1)))
+
+    ControlPlaneLog.info(
+      "discord.outbound.rendered",
+      %{
+        "content_chars" => String.length(content),
+        "content_empty" => String.trim(content) == "",
+        "embed_count" => length(embeds),
+        "embed_field_count" => field_count,
+        "embed_only" => String.trim(content) == "" and embeds != [],
+        "table_mode" => Atom.to_string(state.show_table_as)
+      },
+      context: %{"channel" => state.instance_id, "chat_id" => channel_id}
+    )
+  rescue
+    _e -> :ok
+  end
+
+  defp observe_discord_outbound_body(_channel_id, _body, _state), do: :ok
+
+  defp embed_field_count(%{"fields" => fields}) when is_list(fields), do: length(fields)
+  defp embed_field_count(_embed), do: 0
+
+  defp observe_discord_message_response(channel_id, response, state) when is_map(response) do
+    embeds = response_embeds(response)
+    flags = Map.get(response, "flags") || Map.get(response, :flags)
+
+    ControlPlaneLog.info(
+      "discord.outbound.response",
+      %{
+        "message_id_present" => present?(Map.get(response, "id") || Map.get(response, :id)),
+        "response_embed_count" => length(embeds),
+        "response_embed_field_count" => Enum.reduce(embeds, 0, &(&2 + embed_field_count(&1))),
+        "response_flags" => flags,
+        "response_suppress_embeds" => suppress_embeds?(flags)
+      },
+      context: %{"channel" => state.instance_id, "chat_id" => channel_id}
+    )
+  rescue
+    _e -> :ok
+  end
+
+  defp observe_discord_message_response(_channel_id, _response, _state), do: :ok
+
+  defp response_embeds(response) do
+    case Map.get(response, "embeds") || Map.get(response, :embeds) do
+      embeds when is_list(embeds) -> embeds
+      _ -> []
+    end
+  end
+
+  defp suppress_embeds?(flags) when is_integer(flags), do: Bitwise.band(flags, 4) == 4
+  defp suppress_embeds?(_flags), do: false
+
+  defp present?(value), do: is_binary(value) and value != ""
+
   defp normalize_outbound_text(content) when is_binary(content) do
     content
     |> IMText.split_messages()
@@ -817,6 +952,22 @@ defmodule Nex.Agent.Channel.Discord do
   end
 
   defp normalize_outbound_text(_content), do: []
+
+  defp normalize_table_mode(mode) when is_atom(mode) and mode in @table_modes, do: mode
+
+  defp normalize_table_mode(mode) when is_binary(mode) do
+    mode
+    |> String.trim()
+    |> String.downcase()
+    |> case do
+      "raw" -> :raw
+      "ascii" -> :ascii
+      "embed" -> :embed
+      _ -> :ascii
+    end
+  end
+
+  defp normalize_table_mode(_mode), do: :ascii
 
   defp request_headers(_metadata, state) do
     [{"authorization", discord_authorization(state.token)}]
@@ -830,11 +981,11 @@ defmodule Nex.Agent.Channel.Discord do
     Map.get(metadata, "application_id") || Map.get(metadata, :application_id)
   end
 
-  defp edit_interaction_response(content, application_id, token, state)
+  defp edit_interaction_response(body, application_id, token, state)
        when is_binary(application_id) and application_id != "" do
     state.http_patch_fun.(
       "#{@discord_api}/webhooks/#{application_id}/#{token}/messages/@original",
-      %{"content" => content},
+      body,
       request_headers(%{}, state)
     )
     |> case do
@@ -845,15 +996,6 @@ defmodule Nex.Agent.Channel.Discord do
 
   defp edit_interaction_response(_content, _application_id, _token, _state),
     do: {:error, :missing_application_id}
-
-  defp chunk_message(text, max_len) do
-    if String.length(text) <= max_len do
-      [text]
-    else
-      {chunk, rest} = String.split_at(text, max_len)
-      [chunk | chunk_message(rest, max_len)]
-    end
-  end
 
   # Reaction & typing helpers
 

@@ -9,12 +9,29 @@ defmodule Nex.Agent.RuntimeTest do
       Path.join(System.tmp_dir!(), "nex-agent-runtime-#{System.unique_integer([:positive])}")
 
     File.mkdir_p!(Path.join(workspace, "memory"))
+    File.mkdir_p!(Path.join(workspace, "hooks"))
     File.mkdir_p!(Path.join(workspace, "skills/always-guide"))
     File.write!(Path.join(workspace, "AGENTS.md"), "# AGENTS\nRuntime AGENTS layer.\n")
+    File.write!(Path.join(workspace, "IDENTITY.md"), "# Identity\nRuntime identity layer.\n")
     File.write!(Path.join(workspace, "SOUL.md"), "# SOUL\nRuntime SOUL layer.\n")
     File.write!(Path.join(workspace, "USER.md"), "# USER\nRuntime USER layer.\n")
     File.write!(Path.join(workspace, "TOOLS.md"), "# TOOLS\nRuntime TOOLS layer.\n")
     File.write!(Path.join(workspace, "memory/MEMORY.md"), "# Memory\nRuntime memory.\n")
+
+    File.write!(
+      Path.join(workspace, "hooks/hooks.json"),
+      Jason.encode!(%{
+        "version" => 1,
+        "hooks" => [
+          %{
+            "id" => "runtime-test",
+            "event" => "prompt.build.before",
+            "pointcut" => %{"session" => "discord:test"},
+            "advice" => %{"kind" => "text", "content" => "Runtime hook context."}
+          }
+        ]
+      })
+    )
 
     File.write!(
       Path.join(workspace, "skills/always-guide/SKILL.md"),
@@ -52,6 +69,7 @@ defmodule Nex.Agent.RuntimeTest do
     assert snapshot.workspace == workspace
     assert %Config{} = snapshot.config
     assert snapshot.prompt.system_prompt =~ "Runtime AGENTS layer."
+    assert snapshot.prompt.system_prompt =~ "Runtime identity layer."
     assert is_list(snapshot.prompt.diagnostics)
     assert is_binary(snapshot.prompt.hash)
     assert snapshot.commands.definitions != []
@@ -67,6 +85,9 @@ defmodule Nex.Agent.RuntimeTest do
     assert is_binary(snapshot.subagents.hash)
     assert snapshot.skills.always_instructions =~ "Runtime always skill instruction."
     assert is_binary(snapshot.skills.hash)
+    assert Enum.any?(snapshot.hooks.entries, &(Map.get(&1, "id") == "runtime-test"))
+    assert snapshot.hooks.diagnostics == []
+    assert is_binary(snapshot.hooks.hash)
   end
 
   test "snapshot channels are keyed by channel instance id", %{workspace: workspace} do
@@ -77,7 +98,11 @@ defmodule Nex.Agent.RuntimeTest do
 
     assert snapshot.channels == %{
              "feishu_kai" => %{"type" => "feishu", "streaming" => true},
-             "discord_kai" => %{"type" => "discord", "streaming" => false}
+             "discord_kai" => %{
+               "type" => "discord",
+               "streaming" => false,
+               "show_table_as" => "ascii"
+             }
            }
   end
 

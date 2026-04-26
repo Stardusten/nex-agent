@@ -104,8 +104,37 @@ defmodule Nex.Agent.ConfigTest do
 
     assert Config.channels_runtime(config) == %{
              "feishu_kai" => %{"type" => "feishu", "streaming" => true},
-             "discord_kai" => %{"type" => "discord", "streaming" => false}
+             "discord_kai" => %{
+               "type" => "discord",
+               "streaming" => false,
+               "show_table_as" => "ascii"
+             }
            }
+  end
+
+  test "discord table render mode is normalized" do
+    config =
+      Config.from_map(%{
+        full_config()
+        | "channel" => %{
+            "discord_kai" => %{
+              "type" => "discord",
+              "enabled" => true,
+              "token" => "discord-token",
+              "show_table_as" => "EMBED"
+            },
+            "discord_bad" => %{
+              "type" => "discord",
+              "enabled" => true,
+              "token" => "discord-token",
+              "show_table_as" => "surprise"
+            }
+          }
+      })
+
+    assert Config.channel_instance(config, "discord_kai")["show_table_as"] == "embed"
+    assert Config.channel_instance(config, "discord_bad")["show_table_as"] == "ascii"
+    assert Config.channel_runtime(config, "discord_kai")["show_table_as"] == "embed"
   end
 
   test "old top-level provider and model strings are invalid" do

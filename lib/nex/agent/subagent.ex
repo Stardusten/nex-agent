@@ -317,7 +317,16 @@ defmodule Nex.Agent.Subagent do
       |> maybe_put_opt(:req_llm_stream_text_fun, Keyword.get(opts, :req_llm_stream_text_fun))
       |> maybe_put_opt(:llm_call_fun, Keyword.get(opts, :llm_call_fun))
 
-    prompt = build_profile_prompt(profile, task_description, opts, workspace, session_key)
+    prompt =
+      build_profile_prompt(
+        profile,
+        task_id,
+        task_description,
+        label,
+        opts,
+        workspace,
+        session_key
+      )
 
     try do
       case Nex.Agent.Runner.run(session, prompt, runner_opts) do
@@ -410,7 +419,19 @@ defmodule Nex.Agent.Subagent do
        ) do
     if Process.whereis(Bus) != nil and profile.return_mode == :inbound do
       status_emoji = if status == :ok, do: "\u2705", else: "\u274c"
-      content = "#{status_emoji} Subagent [#{profile.name}:#{label}] finished:\n#{result}"
+      status_label = if status == :ok, do: "finished", else: "failed"
+
+      content =
+        [
+          "#{status_emoji} Subagent task #{status_label}",
+          "Task ID: #{task_id}",
+          "Profile: #{profile.name}",
+          "Label: #{label}",
+          "Child session: subagent:#{task_id}",
+          "Lifecycle: task-scoped child run; it will not remain in `run.owner.current`, which only lists active owner runs.",
+          "Result:\n#{result}"
+        ]
+        |> Enum.join("\n")
 
       Bus.publish(:inbound, %Envelope{
         channel: channel || "system",
@@ -502,12 +523,21 @@ defmodule Nex.Agent.Subagent do
   defp model_runtime_value(nil, _key), do: nil
   defp model_runtime_value(runtime, key) when is_map(runtime), do: Map.get(runtime, key)
 
-  defp build_profile_prompt(%Profile{} = profile, task_description, opts, workspace, parent_key) do
+  defp build_profile_prompt(
+         %Profile{} = profile,
+         task_id,
+         task_description,
+         label,
+         opts,
+         workspace,
+         parent_key
+       ) do
     explicit_context = Keyword.get(opts, :context)
     parent_context = parent_context(profile, workspace, parent_key)
 
     [
       String.trim(profile.prompt || default_profile_prompt()),
+      subagent_identity_block(profile, task_id, label),
       context_block("Provided context", explicit_context),
       context_block("Recent parent session context", parent_context),
       "Task:\n#{task_description}"
@@ -518,8 +548,21 @@ defmodule Nex.Agent.Subagent do
 
   defp default_profile_prompt do
     """
-    You are a background subagent. Complete the assigned task independently and return a concise result.
+    You are a task-scoped background subagent child run. Complete the assigned task independently and return a concise final result.
     """
+  end
+
+  defp subagent_identity_block(%Profile{} = profile, task_id, label) do
+    """
+    Subagent identity:
+    Task ID: #{task_id}
+    Profile: #{profile.name}
+    Label: #{label}
+    Child session: subagent:#{task_id}
+    Lifecycle: task-scoped background child run. Finish the assigned task and return the final result; do not describe yourself as a persistent owner run.
+    Observation note: `run.owner.current` tracks active owner runs only, not completed subagent tasks.
+    """
+    |> String.trim()
   end
 
   defp context_block(_title, value) when value in [nil, ""], do: nil

@@ -66,6 +66,20 @@ defmodule Nex.Agent.Channel.DiscordTest do
     assert url2 =~ "/channels/123/messages"
   end
 
+  test "outbound threshold split keeps fenced code block intact", %{pid: pid} do
+    prefix = String.duplicate("x", 1990)
+    code_block = "```text\nhello\n```"
+
+    send(
+      pid,
+      {:bus_message, {:channel_outbound, @instance_id},
+       %{chat_id: "123", content: prefix <> "\n\n" <> code_block, metadata: %{}}}
+    )
+
+    assert_receive {:http_post, _url1, %{"content" => ^prefix}, _headers1}
+    assert_receive {:http_post, _url2, %{"content" => ^code_block}, _headers2}
+  end
+
   test "stream converter treats inline newmsg as boundary", %{pid: _pid} do
     assert {:ok, converter} = StreamConverter.start(@instance_id, "123", %{})
     assert_receive {:http_post, _url, %{"content" => "🤔 Thinking..."}, _headers}
@@ -91,6 +105,24 @@ defmodule Nex.Agent.Channel.DiscordTest do
     assert converter.completed
     assert_receive {:http_patch, _url, %{"content" => "Use"}, _headers}
     assert_receive {:http_post, _url, %{"content" => "token"}, _headers}
+  end
+
+  test "stream converter threshold split rotates before fenced code block", %{pid: _pid} do
+    prefix = String.duplicate("x", 1990)
+    code_block = "```text\nhello\n```"
+
+    assert {:ok, converter} = StreamConverter.start(@instance_id, "123", %{})
+    assert_receive {:http_post, _url, %{"content" => "🤔 Thinking..."}, _headers}
+
+    assert {:ok, converter} = StreamConverter.push_text(converter, prefix)
+    assert_receive {:http_patch, _url, %{"content" => ^prefix}, _headers}
+
+    assert {:ok, converter} = StreamConverter.push_text(converter, "\n\n" <> code_block)
+    assert {:ok, converter} = StreamConverter.finish(converter)
+
+    assert converter.completed
+    assert_receive {:http_patch, _url, %{"content" => ^prefix}, _headers}
+    assert_receive {:http_post, _url, %{"content" => ^code_block}, _headers}
   end
 
   test "stream converter shows temporary working status and clears it on new text", %{pid: _pid} do
@@ -140,7 +172,7 @@ defmodule Nex.Agent.Channel.DiscordTest do
     assert {"authorization", "Bot discord-token"} in headers
   end
 
-  test "outbound tables are passed through as-is for Discord (tables: false)", %{pid: pid} do
+  test "outbound tables are rendered as ascii by default", %{pid: pid} do
     table = """
     | name | score |
     | --- | --- |
@@ -153,10 +185,52 @@ defmodule Nex.Agent.Channel.DiscordTest do
        %{chat_id: "123", content: table, metadata: %{}}}
     )
 
-    assert_receive {:http_post, _url, %{"content" => content}, _headers}
-    # With tables: false, table lines are treated as paragraphs, no code block wrapping
-    assert content =~ "| name | score |"
-    refute content =~ "```text"
+    assert_receive {:http_post, _url, %{"content" => content, "embeds" => []}, _headers}
+    assert content =~ "+-------+-------+"
+    assert content =~ "| name  | score |"
+    assert content =~ "| alice | 10    |"
+  end
+
+  test "outbound tables can be rendered as Discord embed fields", %{pid: pid} do
+    :sys.replace_state(pid, fn state -> %{state | show_table_as: :embed} end)
+
+    table = """
+    | name | score |
+    | --- | --- |
+    | alice | 10 |
+    """
+
+    send(
+      pid,
+      {:bus_message, {:channel_outbound, @instance_id},
+       %{chat_id: "123", content: table, metadata: %{}}}
+    )
+
+    assert_receive {:http_post, _url,
+                    %{"content" => "Table: name / score", "embeds" => [%{"fields" => fields}]},
+                    _headers}
+
+    assert %{"name" => "name", "value" => "alice", "inline" => true} in fields
+    assert %{"name" => "score", "value" => "10", "inline" => true} in fields
+  end
+
+  test "outbound tables can be rendered raw", %{pid: pid} do
+    :sys.replace_state(pid, fn state -> %{state | show_table_as: :raw} end)
+
+    table = """
+    | name | score |
+    | --- | --- |
+    | alice | 10 |
+    """
+
+    send(
+      pid,
+      {:bus_message, {:channel_outbound, @instance_id},
+       %{chat_id: "123", content: table, metadata: %{}}}
+    )
+
+    assert_receive {:http_post, _url, %{"content" => content, "embeds" => []}, _headers}
+    assert content == "| name | score |\n| --- | --- |\n| alice | 10 |"
   end
 
   test "mentioned inbound message auto-creates thread and publishes to inbound bus", %{pid: pid} do
@@ -382,7 +456,7 @@ defmodule Nex.Agent.Channel.DiscordTest do
        }}
     )
 
-    assert_receive {:http_patch, url, %{"content" => "Status: idle"}, headers}
+    assert_receive {:http_patch, url, %{"content" => "Status: idle", "embeds" => []}, headers}
     assert url =~ "/webhooks/app-1/interaction-token/messages/@original"
     assert {"authorization", "Bot discord-token"} in headers
   end

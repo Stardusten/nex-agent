@@ -301,6 +301,88 @@ defmodule Nex.Agent.RunnerStreamTest do
              collect_stream_events([])
   end
 
+  test "runner formats find notices with search icon and markdown-safe glob" do
+    parent = self()
+
+    workspace =
+      Path.join(
+        "/tmp",
+        "nex-agent-runner-stream-find-tool-notice-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(Path.join(workspace, "lib"))
+    File.mkdir_p!(Path.join(workspace, "memory"))
+    File.write!(Path.join(workspace, "AGENTS.md"), "# AGENTS\n")
+    File.write!(Path.join(workspace, "SOUL.md"), "# SOUL\n")
+    File.write!(Path.join(workspace, "USER.md"), "# USER\n")
+    File.write!(Path.join(workspace, "TOOLS.md"), "# TOOLS\n")
+    File.write!(Path.join(workspace, "memory/MEMORY.md"), "# Memory\n")
+    File.write!(Path.join(workspace, "lib/sample.ex"), "def needle, do: :ok\n")
+
+    on_exit(fn -> File.rm_rf!(workspace) end)
+
+    stream_sink = fn event ->
+      send(parent, {:stream_event, event})
+      :ok
+    end
+
+    turn_key = {:find_tool_notice_turn, self()}
+    Process.put(turn_key, 0)
+
+    llm_stream_client = fn _messages, _opts, callback ->
+      turn = Process.get(turn_key, 0)
+      Process.put(turn_key, turn + 1)
+
+      case turn do
+        0 ->
+          callback.(
+            {:tool_calls,
+             [
+               %{
+                 "id" => "call_find_1",
+                 "function" => %{
+                   "name" => "find",
+                   "arguments" => %{
+                     "query" => "needle",
+                     "path" => workspace,
+                     "glob" => "*.ex"
+                   }
+                 }
+               }
+             ]}
+          )
+
+          callback.({:done, %{finish_reason: nil, usage: nil, model: nil}})
+          :ok
+
+        1 ->
+          callback.({:delta, "done"})
+          callback.({:done, %{finish_reason: nil, usage: nil, model: nil}})
+          :ok
+      end
+    end
+
+    assert {:ok, %Result{handled?: true, status: :ok, final_content: "done"}, _session} =
+             Runner.run(Session.new("stream:find-tool-call"), "hi",
+               workspace: workspace,
+               provider: :anthropic,
+               model: "claude-sonnet-4-20250514",
+               skip_consolidation: true,
+               skip_skills: true,
+               stream_sink: stream_sink,
+               llm_stream_client: llm_stream_client
+             )
+
+    expected_notice = "🔍 Find - glob=\\*.ex, path=#{workspace}, query=needle\n"
+
+    assert [
+             {:text, ^expected_notice},
+             {:text, "\n"},
+             {:text, "done"},
+             :finish
+           ] = collect_stream_events([])
+  end
+
   test "runner separates streamed text from following tool call notices with a blank line" do
     parent = self()
 

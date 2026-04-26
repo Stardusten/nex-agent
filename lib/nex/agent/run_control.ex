@@ -463,6 +463,7 @@ defmodule Nex.Agent.RunControl do
   defp tail_text(text) do
     text
     |> IO.iodata_to_binary()
+    |> sanitize_text()
     |> truncate_tail()
   rescue
     _ -> ""
@@ -472,8 +473,34 @@ defmodule Nex.Agent.RunControl do
     truncate_tail(existing <> tail_text(chunk))
   end
 
+  defp sanitize_text(text) when is_binary(text) do
+    if String.valid?(text) do
+      text
+    else
+      preview =
+        text
+        |> binary_part(0, min(byte_size(text), 256))
+        |> Base.encode64()
+
+      "Binary output (#{byte_size(text)} bytes, base64 preview): #{preview}"
+    end
+  end
+
   defp truncate_tail(text) when byte_size(text) <= @tail_limit, do: text
-  defp truncate_tail(text), do: binary_part(text, byte_size(text) - @tail_limit, @tail_limit)
+
+  defp truncate_tail(text) do
+    text
+    |> binary_part(byte_size(text) - @tail_limit, @tail_limit)
+    |> trim_leading_invalid_utf8()
+  end
+
+  defp trim_leading_invalid_utf8(text) do
+    cond do
+      text == "" -> ""
+      String.valid?(text) -> text
+      true -> text |> binary_part(1, byte_size(text) - 1) |> trim_leading_invalid_utf8()
+    end
+  end
 
   defp refresh_owner_gauge(state, workspace) do
     owners =

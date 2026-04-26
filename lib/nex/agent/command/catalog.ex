@@ -57,6 +57,15 @@ defmodule Nex.Agent.Command.Catalog do
       channels: ["feishu", "discord"]
     },
     %{
+      name: "model",
+      description: "show or switch the current chat session model",
+      usage: "/model [name|number|reset]",
+      bypass_busy?: true,
+      native_enabled?: true,
+      handler: :model,
+      channels: ["feishu", "discord"]
+    },
+    %{
       name: "queue",
       description: "queue a message for the next owner turn",
       usage: "/queue <message>",

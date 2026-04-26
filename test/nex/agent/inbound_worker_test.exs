@@ -160,6 +160,10 @@ defmodule Nex.Agent.InboundWorkerTest do
     assert payload.content =~ "/stop - stop the current task and clear queued messages"
     assert payload.content =~ "/commands - list supported slash commands for this chat"
     assert payload.content =~ "/status - show current owner run status immediately"
+
+    assert payload.content =~
+             "/model [name|number|reset] - show or switch the current chat session model"
+
     assert payload.content =~ "/queue <message> - queue a message for the next owner turn"
 
     assert payload.content =~
@@ -201,6 +205,181 @@ defmodule Nex.Agent.InboundWorkerTest do
     })
 
     assert_receive {:prompt_received, "/code keep this literal"}, 1_000
+  end
+
+  test "/model lists numeric choices without calling the llm" do
+    parent = self()
+
+    worker_name =
+      String.to_atom("inbound_worker_model_list_#{System.unique_integer([:positive])}")
+
+    prompt_fun = fn _agent, _prompt, _opts ->
+      send(parent, :prompt_called)
+      raise "model command should not call llm"
+    end
+
+    start_supervised!(
+      {InboundWorker,
+       name: worker_name, config: model_command_config(), agent_prompt_fun: prompt_fun}
+    )
+
+    send(Process.whereis(worker_name), {
+      :bus_message,
+      :inbound,
+      %Envelope{
+        channel: @feishu_instance,
+        chat_id: "chat-model-list",
+        sender_id: "tester",
+        text: "/model",
+        message_type: :text,
+        raw: %{},
+        metadata: %{},
+        media_refs: [],
+        attachments: []
+      }
+    })
+
+    assert_receive {:bus_message, @feishu_topic, payload}, 1_000
+    assert payload.content =~ "**Model**"
+    assert payload.content =~ "Current: **[1] gpt-5.4** · default"
+    assert payload.content =~ "> **[1] gpt-5.4 · openai-codex / gpt-5.4**"
+    assert payload.content =~ "[2] hy3-preview · hy3-tencent / hy3-preview"
+    assert payload.content =~ "Use: `/model 1`, `/model gpt-5.4`, or `/model reset`"
+    refute_received :prompt_called
+  end
+
+  test "/model number overrides the next session turn and reset returns to default", %{
+    workspace: workspace
+  } do
+    parent = self()
+
+    worker_name =
+      String.to_atom("inbound_worker_model_override_#{System.unique_integer([:positive])}")
+
+    start_fun = fn opts ->
+      send(parent, {:agent_start_opts, opts})
+
+      session_key = "#{Keyword.fetch!(opts, :channel)}:#{Keyword.fetch!(opts, :chat_id)}"
+
+      {:ok,
+       %Nex.Agent{
+         session_key: session_key,
+         session: Session.new(session_key),
+         provider: Keyword.fetch!(opts, :provider),
+         model: Keyword.fetch!(opts, :model),
+         api_key: Keyword.get(opts, :api_key),
+         base_url: Keyword.get(opts, :base_url),
+         tools: Keyword.get(opts, :tools, %{}),
+         workspace: Keyword.fetch!(opts, :workspace),
+         cwd: Keyword.fetch!(opts, :cwd),
+         max_iterations: Keyword.fetch!(opts, :max_iterations),
+         runtime_version: Keyword.get(opts, :runtime_version)
+       }}
+    end
+
+    prompt_fun = fn agent, prompt, _opts ->
+      send(parent, {:prompt_model, prompt, agent.model})
+      {:ok, "done", agent}
+    end
+
+    start_supervised!(
+      {InboundWorker,
+       name: worker_name,
+       config: model_command_config(),
+       agent_start_fun: start_fun,
+       agent_prompt_fun: prompt_fun}
+    )
+
+    worker = Process.whereis(worker_name)
+
+    send(worker, {
+      :bus_message,
+      :inbound,
+      %Envelope{
+        channel: @feishu_instance,
+        chat_id: "chat-model-override",
+        sender_id: "tester",
+        text: "/model 2",
+        message_type: :text,
+        raw: %{},
+        metadata: %{"workspace" => workspace},
+        media_refs: [],
+        attachments: []
+      }
+    })
+
+    assert_receive {:bus_message, @feishu_topic, switch_payload}, 1_000
+    assert switch_payload.content =~ "Model switched to **[2] hy3-preview**"
+
+    assert switch_payload.content =~
+             "Your next message in this chat will use hy3-preview. No `/new` needed."
+
+    assert switch_payload.content =~
+             "Any task already running will finish with the model it started with."
+
+    send(worker, {
+      :bus_message,
+      :inbound,
+      %Envelope{
+        channel: @feishu_instance,
+        chat_id: "chat-model-override",
+        sender_id: "tester",
+        text: "hello",
+        message_type: :text,
+        raw: %{},
+        metadata: %{"workspace" => workspace},
+        media_refs: [],
+        attachments: []
+      }
+    })
+
+    assert_receive {:agent_start_opts, start_opts}, 1_000
+    assert Keyword.fetch!(start_opts, :model) == "hy3-preview"
+    assert_receive {:prompt_model, "hello", "hy3-preview"}, 1_000
+    assert_receive {:bus_message, @feishu_topic, %{content: "done"}}, 1_000
+
+    send(worker, {
+      :bus_message,
+      :inbound,
+      %Envelope{
+        channel: @feishu_instance,
+        chat_id: "chat-model-override",
+        sender_id: "tester",
+        text: "/model reset",
+        message_type: :text,
+        raw: %{},
+        metadata: %{"workspace" => workspace},
+        media_refs: [],
+        attachments: []
+      }
+    })
+
+    assert_receive {:bus_message, @feishu_topic, reset_payload}, 1_000
+    assert reset_payload.content =~ "Model override cleared."
+    assert reset_payload.content =~ "Current model: **[1] gpt-5.4** · default"
+
+    assert reset_payload.content =~
+             "Your next message in this chat will use the default model. No `/new` needed."
+
+    send(worker, {
+      :bus_message,
+      :inbound,
+      %Envelope{
+        channel: @feishu_instance,
+        chat_id: "chat-model-override",
+        sender_id: "tester",
+        text: "again",
+        message_type: :text,
+        raw: %{},
+        metadata: %{"workspace" => workspace},
+        media_refs: [],
+        attachments: []
+      }
+    })
+
+    assert_receive {:agent_start_opts, reset_start_opts}, 1_000
+    assert Keyword.fetch!(reset_start_opts, :model) == "gpt-5.4"
+    assert_receive {:prompt_model, "again", "gpt-5.4"}, 1_000
   end
 
   test "built-in slash new command bypasses llm execution", %{workspace: workspace} do
@@ -718,7 +897,13 @@ defmodule Nex.Agent.InboundWorkerTest do
     })
 
     assert_receive {:bus_message, @feishu_topic, idle_payload}, 1_000
-    assert idle_payload.content =~ "Status: idle"
+    assert idle_payload.content =~ "**Status**"
+    assert idle_payload.content =~ "Idle · model **[1] test-model** · context ~"
+    assert idle_payload.content =~ "**Channels**"
+    assert idle_payload.content =~ "#{@feishu_instance} disconnected (feishu)"
+    assert idle_payload.content =~ "#{@discord_instance} disconnected (discord)"
+    assert idle_payload.content =~ "**Models**"
+    assert idle_payload.content =~ "> **[1] test-model**"
     assert idle_payload.content =~ "Evidence: recent warnings/errors=0"
     assert eventually_observed?(workspace, "inbound.status.requested")
 
@@ -1768,6 +1953,50 @@ defmodule Nex.Agent.InboundWorkerTest do
       @feishu_instance => %{"type" => "feishu", "enabled" => true, "streaming" => true},
       @discord_instance => %{"type" => "discord", "enabled" => true, "streaming" => true}
     })
+  end
+
+  defp model_command_config do
+    %Config{
+      default_worker_config()
+      | provider: %{
+          "providers" => %{
+            "openai-codex" => %{
+              "type" => "openai-codex",
+              "base_url" => "https://chatgpt.com/backend-api/codex"
+            },
+            "hy3-tencent" => %{
+              "type" => "openai-compatible",
+              "base_url" => "https://hy3.example.test/v1"
+            },
+            "openrouter" => %{
+              "type" => "openrouter",
+              "base_url" => "https://openrouter.ai/api/v1"
+            }
+          }
+        },
+        model: %{
+          "default_model" => "gpt-5.4",
+          "cheap_model" => "hy3-preview",
+          "advisor_model" => "kimi-k2",
+          "models" => %{
+            "gpt-5.4" => %{
+              "provider" => "openai-codex",
+              "id" => "gpt-5.4",
+              "context_window" => 128_000
+            },
+            "hy3-preview" => %{
+              "provider" => "hy3-tencent",
+              "id" => "hy3-preview",
+              "context_window" => 64_000
+            },
+            "kimi-k2" => %{
+              "provider" => "openrouter",
+              "id" => "moonshotai/kimi-k2",
+              "context_window" => 128_000
+            }
+          }
+        }
+    }
   end
 
   defp stream_client_from_response(fun) when is_function(fun, 2) do

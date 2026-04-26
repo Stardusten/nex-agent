@@ -10,6 +10,7 @@ defmodule Nex.Agent.ContextBuilder do
 
   @bootstrap_layer_order [
     {"AGENTS.md", :agents},
+    {"IDENTITY.md", :identity},
     {"SOUL.md", :soul},
     {"USER.md", :user},
     {"TOOLS.md", :tools}
@@ -83,6 +84,7 @@ defmodule Nex.Agent.ContextBuilder do
 
     ## Workspace
     Your workspace is at: #{workspace_path}
+    - Identity: #{workspace_path}/IDENTITY.md (durable self-model)
     - Long-term memory: #{workspace_path}/memory/MEMORY.md (write important facts here)
     - Custom skills: #{workspace_path}/skills/{skill-name}/SKILL.md
     - Workspace tools: #{Path.join(workspace_path, "tools")}/{tool-name}/
@@ -107,6 +109,7 @@ defmodule Nex.Agent.ContextBuilder do
     - `self_update deploy` is the quick deploy verification path: syntax, compile, reload, and related tests.
     - Strict ship checks such as `format`, `credo`, or `dialyzer` are for explicit ship confidence, not mandatory on every quick deploy iteration.
     - In owner/subagent workflows, subagents may inspect and patch code, but only the owner run may use `self_update status`, `self_update deploy`, or `self_update rollback`.
+    - `spawn_task` creates a task-scoped child run with session key `subagent:<task_id>`. It may finish quickly; an empty `run.owner.current` gauge only means no active owner run, not that the subagent failed to run.
     - Use `observe` to answer questions like "did anything fail?", "is it stuck?", or "what did the background runtime see?".
     - `observe summary` includes the workspace `run.owner.current` gauge for active owner runs; `observe incident` and `observe query` can narrow by run_id or session_key.
     - `/status` is a deterministic quick view for the current owner run plus recent ControlPlane warning/error evidence.
@@ -150,7 +153,7 @@ defmodule Nex.Agent.ContextBuilder do
     """
     ## Runtime Identity
 
-    Identity is defined by workspace layers (SOUL.md, etc.).
+    Identity is defined by workspace layers (IDENTITY.md, SOUL.md, etc.).
     No default persona is imposed by the runtime.
     """
   end
@@ -161,6 +164,7 @@ defmodule Nex.Agent.ContextBuilder do
 
     Route long-term changes into the correct layer:
 
+    - IDENTITY: durable self-model, boundaries, and product/runtime relationship
     - SOUL: persona, values, and operating style (persona layer)
     - USER: user profile, preferences, timezone, communication style, collaboration expectations
     - MEMORY: environment facts, project conventions, workflow lessons, durable operational context
@@ -256,6 +260,7 @@ defmodule Nex.Agent.ContextBuilder do
   end
 
   defp layer_label(:agents), do: "AGENTS"
+  defp layer_label(:identity), do: "IDENTITY"
   defp layer_label(:soul), do: "SOUL"
   defp layer_label(:user), do: "USER"
   defp layer_label(:tools), do: "TOOLS"
@@ -264,11 +269,15 @@ defmodule Nex.Agent.ContextBuilder do
 
   defp layer_boundary(:agents),
     do:
-      "System-level operating guidance. Hard-coded capability/model claims are diagnosed, but active persona can be refined elsewhere."
+      "System-level operating guidance. Hard-coded capability/model claims are diagnosed; durable self-definition belongs in IDENTITY."
+
+  defp layer_boundary(:identity),
+    do:
+      "Durable agent self-model: what the agent is, is not, and how to discuss its runtime/product identity."
 
   defp layer_boundary(:soul),
     do:
-      "Persona, values, style, and optional identity framing. User profile details still belong in USER."
+      "Persona, values, voice, and operating style. Core self-definition belongs in IDENTITY; user profile details belong in USER."
 
   defp layer_boundary(:user),
     do:
@@ -338,6 +347,7 @@ defmodule Nex.Agent.ContextBuilder do
     channel_runtime = Config.channel_runtime(config, channel)
     channel_type = Map.get(channel_runtime, "type")
     streaming? = Map.get(channel_runtime, "streaming", false) == true
+    show_table_as = Map.get(channel_runtime, "show_table_as", "ascii")
 
     base = ["Channel Streaming: #{if streaming?, do: "streaming", else: "single"}"]
 
@@ -358,8 +368,9 @@ defmodule Nex.Agent.ContextBuilder do
           [
             "Channel IR: Discord markdown",
             "Discord supports: bold, italic, underline (__text__), strikethrough, headings (#/##/### only), lists, quotes (> and >>>), inline code, fenced code blocks with syntax highlighting, links, spoiler tags (||text||), and `<newmsg/>`.",
-            "Do not use `####` or deeper headings in Discord replies.",
-            "Discord does NOT support: tables, image embeds (![]()), horizontal rules (---), or HTML. Use fenced code blocks to present tabular data.",
+            "Discord format guide: use paragraphs, bullets, short headings, blockquotes, and bold for emphasis; reserve fenced code blocks for code, logs, config, or table-like data.",
+            "Do not use `####` or deeper headings, and do not wrap plain emphasis or short concept contrasts in fenced `text` blocks.",
+            "Discord does NOT support image embeds (![]()), horizontal rules (---), or HTML. Markdown tables render as #{show_table_as} (raw/ascii/embed channel setting).",
             newmsg_guidance
           ]
 
@@ -412,6 +423,7 @@ defmodule Nex.Agent.ContextBuilder do
 
           build_system_prompt(opts)
       end
+      |> append_context_hook_fragments(Keyword.get(opts, :context_hook_fragments, []))
 
     system_content =
       case runtime_system_messages do
@@ -429,6 +441,53 @@ defmodule Nex.Agent.ContextBuilder do
     ]
     |> List.flatten()
   end
+
+  defp append_context_hook_fragments(system_prompt, fragments) when is_list(fragments) do
+    rendered =
+      fragments
+      |> Enum.map(&render_context_hook_fragment/1)
+      |> Enum.reject(&(&1 == ""))
+
+    if rendered == [] do
+      system_prompt
+    else
+      system_prompt <> "\n\n---\n\n" <> Enum.join(rendered, "\n\n---\n\n")
+    end
+  end
+
+  defp append_context_hook_fragments(system_prompt, _fragments), do: system_prompt
+
+  defp render_context_hook_fragment(%{} = fragment) do
+    title = Map.get(fragment, "title") || Map.get(fragment, :title) || "Context Hook"
+    id = Map.get(fragment, "id") || Map.get(fragment, :id) || "-"
+    source = Map.get(fragment, "source") || Map.get(fragment, :source) || "-"
+    hash = Map.get(fragment, "hash") || Map.get(fragment, :hash) || "-"
+    chars = Map.get(fragment, "chars") || Map.get(fragment, :chars) || 0
+    raw_chars = Map.get(fragment, "raw_chars") || Map.get(fragment, :raw_chars) || chars
+    truncated? = Map.get(fragment, "truncated") || Map.get(fragment, :truncated) || false
+    content = Map.get(fragment, "content") || Map.get(fragment, :content) || ""
+
+    truncation_line =
+      if truncated? do
+        "\nTruncated: true (#{chars}/#{raw_chars} chars injected)"
+      else
+        ""
+      end
+
+    [
+      "## Context Hook: #{title}",
+      "",
+      "Hook ID: #{id}",
+      "Source: #{source}",
+      "Content SHA256: #{hash}",
+      "Chars: #{chars}#{truncation_line}",
+      "",
+      to_string(content)
+    ]
+    |> Enum.join("\n")
+  end
+
+  defp render_context_hook_fragment(_fragment), do: ""
 
   defp clean_history_entry(%{} = entry) do
     role = Map.get(entry, "role") || Map.get(entry, :role) || "user"

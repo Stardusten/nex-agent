@@ -2,7 +2,7 @@ defmodule Nex.Agent.RunControlTest do
   use ExUnit.Case, async: false
 
   alias Nex.Agent.ControlPlane.{Gauge, Query}
-  alias Nex.Agent.RunControl
+  alias Nex.Agent.{FollowUp, RunControl}
 
   setup do
     server = String.to_atom("run_control_test_#{System.unique_integer([:positive])}")
@@ -62,6 +62,37 @@ defmodule Nex.Agent.RunControlTest do
     assert snapshot.queued_count == 3
     assert snapshot.latest_tool_output_tail =~ "line2"
     assert snapshot.latest_assistant_partial =~ "still working"
+  end
+
+  test "owner snapshot tails remain valid UTF-8 after byte truncation", %{
+    server: server,
+    workspace: workspace,
+    session_key: session_key
+  } do
+    assert {:ok, run} = RunControl.start_owner(workspace, session_key, %{}, server: server)
+
+    text = String.duplicate("中", 1_400)
+    assert byte_size(text) > 4_000
+
+    assert :ok = RunControl.append_tool_output(run.id, "bash", text, server: server)
+    assert :ok = RunControl.append_assistant_partial(run.id, text, server: server)
+
+    assert {:ok, snapshot} = RunControl.owner_snapshot(workspace, session_key, server: server)
+
+    assert String.valid?(snapshot.latest_tool_output_tail)
+    assert String.valid?(snapshot.latest_assistant_partial)
+    assert byte_size(snapshot.latest_tool_output_tail) <= 4_000
+    assert byte_size(snapshot.latest_assistant_partial) <= 4_000
+
+    prompt =
+      FollowUp.prompt(snapshot, "现在进度怎样？",
+        mode: :busy,
+        workspace: workspace,
+        session_key: session_key
+      )
+
+    assert String.valid?(prompt)
+    assert Jason.encode!(%{"content" => prompt})
   end
 
   test "finish clears the busy snapshot and stale finish is rejected after replacement", %{

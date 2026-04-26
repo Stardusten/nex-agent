@@ -18,10 +18,13 @@ defmodule Nex.Agent.InboundWorker do
     Outbound,
     RunControl,
     Runtime,
+    Session,
+    SessionManager,
     Workspace
   }
 
   alias Nex.Agent.Command.Invocation
+  alias Nex.Agent.Command.StatusView
   alias Nex.Agent.Channel.Discord
   alias Nex.Agent.Channel.Discord.StreamConverter, as: DiscordStreamConverter
   alias Nex.Agent.Channel.Discord.StreamState, as: DiscordStreamState
@@ -133,7 +136,7 @@ defmodule Nex.Agent.InboundWorker do
     key = runtime_key(workspace, session_key)
     state = cancel_follow_up_task(state, key)
     state = cancel_active_task(state, key, session_key, workspace, :reset_session)
-    Nex.Agent.reset_session(channel, chat_id, workspace: workspace)
+    reset_current_session(session_key, workspace)
     {:reply, :ok, %{state | agents: Map.delete(state.agents, key)}}
   end
 
@@ -700,6 +703,7 @@ defmodule Nex.Agent.InboundWorker do
         "stop" -> handle_stop_command(state, key, session_key, workspace, envelope)
         "commands" -> handle_commands_command(state, envelope)
         "status" -> handle_status_command(state, session_key, workspace, envelope)
+        "model" -> handle_model_command(state, key, session_key, workspace, invocation, envelope)
         "queue" -> handle_queue_command(state, key, session_key, workspace, invocation, envelope)
         "btw" -> handle_btw_command(state, session_key, workspace, invocation, envelope)
         _ -> maybe_dispatch_prompt(state, key, session_key, workspace, invocation.raw, envelope)
@@ -710,6 +714,7 @@ defmodule Nex.Agent.InboundWorker do
   defp handle_new_command(state, key, session_key, workspace, %Envelope{} = envelope) do
     state = cancel_follow_up_task(state, key)
     state = cancel_active_task(state, key, session_key, workspace, :new_session)
+    reset_current_session(session_key, workspace)
     publish_outbound(envelope, "New session started.")
 
     %{
@@ -717,6 +722,16 @@ defmodule Nex.Agent.InboundWorker do
       | agents: Map.delete(state.agents, key),
         pending_queue: Map.delete(state.pending_queue, key)
     }
+  end
+
+  defp reset_current_session(session_key, workspace) do
+    session_key
+    |> SessionManager.get_or_create(workspace: workspace)
+    |> Session.clear()
+    |> Session.clear_model_override()
+    |> SessionManager.save_sync(workspace: workspace)
+
+    :ok
   end
 
   defp handle_stop_command(state, key, session_key, workspace, %Envelope{} = envelope) do
@@ -755,16 +770,71 @@ defmodule Nex.Agent.InboundWorker do
 
   defp handle_status_command(state, session_key, workspace, %Envelope{} = envelope) do
     observe_status_requested(envelope, workspace, session_key)
+    config = config_for_workspace(workspace, state.config)
+    session = SessionManager.get_or_create(session_key, workspace: workspace)
 
     case RunControl.owner_snapshot(workspace, session_key) do
       {:ok, run} ->
-        publish_outbound(envelope, FollowUp.render_status(run) <> "\n" <> status_evidence(run))
+        publish_outbound(
+          envelope,
+          StatusView.render_status(config, session, run, status_evidence(run),
+            workspace: workspace
+          )
+        )
 
       {:error, :idle} ->
-        publish_outbound(envelope, "Status: idle\n" <> status_evidence(workspace, session_key))
+        publish_outbound(
+          envelope,
+          StatusView.render_status(config, session, nil, status_evidence(workspace, session_key),
+            workspace: workspace
+          )
+        )
     end
 
     state
+  end
+
+  defp handle_model_command(
+         state,
+         key,
+         session_key,
+         workspace,
+         %Invocation{} = invocation,
+         %Envelope{} = envelope
+       ) do
+    config = config_for_workspace(workspace, state.config)
+    session = SessionManager.get_or_create(session_key, workspace: workspace)
+    arg = invocation.args |> Enum.join(" ") |> String.trim()
+
+    cond do
+      arg == "" ->
+        publish_outbound(envelope, StatusView.render_model(config, session))
+        state
+
+      arg in ["reset", "default"] ->
+        session =
+          session
+          |> Session.clear_model_override()
+          |> SessionManager.save_sync(workspace: workspace)
+
+        publish_outbound(envelope, StatusView.render_model_reset(config, session))
+        %{state | agents: Map.delete(state.agents, key)}
+
+      true ->
+        case StatusView.resolve_model_ref(config, session, arg) do
+          {:ok, entry} ->
+            session
+            |> Session.put_model_override(entry.key)
+            |> SessionManager.save_sync(workspace: workspace)
+
+            publish_outbound(envelope, StatusView.render_model_switched(entry))
+            %{state | agents: Map.delete(state.agents, key)}
+
+          {:error, :unknown_model, entries} ->
+            publish_outbound(envelope, StatusView.render_unknown_model(arg, entries))
+            state
+        end
+    end
   end
 
   defp handle_queue_command(
@@ -1284,8 +1354,9 @@ defmodule Nex.Agent.InboundWorker do
   defp agent_start_opts(session_key, workspace, fallback_config) do
     [channel, chat_id] = String.split(session_key, ":", parts: 2)
     snapshot = runtime_snapshot_for_workspace(workspace)
-    config = if snapshot, do: snapshot.config, else: fallback_config
-    model_runtime = Config.default_model_runtime(config)
+    config = config_for_workspace(workspace, fallback_config)
+    session = SessionManager.get_or_create(session_key, workspace: workspace)
+    model_runtime = StatusView.model_runtime_for_session(config, session)
     home = System.get_env("HOME", File.cwd!())
 
     [
@@ -1303,6 +1374,13 @@ defmodule Nex.Agent.InboundWorker do
       channel: channel,
       chat_id: chat_id
     ]
+  end
+
+  defp config_for_workspace(workspace, fallback_config) do
+    case runtime_snapshot_for_workspace(workspace) do
+      %Snapshot{config: %Config{} = config} -> config
+      _ -> fallback_config
+    end
   end
 
   defp runtime_snapshot_for_workspace(workspace) do

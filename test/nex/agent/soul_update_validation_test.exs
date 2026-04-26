@@ -22,11 +22,14 @@ defmodule Nex.Agent.SoulUpdateValidationTest do
     {:ok, workspace: workspace}
   end
 
-  test "soul_update accepts identity framing in soul", %{workspace: workspace} do
-    assert {:ok, "SOUL.md updated successfully."} =
+  test "soul_update rejects durable identity definitions in soul", %{workspace: workspace} do
+    expected_error =
+      "Invalid content (identity_definition_in_soul): SOUL.md contains durable identity definitions; core self-definition belongs to IDENTITY.md."
+
+    assert {:error, ^expected_error} =
              SoulUpdate.execute(%{"content" => "I am Claude, your coding assistant."}, %{})
 
-    assert File.read!(Path.join(workspace, "SOUL.md")) == "I am Claude, your coding assistant.\n"
+    assert File.read!(Path.join(workspace, "SOUL.md")) == "# Soul\nStay practical.\n"
   end
 
   test "soul_update still accepts valid persona updates", %{workspace: workspace} do
@@ -74,15 +77,19 @@ defmodule Nex.Agent.SoulUpdateValidationTest do
              "# Soul\nStay practical.\n"
   end
 
-  test "soul_update description and contract both allow identity framing" do
-    assert SoulUpdate.description() =~ "identity and persona guidance"
+  test "soul_update description and contract point identity to IDENTITY" do
+    assert SoulUpdate.description() =~ "persona guidance"
+    assert SoulUpdate.description() =~ "Durable self-definition belongs in IDENTITY.md"
 
     soul_layer = LayerContractHelper.matrix()["SOUL"]
 
     assert soul_layer.allowed ==
-             "Behavioral tone, values, style preferences, and identity framing."
+             "Behavioral tone, values, voice, and style preferences."
 
-    assert soul_layer.forbidden == ["User profile details that belong in USER."]
+    assert soul_layer.forbidden == [
+             "Durable self-definition that belongs in IDENTITY.",
+             "User profile details that belong in USER."
+           ]
 
     assert LayerContractHelper.write_policy() =~ "invalid writes are rejected"
   end

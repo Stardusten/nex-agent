@@ -8,6 +8,7 @@ defmodule Nex.Agent.Runner do
     Config,
     ContextBuilder,
     Evolution,
+    Hooks,
     RunControl,
     MemoryUpdater,
     Session,
@@ -110,16 +111,65 @@ defmodule Nex.Agent.Runner do
 
     trace_request_started(prompt, channel, chat_id, prepared_run, runtime_system_messages, opts)
 
-    messages =
-      ContextBuilder.build_messages(history, prompt, channel, chat_id, media,
-        system_prompt: runtime_system_prompt(runtime_snapshot),
-        skip_skills: Keyword.get(opts, :skip_skills, false),
-        workspace: workspace,
-        runtime_system_messages: runtime_system_messages,
-        cwd: Keyword.get(opts, :cwd),
-        config: runtime_config
-      )
+    case build_initial_messages(
+           session,
+           history,
+           prompt,
+           channel,
+           chat_id,
+           media,
+           runtime_snapshot,
+           runtime_system_messages,
+           workspace,
+           runtime_config,
+           opts
+         ) do
+      {:ok, messages} ->
+        do_run_with_messages(
+          session,
+          messages,
+          prompt,
+          initial_message_count,
+          length(history),
+          max_iterations,
+          prepared_run,
+          runtime_system_messages,
+          run_started_at,
+          workspace,
+          opts
+        )
 
+      {:error, reason} ->
+        emit_runner_lifecycle(
+          :error,
+          "runner.run.failed",
+          runner_run_attrs(opts, %{
+            "duration_ms" => duration_since(run_started_at),
+            "result_status" => "error",
+            "reason_type" => "context_hook_failed",
+            "error_summary" => error_summary(reason)
+          }),
+          opts
+        )
+
+        trace_request_completed("failed", reason, opts)
+        {:error, stream_result(:error, opts, nil, %{error: reason}), session}
+    end
+  end
+
+  defp do_run_with_messages(
+         session,
+         messages,
+         prompt,
+         initial_message_count,
+         history_message_count,
+         max_iterations,
+         prepared_run,
+         runtime_system_messages,
+         run_started_at,
+         workspace,
+         opts
+       ) do
     session =
       Session.add_message(session, "user", prompt, project: Keyword.get(opts, :project))
 
@@ -127,7 +177,7 @@ defmodule Nex.Agent.Runner do
       :info,
       "runner.llm.request.prepared",
       %{
-        "history_message_count" => length(history),
+        "history_message_count" => history_message_count,
         "message_count" => length(messages),
         "message_stats" => message_stats_log(messages),
         "runtime_system_message_count" => length(runtime_system_messages),
@@ -193,6 +243,45 @@ defmodule Nex.Agent.Runner do
 
         {:error, reason,
          finalize_evolution_turn(final_session, initial_message_count, prompt, workspace, opts)}
+    end
+  end
+
+  defp build_initial_messages(
+         session,
+         history,
+         prompt,
+         channel,
+         chat_id,
+         media,
+         runtime_snapshot,
+         runtime_system_messages,
+         workspace,
+         runtime_config,
+         opts
+       ) do
+    hook_ctx = %{
+      session_key: session.key,
+      channel: channel,
+      chat_id: chat_id,
+      workspace: workspace,
+      run_id: Keyword.get(opts, :run_id)
+    }
+
+    case Hooks.run(:prompt_build_before, runtime_hooks(runtime_snapshot), hook_ctx) do
+      {:ok, context_hook_fragments} ->
+        {:ok,
+         ContextBuilder.build_messages(history, prompt, channel, chat_id, media,
+           system_prompt: runtime_system_prompt(runtime_snapshot),
+           skip_skills: Keyword.get(opts, :skip_skills, false),
+           workspace: workspace,
+           runtime_system_messages: runtime_system_messages,
+           context_hook_fragments: context_hook_fragments,
+           cwd: Keyword.get(opts, :cwd),
+           config: runtime_config
+         )}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -920,13 +1009,20 @@ defmodule Nex.Agent.Runner do
   defp render_tool_call_notice_args(_tool_name, _args), do: ""
 
   defp render_tool_call_notice_value(value) when is_binary(value) do
-    value
-    |> String.replace("\n", " ")
-    |> String.trim()
-    |> String.slice(0, 80)
+    value =
+      value
+      |> String.replace("\n", " ")
+      |> String.trim()
+      |> String.slice(0, 80)
+
+    escape_markdown_notice_value(value)
   end
 
   defp render_tool_call_notice_value(value), do: inspect(value, printable_limit: 80, limit: 5)
+
+  defp escape_markdown_notice_value(value) do
+    Regex.replace(~r/[`*_\[\]()<>#|]/, value, fn marker -> "\\" <> marker end)
+  end
 
   defp tool_notice_label(tool_name) do
     tool_name
@@ -943,6 +1039,7 @@ defmodule Nex.Agent.Runner do
   defp tool_notice_emoji("memory_rebuild"), do: "🧠"
   defp tool_notice_emoji("memory_consolidate"), do: "🧠"
   defp tool_notice_emoji("read"), do: "📖"
+  defp tool_notice_emoji("find"), do: "🔍"
   defp tool_notice_emoji("write"), do: "✍️"
   defp tool_notice_emoji("edit"), do: "✍️"
   defp tool_notice_emoji("list_dir"), do: "📂"
@@ -1486,6 +1583,9 @@ defmodule Nex.Agent.Runner do
 
   defp runtime_system_prompt(%Snapshot{} = snapshot), do: snapshot.prompt.system_prompt
   defp runtime_system_prompt(_), do: nil
+
+  defp runtime_hooks(%Snapshot{} = snapshot), do: snapshot.hooks
+  defp runtime_hooks(_), do: nil
 
   defp default_model_runtime(%Snapshot{config: %Nex.Agent.Config{} = config}) do
     Nex.Agent.Config.default_model_runtime(config)

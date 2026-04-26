@@ -6,7 +6,7 @@ defmodule Nex.Agent.Runtime do
   use GenServer
   require Logger
 
-  alias Nex.Agent.{Config, ContextBuilder, Skills, Workspace}
+  alias Nex.Agent.{Config, ContextBuilder, Hooks, Skills, Workspace}
   alias Nex.Agent.Command.Catalog, as: CommandCatalog
   alias Nex.Agent.Runtime.Snapshot
   alias Nex.Agent.Subagent.Profiles, as: SubagentProfiles
@@ -17,6 +17,7 @@ defmodule Nex.Agent.Runtime do
     :config_loader,
     :prompt_builder,
     :tool_definitions_builder,
+    :hooks_builder,
     :skills_builder,
     subscribers: %{}
   ]
@@ -69,6 +70,7 @@ defmodule Nex.Agent.Runtime do
         Keyword.get(opts, :prompt_builder, &ContextBuilder.build_system_prompt_with_diagnostics/1),
       tool_definitions_builder:
         Keyword.get(opts, :tool_definitions_builder, &ToolRegistry.definitions/2),
+      hooks_builder: Keyword.get(opts, :hooks_builder, &Hooks.load/1),
       skills_builder: Keyword.get(opts, :skills_builder, &Skills.always_instructions/1)
     }
 
@@ -168,7 +170,9 @@ defmodule Nex.Agent.Runtime do
              tool_definition_opts(config, workspace, :cron, subagent_profiles)
            ),
          {:ok, always_instructions} <-
-           call_builder(skills_builder(opts, state), [Keyword.put(opts, :workspace, workspace)]) do
+           call_builder(skills_builder(opts, state), [Keyword.put(opts, :workspace, workspace)]),
+         {:ok, hooks_data} <-
+           call_builder(hooks_builder(opts, state), [Keyword.put(opts, :workspace, workspace)]) do
       prompt_data = %{
         system_prompt: prompt,
         diagnostics: diagnostics,
@@ -213,6 +217,7 @@ defmodule Nex.Agent.Runtime do
          tools: tools_data,
          subagents: subagents_data,
          skills: skills_data,
+         hooks: hooks_data,
          changed_paths: changed_paths(opts)
        }}
     end
@@ -282,6 +287,8 @@ defmodule Nex.Agent.Runtime do
 
   defp tool_definitions_builder(opts, state),
     do: Keyword.get(opts, :tool_definitions_builder, state.tool_definitions_builder)
+
+  defp hooks_builder(opts, state), do: Keyword.get(opts, :hooks_builder, state.hooks_builder)
 
   defp skills_builder(opts, state), do: Keyword.get(opts, :skills_builder, state.skills_builder)
 

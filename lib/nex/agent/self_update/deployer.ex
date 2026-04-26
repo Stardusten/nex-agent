@@ -593,11 +593,40 @@ defmodule Nex.Agent.SelfUpdate.Deployer do
   end
 
   defp trim_output(output) do
+    output = sanitize_output(output)
+
     if byte_size(output) > @max_test_output_bytes do
-      binary_part(output, 0, @max_test_output_bytes) <>
+      utf8_prefix(output, @max_test_output_bytes) <>
         "\n... output truncated to #{@max_test_output_bytes} bytes"
     else
       output
+    end
+  end
+
+  defp sanitize_output(output) when is_binary(output) do
+    if String.valid?(output) do
+      output
+    else
+      preview =
+        output
+        |> binary_part(0, min(byte_size(output), 256))
+        |> Base.encode64()
+
+      "Binary output (#{byte_size(output)} bytes, base64 preview): #{preview}"
+    end
+  end
+
+  defp utf8_prefix(text, max_bytes) do
+    text
+    |> binary_part(0, max_bytes)
+    |> trim_trailing_invalid_utf8()
+  end
+
+  defp trim_trailing_invalid_utf8(text) do
+    cond do
+      text == "" -> ""
+      String.valid?(text) -> text
+      true -> text |> binary_part(0, byte_size(text) - 1) |> trim_trailing_invalid_utf8()
     end
   end
 end

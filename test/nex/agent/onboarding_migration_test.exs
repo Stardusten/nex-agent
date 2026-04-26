@@ -140,7 +140,8 @@ defmodule Nex.Agent.OnboardingMigrationTest do
     refute soul_content =~ "I am"
     refute soul_content =~ "personal AI assistant"
 
-    assert soul_content =~ "Persona, values, and long-term operating principles"
+    assert soul_content =~ "Persona, values, voice, and long-term operating principles"
+    assert soul_content =~ "Durable self-definition belongs in IDENTITY.md"
     assert soul_content =~ "## Personality"
     assert soul_content =~ "## Values"
     assert soul_content =~ "## Communication Style"
@@ -150,18 +151,26 @@ defmodule Nex.Agent.OnboardingMigrationTest do
     :ok = Onboarding.ensure_initialized()
 
     agents_content = File.read!(Path.join(workspace, "AGENTS.md"))
+    identity_content = File.read!(Path.join(workspace, "IDENTITY.md"))
     soul_content = File.read!(Path.join(workspace, "SOUL.md"))
     user_content = File.read!(Path.join(workspace, "USER.md"))
     tools_content = File.read!(Path.join(workspace, "TOOLS.md"))
 
-    refute agents_content =~ "## Identity"
     refute agents_content =~ "You are **Nex Agent**"
+    refute agents_content =~ "## Identity\n\n- You are"
 
+    assert agents_content =~ "Identity: `workspace/IDENTITY.md`"
+    assert agents_content =~ "`AGENTS.md`, `IDENTITY.md`, `SOUL.md`, `USER.md`, `TOOLS.md`"
+    assert agents_content =~ "## Concept Discipline"
     assert agents_content =~ "Six-Layer Evolution"
     assert agents_content =~ "SOUL: values, personality"
     assert agents_content =~ "memory_consolidate"
     assert agents_content =~ "trigger memory refresh now"
     assert agents_content =~ "重建记忆"
+
+    assert identity_content =~ "long-lived NexAgent personal agent instance"
+    assert identity_content =~ "What I Am Not"
+    assert identity_content =~ "OpenClaw-like personal agent system"
 
     refute soul_content =~ "all capabilities are skills"
     refute soul_content =~ "capabilities"
@@ -238,6 +247,7 @@ defmodule Nex.Agent.OnboardingMigrationTest do
     :ok = Onboarding.ensure_initialized()
 
     assert File.exists?(Path.join(workspace, "AGENTS.md"))
+    assert File.exists?(Path.join(workspace, "IDENTITY.md"))
     assert File.exists?(Path.join(workspace, "SOUL.md"))
     assert File.exists?(Path.join(workspace, "USER.md"))
     assert File.exists?(Path.join(workspace, "TOOLS.md"))
@@ -245,9 +255,12 @@ defmodule Nex.Agent.OnboardingMigrationTest do
     assert File.exists?(Path.join(workspace, "memory/HISTORY.md"))
 
     agents = File.read!(Path.join(workspace, "AGENTS.md"))
+    identity = File.read!(Path.join(workspace, "IDENTITY.md"))
     soul = File.read!(Path.join(workspace, "SOUL.md"))
 
-    refute agents =~ "Identity"
+    assert agents =~ "Identity: `workspace/IDENTITY.md`"
+    assert agents =~ "## Concept Discipline"
+    assert identity =~ "long-lived NexAgent personal agent instance"
     refute soul =~ "I am Nex Agent"
   end
 

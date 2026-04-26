@@ -5,6 +5,8 @@ defmodule Nex.Agent.Session do
 
   alias Nex.Agent.Workspace
 
+  @model_override_key "model_override"
+
   defstruct [
     :key,
     :created_at,
@@ -207,6 +209,47 @@ defmodule Nex.Agent.Session do
   end
 
   @doc """
+  Return the configured model key override for this session, if any.
+  """
+  @spec model_override(t()) :: String.t() | nil
+  def model_override(%__MODULE__{metadata: metadata}) when is_map(metadata) do
+    case Map.get(metadata, @model_override_key) do
+      %{"model_key" => model_key} when is_binary(model_key) and model_key != "" -> model_key
+      model_key when is_binary(model_key) and model_key != "" -> model_key
+      _ -> nil
+    end
+  end
+
+  def model_override(_session), do: nil
+
+  @doc """
+  Set the session-scoped model key override.
+  """
+  @spec put_model_override(t(), String.t()) :: t()
+  def put_model_override(%__MODULE__{} = session, model_key)
+      when is_binary(model_key) and model_key != "" do
+    metadata =
+      session.metadata
+      |> ensure_metadata()
+      |> Map.put(@model_override_key, %{"model_key" => model_key})
+
+    %{session | metadata: metadata, updated_at: DateTime.utc_now()}
+  end
+
+  @doc """
+  Clear the session-scoped model key override.
+  """
+  @spec clear_model_override(t()) :: t()
+  def clear_model_override(%__MODULE__{} = session) do
+    metadata =
+      session.metadata
+      |> ensure_metadata()
+      |> Map.put(@model_override_key, %{})
+
+    %{session | metadata: metadata, updated_at: DateTime.utc_now()}
+  end
+
+  @doc """
   Save session to disk as JSONL.
   """
   @spec save(t(), keyword()) :: :ok | {:error, term()}
@@ -319,6 +362,9 @@ defmodule Nex.Agent.Session do
       _ -> DateTime.utc_now()
     end
   end
+
+  defp ensure_metadata(metadata) when is_map(metadata), do: metadata
+  defp ensure_metadata(_metadata), do: %{}
 
   defp sanitize_message_content(nil), do: ""
 

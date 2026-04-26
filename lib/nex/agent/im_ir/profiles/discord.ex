@@ -13,7 +13,7 @@ defmodule Nex.Agent.IMIR.Profiles.Discord do
         lists: true,
         quotes: true,
         code_blocks: true,
-        tables: false
+        tables: true
       }
     }
   end

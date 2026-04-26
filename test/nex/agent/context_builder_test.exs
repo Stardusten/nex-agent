@@ -12,6 +12,12 @@ defmodule Nex.Agent.ContextBuilderTest do
 
     File.mkdir_p!(Path.join(workspace, "memory"))
     File.write!(Path.join(workspace, "AGENTS.md"), "# AGENTS\n")
+
+    File.write!(
+      Path.join(workspace, "IDENTITY.md"),
+      "# Identity\nI am a NexAgent test instance.\n"
+    )
+
     File.write!(Path.join(workspace, "SOUL.md"), "# SOUL\n")
     File.write!(Path.join(workspace, "USER.md"), "# USER\n")
     File.write!(Path.join(workspace, "TOOLS.md"), "# TOOLS\n")
@@ -26,6 +32,7 @@ defmodule Nex.Agent.ContextBuilderTest do
 
     assert prompt =~ "## Runtime Evolution"
     assert prompt =~ "Route long-term changes into the correct layer"
+    assert prompt =~ "- IDENTITY: durable self-model"
 
     assert prompt =~
              "- USER: user profile, preferences, timezone, communication style, collaboration expectations"
@@ -38,6 +45,8 @@ defmodule Nex.Agent.ContextBuilderTest do
     assert prompt =~ "`self_update deploy` is the quick deploy verification path"
     assert prompt =~ "Strict ship checks such as `format`, `credo`, or `dialyzer`"
     assert prompt =~ "Use `observe` to answer questions like"
+    assert prompt =~ "`spawn_task` creates a task-scoped child run"
+    assert prompt =~ "an empty `run.owner.current` gauge only means no active owner run"
     assert prompt =~ "ControlPlane observations are the self-observation source of truth"
     assert prompt =~ "Budget only controls review/candidate signals"
     assert prompt =~ "single `evolution_candidate` lane"
@@ -97,7 +106,12 @@ defmodule Nex.Agent.ContextBuilderTest do
     assert context =~ "Channel Streaming: single"
     assert context =~ "Channel IR: Discord markdown"
     assert context =~ "headings (#/##/### only)"
-    assert context =~ "Do not use `####` or deeper headings in Discord replies."
+    assert context =~ "Discord format guide: use paragraphs, bullets, short headings"
+
+    assert context =~
+             "do not wrap plain emphasis or short concept contrasts in fenced `text` blocks"
+
+    assert context =~ "Markdown tables render as ascii"
   end
 
   test "runtime context falls back to plain text guidance for non-feishu channels", %{} do
@@ -132,10 +146,44 @@ defmodule Nex.Agent.ContextBuilderTest do
     refute List.last(messages)["content"] =~ "[Runtime Evolution Nudge]"
   end
 
+  test "context hook fragments are merged into system prompt before runtime nudges", %{
+    workspace: workspace
+  } do
+    messages =
+      ContextBuilder.build_messages([], "hello", "telegram", "1", nil,
+        workspace: workspace,
+        system_prompt: "Base prompt",
+        context_hook_fragments: [
+          %{
+            "id" => "kb-agents",
+            "title" => "Knowledge Base Instructions",
+            "source" => "/tmp/kb/AGENTS.md",
+            "hash" => "abc",
+            "chars" => 9,
+            "raw_chars" => 9,
+            "truncated" => false,
+            "content" => "KB rules."
+          }
+        ],
+        runtime_system_messages: ["[Runtime Evolution Nudge] Save durable knowledge if needed."]
+      )
+
+    system_content = messages |> List.first() |> Map.fetch!("content")
+
+    assert system_content =~ "Base prompt"
+    assert system_content =~ "## Context Hook: Knowledge Base Instructions"
+    assert system_content =~ "KB rules."
+    assert system_content =~ "[Runtime Evolution Nudge]"
+
+    assert String.split(system_content, "## Context Hook: Knowledge Base Instructions") |> hd() =~
+             "Base prompt"
+  end
+
   test "canonical contract matrix is explicit and unambiguous" do
     assert LayerContractHelper.layer_order() == [
-             "identity",
+             "runtime_identity",
              "AGENTS",
+             "IDENTITY",
              "SOUL",
              "USER",
              "TOOLS",
@@ -144,7 +192,13 @@ defmodule Nex.Agent.ContextBuilderTest do
 
     matrix = LayerContractHelper.matrix()
 
-    assert matrix["identity"].authority == "default runtime identity and execution baseline"
+    assert matrix["runtime_identity"].authority ==
+             "default runtime identity and execution baseline"
+
+    assert matrix["IDENTITY"].authority == "durable agent self-model"
+
+    assert matrix["IDENTITY"].allowed ==
+             "What the agent is, is not, and how to discuss its product/runtime identity."
 
     assert matrix["AGENTS"].forbidden == [
              "Hard-coded capability/model identity claims.",
@@ -152,9 +206,12 @@ defmodule Nex.Agent.ContextBuilderTest do
            ]
 
     assert matrix["SOUL"].allowed ==
-             "Behavioral tone, values, style preferences, and identity framing."
+             "Behavioral tone, values, voice, and style preferences."
 
-    assert matrix["SOUL"].forbidden == ["User profile details that belong in USER."]
+    assert matrix["SOUL"].forbidden == [
+             "Durable self-definition that belongs in IDENTITY.",
+             "User profile details that belong in USER."
+           ]
 
     assert matrix["USER"].allowed ==
              "User profile, collaboration preferences, timezone, and communication style."
@@ -172,8 +229,9 @@ defmodule Nex.Agent.ContextBuilderTest do
     assert LayerContractHelper.write_policy() =~ "invalid writes are rejected"
 
     matrix = LayerContractHelper.matrix()
-    assert matrix["identity"].allowed =~ "may refine or replace"
-    assert matrix["SOUL"].authority == "persona, values, style, and optional identity framing"
+    assert matrix["runtime_identity"].allowed =~ "workspace IDENTITY may refine or replace it"
+    assert matrix["IDENTITY"].allowed =~ "What the agent is"
+    assert matrix["SOUL"].authority == "persona, values, voice, and operating style"
 
     prompt = ContextBuilder.build_system_prompt(workspace: Path.join(System.tmp_dir!(), "noop"))
     assert prompt =~ "## Runtime Identity"
@@ -199,6 +257,12 @@ defmodule Nex.Agent.ContextBuilderTest do
     """
 
     File.write!(Path.join(workspace, "AGENTS.md"), agents_content)
+
+    File.write!(
+      Path.join(workspace, "IDENTITY.md"),
+      "# Identity\nI am a NexAgent runtime instance.\n"
+    )
+
     File.write!(Path.join(workspace, "SOUL.md"), soul_content)
     File.write!(Path.join(workspace, "USER.md"), user_content)
 
@@ -206,19 +270,23 @@ defmodule Nex.Agent.ContextBuilderTest do
       ContextBuilder.build_system_prompt_with_diagnostics(workspace: workspace)
 
     assert prompt =~ "## AGENTS.md"
+    assert prompt =~ "## IDENTITY.md"
     assert prompt =~ "## SOUL.md"
     assert prompt =~ "## USER.md"
+    assert prompt =~ "I am a NexAgent runtime instance"
     assert prompt =~ "You are ChatGPT"
     assert prompt =~ "GPT-4"
     assert prompt =~ "Act as Claude"
     assert prompt =~ "## Runtime Identity"
     assert prompt =~ "Identity is defined by workspace layers"
     assert String.split(prompt, "## Runtime Identity") |> length() == 2
-    assert prompt =~ "Interpretation: Persona, values, style, and optional identity framing"
+    assert prompt =~ "Interpretation: Durable agent self-model"
+    assert prompt =~ "Interpretation: Persona, values, voice, and operating style"
     assert prompt =~ "Interpretation: User profile and collaboration preferences only"
-    assert Enum.map(diagnostics, & &1.source_layer) == [:agents, :user]
+    assert Enum.map(diagnostics, & &1.source_layer) == [:agents, :soul, :user]
 
     assert File.read!(Path.join(workspace, "AGENTS.md")) == agents_content
+    assert File.read!(Path.join(workspace, "IDENTITY.md")) =~ "NexAgent runtime instance"
     assert File.read!(Path.join(workspace, "SOUL.md")) == soul_content
     assert File.read!(Path.join(workspace, "USER.md")) == user_content
   end
@@ -285,6 +353,14 @@ defmodule Nex.Agent.ContextBuilderTest do
                source: "AGENTS.md",
                message:
                  "AGENTS.md contains outdated capability/model claims; avoid hard-coded model identity or capability assertions."
+             },
+             %{
+               category: :identity_definition_in_soul,
+               source_layer: :soul,
+               severity: :warning,
+               source: "SOUL.md",
+               message:
+                 "SOUL.md contains durable identity definitions; core self-definition belongs to IDENTITY.md."
              },
              %{
                category: :identity_persona_instruction_in_user,

@@ -1,16 +1,24 @@
 defmodule Nex.Agent.LayerContractHelper do
   @moduledoc false
 
-  @layer_order ["identity", "AGENTS", "SOUL", "USER", "TOOLS", "MEMORY"]
+  @layer_order ["runtime_identity", "AGENTS", "IDENTITY", "SOUL", "USER", "TOOLS", "MEMORY"]
 
   @matrix %{
-    "identity" => %{
+    "runtime_identity" => %{
       authority: "default runtime identity and execution baseline",
       allowed:
-        "Provides the default runtime identity; workspace content may refine or replace it.",
+        "Provides the default runtime identity; workspace IDENTITY may refine or replace it.",
       forbidden: [
         "Stale capability/model claims presented as authoritative runtime facts.",
         "User profile or tool reference content that belongs in other layers."
+      ]
+    },
+    "IDENTITY" => %{
+      authority: "durable agent self-model",
+      allowed: "What the agent is, is not, and how to discuss its product/runtime identity.",
+      forbidden: [
+        "User profile details that belong in USER.",
+        "Tool capability reference that belongs in TOOLS."
       ]
     },
     "AGENTS" => %{
@@ -22,9 +30,10 @@ defmodule Nex.Agent.LayerContractHelper do
       ]
     },
     "SOUL" => %{
-      authority: "persona, values, style, and optional identity framing",
-      allowed: "Behavioral tone, values, style preferences, and identity framing.",
+      authority: "persona, values, voice, and operating style",
+      allowed: "Behavioral tone, values, voice, and style preferences.",
       forbidden: [
+        "Durable self-definition that belongs in IDENTITY.",
         "User profile details that belong in USER."
       ]
     },

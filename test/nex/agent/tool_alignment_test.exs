@@ -88,6 +88,7 @@ defmodule Nex.Agent.ToolAlignmentTest do
     memory_rebuild = Enum.find(builtins, &(&1["name"] == "memory_rebuild"))
     memory_status = Enum.find(builtins, &(&1["name"] == "memory_status"))
     memory_write = Enum.find(builtins, &(&1["name"] == "memory_write"))
+    hook = Enum.find(builtins, &(&1["name"] == "hook"))
     reflect = Enum.find(builtins, &(&1["name"] == "reflect"))
     self_update = Enum.find(builtins, &(&1["name"] == "self_update"))
     skill_get = Enum.find(builtins, &(&1["name"] == "skill_get"))
@@ -98,6 +99,7 @@ defmodule Nex.Agent.ToolAlignmentTest do
     assert memory_rebuild["layers"] == ["memory"]
     assert memory_status["layers"] == ["memory"]
     assert memory_write["layers"] == ["memory"]
+    assert hook["layers"] == ["tool"]
     assert reflect["layers"] == ["code"]
     assert self_update["layers"] == ["code"]
     assert skill_get["layers"] == ["skill"]
@@ -215,9 +217,12 @@ defmodule Nex.Agent.ToolAlignmentTest do
       )
 
     profile_schema = get_in(definition, [:parameters, :properties, :profile])
+    label_schema = get_in(definition, [:parameters, :properties, :label])
 
+    assert definition.description =~ "task-scoped background subagent child run"
     assert profile_schema.enum == ["debugger", "reviewer"]
     assert profile_schema.description =~ "debugger: Diagnose failures."
+    assert label_schema.description =~ "visible to the subagent and completion result"
 
     refute Map.has_key?(definition.parameters.properties, :context_mode)
     refute Map.has_key?(definition.parameters.properties, :return_mode)
@@ -254,6 +259,19 @@ defmodule Nex.Agent.ToolAlignmentTest do
     assert "ask_advisor" in all_names
     refute "ask_advisor" in follow_up_names
     refute "ask_advisor" in subagent_names
+  end
+
+  test "hook tool stays owner-only and out of restricted tool surfaces" do
+    all_names = Registry.definitions(:all) |> Enum.map(& &1["name"])
+    follow_up_names = Registry.definitions(:follow_up) |> Enum.map(& &1["name"])
+    subagent_names = Registry.definitions(:subagent) |> Enum.map(& &1["name"])
+    cron_names = Registry.definitions(:cron) |> Enum.map(& &1["name"])
+
+    assert "hook" in all_names
+    refute "hook" in follow_up_names
+    refute "hook" in subagent_names
+    refute "hook" in cron_names
+    refute "session_prompt" in all_names
   end
 
   test "follow-up tool surface keeps read-only discovery path without patch mutation" do

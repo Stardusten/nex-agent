@@ -4,6 +4,7 @@ defmodule Nex.Agent.Channel.Discord.StreamConverter do
   require Logger
 
   alias Nex.Agent.Channel.Discord
+  alias Nex.Agent.IMIR.Text, as: IMText
 
   @new_message_token "<newmsg/>"
   @newmsg_holdback_bytes byte_size(@new_message_token) - 1
@@ -239,7 +240,7 @@ defmodule Nex.Agent.Channel.Discord.StreamConverter do
     if text == "" do
       {:ok, state}
     else
-      send_new_message(state, text)
+      send_new_message_chunks(state, text)
     end
   end
 
@@ -250,7 +251,7 @@ defmodule Nex.Agent.Channel.Discord.StreamConverter do
     if text == "" do
       {:ok, state}
     else
-      update_current_message(%{state | placeholder: false, status_text: nil}, text)
+      append_text(%{state | active_text: "", placeholder: false, status_text: nil}, text)
     end
   end
 
@@ -259,11 +260,24 @@ defmodule Nex.Agent.Channel.Discord.StreamConverter do
     next_text = state.active_text <> text
 
     if String.length(next_text) > @max_message_length do
-      with {:ok, state} <- rotate_message(state) do
-        send_new_message(state, text)
-      end
+      split_current_message(state, next_text, text)
     else
       update_current_message(state, next_text)
+    end
+  end
+
+  defp split_current_message(%__MODULE__{} = state, full_text, overflow_text) do
+    case IMText.split_at_safe_boundary(full_text, @max_message_length) do
+      {:ok, current_text, rest} ->
+        with {:ok, state} <- update_current_message(state, current_text),
+             {:ok, state} <- rotate_message(state) do
+          append_text(state, rest)
+        end
+
+      :error ->
+        with {:ok, state} <- rotate_message(state) do
+          send_new_message_chunks(state, overflow_text)
+        end
     end
   end
 
@@ -294,6 +308,17 @@ defmodule Nex.Agent.Channel.Discord.StreamConverter do
         Logger.warning("[DiscordStream] send_new_message failed: #{inspect(reason)}")
         {:error, reason}
     end
+  end
+
+  defp send_new_message_chunks(%__MODULE__{} = state, text) do
+    text
+    |> IMText.chunk_message(@max_message_length)
+    |> Enum.reduce_while({:ok, state}, fn chunk, {:ok, acc_state} ->
+      case send_new_message(acc_state, chunk) do
+        {:ok, next_state} -> {:cont, {:ok, next_state}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
   end
 
   defp update_current_message(%__MODULE__{current_message_id: nil} = state, text) do

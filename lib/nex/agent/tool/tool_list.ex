@@ -154,6 +154,7 @@ defmodule Nex.Agent.Tool.ToolList do
         "memory_status" -> ["memory"]
         "memory_rebuild" -> ["memory"]
         "memory_write" -> ["memory"]
+        "hook" -> ["tool"]
         "observe" -> ["tool"]
         "skill_discover" -> ["skill"]
         "skill_get" -> ["skill"]

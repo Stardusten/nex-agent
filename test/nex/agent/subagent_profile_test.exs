@@ -98,6 +98,13 @@ defmodule Nex.Agent.SubagentProfileTest do
       |> Enum.map_join("\n", fn message -> to_string(Map.get(message, "content", "")) end)
 
     assert prompt_text =~ "Review prompt: find correctness bugs first."
+    assert prompt_text =~ "Subagent identity:"
+    assert prompt_text =~ "Task ID: #{task_id}"
+    assert prompt_text =~ "Profile: reviewer"
+    assert prompt_text =~ "Label: parser-review"
+    assert prompt_text =~ "Child session: subagent:#{task_id}"
+    assert prompt_text =~ "task-scoped background child run"
+    assert prompt_text =~ "`run.owner.current` tracks active owner runs only"
     assert prompt_text =~ "Candidate diff touches parse_input/1."
     assert prompt_text =~ "The failing file is lib/example.ex."
     assert prompt_text =~ "Task:\nCheck the parser change."
@@ -111,6 +118,35 @@ defmodule Nex.Agent.SubagentProfileTest do
 
     refute_receive {:bus_message, :subagent, _message}, 100
     refute_receive {:bus_message, :inbound, _message}, 100
+  end
+
+  test "inbound completion envelope names child lifecycle and owner gauge boundary", %{
+    workspace: workspace
+  } do
+    Bus.subscribe(:inbound)
+
+    llm_stream_client = fn _messages, _opts, callback ->
+      callback.({:delta, "child result"})
+      callback.({:done, %{finish_reason: nil, usage: nil, model: nil}})
+      :ok
+    end
+
+    assert {:ok, task_id} =
+             Subagent.spawn_task("Smoke test.",
+               label: "smoke",
+               workspace: workspace,
+               llm_stream_client: llm_stream_client
+             )
+
+    assert_receive {:bus_message, :inbound, envelope}, 2_000
+
+    assert envelope.text =~ "Subagent task finished"
+    assert envelope.text =~ "Task ID: #{task_id}"
+    assert envelope.text =~ "Profile: general"
+    assert envelope.text =~ "Label: smoke"
+    assert envelope.text =~ "Child session: subagent:#{task_id}"
+    assert envelope.text =~ "`run.owner.current`, which only lists active owner runs"
+    assert envelope.text =~ "Result:\nchild result"
   end
 
   test "profile config keeps provider options bounded and rejects base surface" do

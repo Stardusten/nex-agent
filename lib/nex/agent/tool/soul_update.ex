@@ -13,7 +13,7 @@ defmodule Nex.Agent.Tool.SoulUpdate do
 
   def description,
     do:
-      "Update SOUL.md identity and persona guidance (identity, values, tone, and style). User profile data still belongs in USER.md."
+      "Update SOUL.md persona guidance (values, tone, voice, and style). Durable self-definition belongs in IDENTITY.md; user profile data belongs in USER.md."
 
   def category, do: :evolution
 

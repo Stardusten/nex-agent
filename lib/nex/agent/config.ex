@@ -16,6 +16,7 @@ defmodule Nex.Agent.Config do
     "openrouter" => :openrouter,
     "ollama" => :ollama
   }
+  @discord_table_modes ~w(raw ascii embed)
 
   defstruct max_iterations: 40,
             workspace: nil,
@@ -224,10 +225,16 @@ defmodule Nex.Agent.Config do
   def channel_runtime(%__MODULE__{} = config, instance_id) do
     case channel_instance(config, instance_id) do
       %{} = instance ->
-        %{
+        runtime = %{
           "type" => Map.get(instance, "type"),
           "streaming" => Map.get(instance, "streaming", default_streaming(instance)) == true
         }
+
+        if Map.get(instance, "type") == "discord" do
+          Map.put(runtime, "show_table_as", discord_show_table_as(instance))
+        else
+          runtime
+        end
 
       _ ->
         %{"type" => nil, "streaming" => false}
@@ -520,11 +527,18 @@ defmodule Nex.Agent.Config do
 
     case normalize_optional_string(Map.get(instance, "type")) do
       type when type in ["feishu", "discord"] ->
-        instance
-        |> Map.put("type", type)
-        |> Map.put("enabled", Map.get(instance, "enabled", false) == true)
-        |> normalize_channel_secret("token")
-        |> normalize_channel_secret("app_secret")
+        normalized =
+          instance
+          |> Map.put("type", type)
+          |> Map.put("enabled", Map.get(instance, "enabled", false) == true)
+          |> normalize_channel_secret("token")
+          |> normalize_channel_secret("app_secret")
+
+        if type == "discord" do
+          Map.put(normalized, "show_table_as", discord_show_table_as(normalized))
+        else
+          normalized
+        end
 
       _ ->
         nil
@@ -776,6 +790,20 @@ defmodule Nex.Agent.Config do
   defp default_streaming(%{"type" => "feishu"}), do: true
   defp default_streaming(%{"type" => "discord"}), do: false
   defp default_streaming(_instance), do: false
+
+  defp discord_show_table_as(%{} = instance) do
+    instance
+    |> Map.get("show_table_as")
+    |> normalize_optional_string()
+    |> then(fn
+      nil -> nil
+      mode -> String.downcase(mode)
+    end)
+    |> case do
+      mode when mode in @discord_table_modes -> mode
+      _ -> "ascii"
+    end
+  end
 
   defp present?(value) when is_binary(value), do: String.trim(value) != ""
   defp present?(_value), do: false

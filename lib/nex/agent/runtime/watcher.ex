@@ -20,7 +20,7 @@ defmodule Nex.Agent.Runtime.Watcher do
   ]
 
   @default_poll_interval_ms 1_000
-  @workspace_files ~w(AGENTS.md SOUL.md USER.md TOOLS.md memory/MEMORY.md)
+  @workspace_files ~w(AGENTS.md IDENTITY.md SOUL.md USER.md TOOLS.md memory/MEMORY.md hooks/hooks.json)
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
