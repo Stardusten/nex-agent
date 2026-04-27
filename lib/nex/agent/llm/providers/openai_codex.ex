@@ -109,18 +109,26 @@ defmodule Nex.Agent.LLM.Providers.OpenAICodex do
 
   defp promote_model_request_options(options) do
     options
-    |> promote_provider_option(:reasoning_effort)
-    |> promote_provider_option(:service_tier)
+    |> promote_provider_option(:reasoning_effort, &normalize_reasoning_effort/1)
+    |> promote_provider_option(:service_tier, &normalize_service_tier/1)
   end
 
-  defp promote_provider_option(options, key) do
+  defp promote_provider_option(options, key, normalize) do
     provider_options = Keyword.get(options, :provider_options, [])
 
     case {Keyword.get(options, key), Keyword.get(provider_options, key)} do
-      {nil, value} when not is_nil(value) -> Keyword.put(options, key, value)
+      {nil, value} when not is_nil(value) -> Keyword.put(options, key, normalize.(value))
       _ -> options
     end
   end
+
+  defp normalize_reasoning_effort(value) when value in ["extra high", "extra_high"],
+    do: "xhigh"
+
+  defp normalize_reasoning_effort(value), do: value
+
+  defp normalize_service_tier("fast"), do: "priority"
+  defp normalize_service_tier(value), do: value
 
   defp maybe_put_keyword(opts, _key, false, _value), do: opts
   defp maybe_put_keyword(opts, _key, _condition, nil), do: opts

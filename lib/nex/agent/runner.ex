@@ -2291,6 +2291,12 @@ defmodule Nex.Agent.Runner do
           String.contains?(err_msg, "not_implemented") ->
         :anthropic_match_error
 
+      provider == :openai and String.contains?(err_msg, "model engine error") ->
+        :openai_model_engine_error
+
+      provider == :openai and String.contains?(err_msg, "20057") ->
+        :openai_model_engine_error
+
       true ->
         nil
     end
@@ -2302,6 +2308,10 @@ defmodule Nex.Agent.Runner do
 
   defp consolidation_tool_choice_retry_message(:anthropic_match_error) do
     "Anthropic tool_choice fallback triggered after MatchError, retrying without it"
+  end
+
+  defp consolidation_tool_choice_retry_message(:openai_model_engine_error) do
+    "OpenAI-compatible model engine error with forced tool_choice, retrying without it"
   end
 
   defp default_evolution_signals do

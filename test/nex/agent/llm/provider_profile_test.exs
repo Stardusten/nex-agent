@@ -51,12 +51,12 @@ defmodule Nex.Agent.LLM.ProviderProfileTest do
           %{"role" => "user", "content" => "hello"}
         ],
         profile,
-        provider_options: [reasoning_effort: "xhigh", service_tier: "fast"]
+        provider_options: [reasoning_effort: "extra_high", service_tier: "fast"]
       )
 
     assert options[:reasoning_effort] == "xhigh"
-    assert options[:service_tier] == "fast"
-    assert options[:provider_options][:reasoning_effort] == "xhigh"
+    assert options[:service_tier] == "priority"
+    assert options[:provider_options][:reasoning_effort] == "extra_high"
     assert options[:provider_options][:service_tier] == "fast"
   end
 
@@ -73,12 +73,12 @@ defmodule Nex.Agent.LLM.ProviderProfileTest do
           %{"role" => "user", "content" => "hello"}
         ],
         profile,
-        provider_options: [reasoning_effort: "xhigh", service_tier: "fast"]
+        provider_options: [reasoning_effort: "extra high", service_tier: "fast"]
       )
 
     assert options[:reasoning_effort] == "xhigh"
-    assert options[:service_tier] == "fast"
-    assert options[:provider_options][:reasoning_effort] == "xhigh"
+    assert options[:service_tier] == "priority"
+    assert options[:provider_options][:reasoning_effort] == "extra high"
     assert options[:provider_options][:service_tier] == "fast"
   end
 

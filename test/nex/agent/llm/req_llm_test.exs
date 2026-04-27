@@ -173,7 +173,7 @@ defmodule Nex.Agent.LLM.ReqLLMTest do
                  provider: :openai_codex,
                  model: "gpt-5.5",
                  api_key: "oauth-access-token",
-                 provider_options: [reasoning_effort: "xhigh", service_tier: "fast"],
+                 provider_options: [reasoning_effort: "extra_high", service_tier: "fast"],
                  req_llm_stream_text_fun: stream_text_fun
                ],
                fn _event -> :ok end
@@ -183,7 +183,7 @@ defmodule Nex.Agent.LLM.ReqLLMTest do
 
     assert body["instructions"] == "You are the project copilot."
     assert body["reasoning"] == %{"effort" => "xhigh"}
-    assert body["service_tier"] == "fast"
+    assert body["service_tier"] == "priority"
     assert body["store"] == false
   end
 

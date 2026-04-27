@@ -1012,6 +1012,64 @@ defmodule Nex.Agent.RunnerEvolutionTest do
     refute Keyword.has_key?(second_opts, :tool_choice)
   end
 
+  test "call_llm_for_consolidation retries openai model engine errors without tool_choice" do
+    parent = self()
+
+    llm_stream_text_fun = fn _model_spec, _messages, opts ->
+      send(parent, {:consolidation_opts, opts})
+
+      case Process.get(:runner_consolidation_retry_count, 0) do
+        0 ->
+          Process.put(:runner_consolidation_retry_count, 1)
+
+          {:error,
+           %ReqLLM.Error.API.Request{
+             reason: "model engine error",
+             status: 500,
+             response_body: %{
+               "code" => "20057",
+               "message" => "model engine error",
+               "type" => "runtime_error"
+             }
+           }}
+
+        _ ->
+          {:ok,
+           %{
+             stream: [
+               %{
+                 type: :tool_call,
+                 name: "save_memory",
+                 arguments: %{
+                   "history_entry" => "[2026-04-27 10:50] OpenAI retry worked.",
+                   "memory_update" => "# Memory\n\nOpenAI retry path succeeded.\n"
+                 }
+               }
+             ],
+             finish_reason: :stop
+           }}
+      end
+    end
+
+    assert {:ok,
+            %{
+              "history_entry" => "[2026-04-27 10:50] OpenAI retry worked.",
+              "memory_update" => "# Memory\n\nOpenAI retry path succeeded.\n"
+            }} =
+             Runner.call_llm_for_consolidation(consolidation_messages(),
+               provider: :openai,
+               model: "hy3-preview",
+               tools: [save_memory_tool_definition()],
+               tool_choice: %{type: "tool", name: "save_memory"},
+               req_llm_stream_text_fun: llm_stream_text_fun
+             )
+
+    assert_receive {:consolidation_opts, first_opts}
+    assert_receive {:consolidation_opts, second_opts}
+    assert first_opts[:tool_choice] == %{type: "tool", name: "save_memory"}
+    refute Keyword.has_key?(second_opts, :tool_choice)
+  end
+
   test "call_llm_for_consolidation returns non-retryable errors unchanged" do
     parent = self()
 
