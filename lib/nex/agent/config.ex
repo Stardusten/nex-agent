@@ -319,6 +319,16 @@ defmodule Nex.Agent.Config do
     %{"provider" => "codex", "output_format" => "png"}
   end
 
+  @spec file_access_allowed_roots(t() | nil) :: [String.t()]
+  def file_access_allowed_roots(%__MODULE__{tools: tools}) when is_map(tools) do
+    tools
+    |> Map.get("file_access", %{})
+    |> normalize_file_access_config()
+    |> Map.get("allowed_roots", [])
+  end
+
+  def file_access_allowed_roots(_config), do: []
+
   @spec request_trace(t()) :: map()
   def request_trace(%__MODULE__{}), do: %{"enabled" => false}
 
@@ -666,8 +676,37 @@ defmodule Nex.Agent.Config do
 
   defp normalize_subagent_profile_entries(_profiles), do: %{}
 
-  defp normalize_tools(tools) when is_map(tools), do: stringify_map_keys(tools)
+  defp normalize_tools(tools) when is_map(tools) do
+    tools = stringify_map_keys(tools)
+
+    case Map.fetch(tools, "file_access") do
+      {:ok, config} -> Map.put(tools, "file_access", normalize_file_access_config(config))
+      :error -> tools
+    end
+  end
+
   defp normalize_tools(_tools), do: %{}
+
+  defp normalize_file_access_config(%{} = config) do
+    config = stringify_map_keys(config)
+
+    %{
+      "allowed_roots" => normalize_allowed_roots(Map.get(config, "allowed_roots"))
+    }
+  end
+
+  defp normalize_file_access_config(_config), do: %{"allowed_roots" => []}
+
+  defp normalize_allowed_roots(roots) when is_list(roots) do
+    roots
+    |> Enum.filter(&is_binary/1)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.map(&Path.expand/1)
+    |> Enum.uniq()
+  end
+
+  defp normalize_allowed_roots(_roots), do: []
 
   defp selected_tool_backend(tools, tool_name, default_provider) do
     tool_config =

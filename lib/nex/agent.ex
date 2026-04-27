@@ -138,6 +138,7 @@ defmodule Nex.Agent do
     session_key = "#{channel}:#{chat_id}"
     skip_consolidation = Keyword.get(opts, :skip_consolidation, false)
     metadata = Keyword.get(opts, :metadata, %{})
+    parent_chat_id = parent_chat_id(opts, metadata)
     project = Keyword.get(opts, :project)
     schedule_memory_refresh = Keyword.get(opts, :schedule_memory_refresh, true)
 
@@ -175,6 +176,7 @@ defmodule Nex.Agent do
       |> maybe_put(:runtime_snapshot, runtime_snapshot)
       |> maybe_put(:runtime_version, runtime_snapshot && runtime_snapshot.version)
       |> maybe_put(:project, project)
+      |> maybe_put(:parent_chat_id, parent_chat_id)
       |> maybe_put(:stream_sink, stream_sink)
       |> maybe_put(:tools_filter, tools_filter)
       |> maybe_put(:run_id, run_id)
@@ -269,6 +271,15 @@ defmodule Nex.Agent do
        do: ProviderProfile.default_base_url(provider)
 
   defp default_base_url(_), do: nil
+
+  defp parent_chat_id(opts, metadata) do
+    Keyword.get(opts, :parent_chat_id) ||
+      metadata_value(metadata, "parent_chat_id") ||
+      metadata_value(metadata, :parent_chat_id)
+  end
+
+  defp metadata_value(metadata, key) when is_map(metadata), do: Map.get(metadata, key)
+  defp metadata_value(_metadata, _key), do: nil
 
   defp parse_session_key(nil), do: {"feishu", "default"}
 

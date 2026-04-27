@@ -37,8 +37,8 @@ defmodule Nex.Agent.Tool.Find do
     }
   end
 
-  def execute(%{"query" => query} = args, _ctx) when is_binary(query) and query != "" do
-    with {:ok, scope_path} <- scope_path(args),
+  def execute(%{"query" => query} = args, ctx) when is_binary(query) and query != "" do
+    with {:ok, scope_path} <- scope_path(args, ctx),
          {:ok, matches} <- run_search(query, scope_path, Map.get(args, "glob")) do
       limit = min(normalize_limit(Map.get(args, "limit")), @max_limit)
 
@@ -54,12 +54,12 @@ defmodule Nex.Agent.Tool.Find do
 
   def execute(_args, _ctx), do: {:error, "query is required"}
 
-  defp scope_path(%{"path" => path}) when is_binary(path) and path != "" do
-    Security.validate_path(path)
+  defp scope_path(%{"path" => path}, ctx) when is_binary(path) and path != "" do
+    Security.validate_path(path, ctx)
   end
 
-  defp scope_path(_args) do
-    Security.validate_path(CodeUpgrade.repo_root())
+  defp scope_path(_args, ctx) do
+    Security.validate_path(CodeUpgrade.repo_root(), ctx)
   end
 
   defp run_search(query, scope_path, glob) do

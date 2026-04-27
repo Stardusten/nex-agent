@@ -182,6 +182,16 @@ defmodule Nex.Agent.LLM.ReqLLM do
     )
     |> maybe_put_keyword(:temperature, is_number(options[:temperature]), options[:temperature])
     |> maybe_put_keyword(:max_tokens, is_integer(options[:max_tokens]), options[:max_tokens])
+    |> maybe_put_keyword(
+      :reasoning_effort,
+      not is_nil(options[:reasoning_effort]),
+      options[:reasoning_effort]
+    )
+    |> maybe_put_keyword(
+      :service_tier,
+      not is_nil(options[:service_tier]),
+      options[:service_tier]
+    )
     |> maybe_put_keyword(:tools, true, transform_tools(options[:tools] || []))
     |> maybe_put_keyword(
       :tool_choice,

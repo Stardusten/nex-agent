@@ -1,6 +1,7 @@
 defmodule Nex.Agent.ApplyPatchToolTest do
   use ExUnit.Case, async: false
 
+  alias Nex.Agent.Config
   alias Nex.Agent.Tool.ApplyPatch
 
   test "apply_patch updates files with multiple hunks" do
@@ -152,5 +153,43 @@ defmodule Nex.Agent.ApplyPatchToolTest do
     assert message =~ "Failed to move"
     assert File.read!(source) == "hello\n"
     refute File.exists?(destination)
+  end
+
+  test "apply_patch honors file_access allowed roots from tool context config" do
+    previous_allowed_roots = System.get_env("NEX_ALLOWED_ROOTS")
+    System.delete_env("NEX_ALLOWED_ROOTS")
+
+    root =
+      Path.expand(
+        "../#{Path.basename(File.cwd!())}-patch-allowed-#{System.unique_integer([:positive])}",
+        File.cwd!()
+      )
+
+    path = Path.join(root, "external.txt")
+    File.mkdir_p!(root)
+
+    on_exit(fn ->
+      if previous_allowed_roots,
+        do: System.put_env("NEX_ALLOWED_ROOTS", previous_allowed_roots),
+        else: System.delete_env("NEX_ALLOWED_ROOTS")
+
+      File.rm_rf!(root)
+    end)
+
+    patch = """
+    *** Begin Patch
+    *** Add File: #{path}
+    +external
+    *** End Patch
+    """
+
+    assert {:error, message} = ApplyPatch.execute(%{"patch" => patch}, %{})
+    assert message =~ "Path not within allowed roots"
+
+    config = Config.from_map(%{"tools" => %{"file_access" => %{"allowed_roots" => [root]}}})
+
+    assert {:ok, result} = ApplyPatch.execute(%{"patch" => patch}, %{config: config})
+    assert result.created_files == [path]
+    assert File.read!(path) == "external\n"
   end
 end

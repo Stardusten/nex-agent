@@ -552,6 +552,24 @@ NexAgent already has some important boundaries in place:
 - chat apps support `allow_from`
 - cron and subagent execution use more restricted paths
 
+File tools use the runtime config contract for extra roots outside the agent workspace:
+
+```json
+{
+  "tools": {
+    "file_access": {
+      "allowed_roots": [
+        "/path/to/project-a",
+        "/path/to/project-b"
+      ]
+    }
+  }
+}
+```
+
+`NEX_ALLOWED_ROOTS=/path/a:/path/b` remains a process-level override when an operator
+needs to pin the full allowed root set outside config.
+
 It is not finished, but the direction is clear: this is not meant to become an unrestricted local god-agent by default.
 
 ## Closing

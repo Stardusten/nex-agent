@@ -157,6 +157,14 @@ Local tool backend selection is now the active contract for tool-backed external
 - `Runner`, `ReqLLM`, and `Tool.Registry` do not expose a second tool lane for these capabilities
 - the aborted Phase 15 provider-native capability plan is historical only; use the 2026-04-25 local-tool backend finding as the current review source
 
+File access roots are now a TOOL-layer runtime config contract:
+
+- `workspace` remains a single durable agent home, not an array
+- extra readable/writable project roots live under `tools.file_access.allowed_roots`
+- `read`, `find`, and `apply_patch` pass tool ctx into `Nex.Agent.Security`
+- path validation only has explicit-context APIs: `allowed_roots(ctx)`, `validate_path(path, ctx)`, and `validate_write_path(path, ctx)`
+- `NEX_ALLOWED_ROOTS` remains a process-level full override
+
 Phase 17 is now implemented as the first memory-system polish step:
 
 - keep the existing file-backed workspace memory model
@@ -212,6 +220,7 @@ Docs/dev workflow is split into four lanes:
 - [2026-04-16 OpenAI Native Computer Use Architecture](../findings/2026-04-16-openai-native-computer-use-architecture.md)
 - [2026-04-25 Local Tool Backend Selection](../findings/2026-04-25-local-tool-backend-selection.md)
 - [2026-04-25 Memory System Cost, Visibility, And Triggering](../findings/2026-04-25-memory-system-cost-visibility-and-triggering.md)
+- [2026-04-27 File Access Allowed Roots](../findings/2026-04-27-file-access-allowed-roots.md)
 
 ## Immediate Next Steps
 

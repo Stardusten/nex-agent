@@ -56,8 +56,8 @@ defmodule Nex.Agent.Tool.Read do
     }
   end
 
-  def execute(%{"path" => path} = args, _ctx) do
-    with {:ok, expanded} <- Security.validate_path(path),
+  def execute(%{"path" => path} = args, ctx) do
+    with {:ok, expanded} <- Security.validate_path(path, ctx),
          :ok <- reject_profile_shadow(expanded),
          {:ok, kind} <- classify_path(expanded) do
       case {kind, Map.get(args, "directory")} do

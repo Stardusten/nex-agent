@@ -38,8 +38,9 @@ defmodule Nex.Agent.Tool.Hook do
           },
           pointcut: %{type: "object", description: "Exact-match pointcut object"},
           session: %{type: "string", description: "Pointcut session key"},
-          channel: %{type: "string", description: "Pointcut channel id"},
+          channel: %{type: "string", description: "Pointcut Nex channel instance id"},
           chat_id: %{type: "string", description: "Pointcut chat id"},
+          parent_chat_id: %{type: "string", description: "Pointcut parent chat id"},
           target_workspace: %{type: "string", description: "Pointcut workspace path"},
           path: %{type: "string", description: "File path for add_file"},
           content: %{type: "string", description: "Text content for add_text"},
@@ -102,13 +103,15 @@ defmodule Nex.Agent.Tool.Hook do
     with {:ok, id} <- required_arg(args, "id"),
          {:ok, advice} <- build_advice(args, kind, id),
          {:ok, doc} <- Hooks.read_registry_doc(workspace: workspace) do
-      entry = %{
-        "id" => id,
-        "enabled" => true,
-        "event" => string_arg(args, "event") || "prompt.build.before",
-        "pointcut" => build_pointcut(args),
-        "advice" => advice
-      }
+      entry =
+        %{
+          "id" => id,
+          "enabled" => true,
+          "event" => string_arg(args, "event") || "prompt.build.before",
+          "pointcut" => build_pointcut(args),
+          "advice" => advice
+        }
+        |> put_default_pointcut(args, ctx)
 
       hooks =
         doc
@@ -181,6 +184,10 @@ defmodule Nex.Agent.Tool.Hook do
         string_arg(args, "session") || Map.get(ctx, :session_key) || Map.get(ctx, "session_key"),
       channel: string_arg(args, "channel") || Map.get(ctx, :channel) || Map.get(ctx, "channel"),
       chat_id: string_arg(args, "chat_id") || Map.get(ctx, :chat_id) || Map.get(ctx, "chat_id"),
+      parent_chat_id:
+        string_arg(args, "parent_chat_id") ||
+          Map.get(ctx, :parent_chat_id) ||
+          Map.get(ctx, "parent_chat_id"),
       workspace: string_arg(args, "target_workspace") || workspace,
       run_id: Map.get(ctx, :run_id) || Map.get(ctx, "run_id")
     }
@@ -237,8 +244,52 @@ defmodule Nex.Agent.Tool.Hook do
     |> maybe_put("session", string_arg(args, "session"))
     |> maybe_put("channel", string_arg(args, "channel"))
     |> maybe_put("chat_id", string_arg(args, "chat_id"))
+    |> maybe_put("parent_chat_id", string_arg(args, "parent_chat_id"))
     |> maybe_put("workspace", string_arg(args, "target_workspace"))
   end
+
+  defp put_default_pointcut(entry, args, ctx) do
+    if has_explicit_pointcut?(args) do
+      entry
+    else
+      case default_parent_pointcut(ctx) do
+        pointcut when map_size(pointcut) > 0 -> Map.put(entry, "pointcut", pointcut)
+        _ -> entry
+      end
+    end
+  end
+
+  defp has_explicit_pointcut?(args) do
+    Map.has_key?(args, "pointcut") or
+      Enum.any?(["session", "channel", "chat_id", "parent_chat_id", "target_workspace"], fn key ->
+        present?(string_arg(args, key))
+      end)
+  end
+
+  defp default_parent_pointcut(ctx) do
+    parent_chat_id = Map.get(ctx, :parent_chat_id) || Map.get(ctx, "parent_chat_id")
+    channel = Map.get(ctx, :channel) || Map.get(ctx, "channel")
+
+    case present_string(parent_chat_id) do
+      nil ->
+        %{}
+
+      parent_chat_id ->
+        %{}
+        |> maybe_put("channel", present_string(channel))
+        |> maybe_put("parent_chat_id", parent_chat_id)
+    end
+  end
+
+  defp present?(value), do: not is_nil(present_string(value))
+
+  defp present_string(value) when is_binary(value) do
+    value = String.trim(value)
+    if value == "", do: nil, else: value
+  end
+
+  defp present_string(nil), do: nil
+  defp present_string(value), do: to_string(value)
 
   defp update_existing_hook(doc, id, fun) do
     hooks = Map.get(doc, "hooks", [])

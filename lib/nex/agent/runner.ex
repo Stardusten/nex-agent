@@ -263,6 +263,7 @@ defmodule Nex.Agent.Runner do
       session_key: session.key,
       channel: channel,
       chat_id: chat_id,
+      parent_chat_id: hook_parent_chat_id(opts),
       workspace: workspace,
       run_id: Keyword.get(opts, :run_id)
     }
@@ -276,6 +277,7 @@ defmodule Nex.Agent.Runner do
            workspace: workspace,
            runtime_system_messages: runtime_system_messages,
            context_hook_fragments: context_hook_fragments,
+           parent_chat_id: hook_ctx.parent_chat_id,
            cwd: Keyword.get(opts, :cwd),
            config: runtime_config
          )}
@@ -1587,6 +1589,17 @@ defmodule Nex.Agent.Runner do
   defp runtime_hooks(%Snapshot{} = snapshot), do: snapshot.hooks
   defp runtime_hooks(_), do: nil
 
+  defp hook_parent_chat_id(opts) do
+    metadata = Keyword.get(opts, :metadata, %{})
+
+    Keyword.get(opts, :parent_chat_id) ||
+      metadata_value(metadata, "parent_chat_id") ||
+      metadata_value(metadata, :parent_chat_id)
+  end
+
+  defp metadata_value(metadata, key) when is_map(metadata), do: Map.get(metadata, key)
+  defp metadata_value(_metadata, _key), do: nil
+
   defp default_model_runtime(%Snapshot{config: %Nex.Agent.Config{} = config}) do
     Nex.Agent.Config.default_model_runtime(config)
   end
@@ -1889,6 +1902,7 @@ defmodule Nex.Agent.Runner do
     %{
       channel: Keyword.get(opts, :channel),
       chat_id: Keyword.get(opts, :chat_id),
+      parent_chat_id: hook_parent_chat_id(opts),
       session_key: Keyword.get(opts, :session_key),
       run_id: Keyword.get(opts, :run_id),
       cancel_ref: Keyword.get(opts, :cancel_ref),

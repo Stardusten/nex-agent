@@ -114,6 +114,15 @@ defmodule Nex.Agent.ContextBuilderTest do
     assert context =~ "Markdown tables render as ascii"
   end
 
+  test "runtime context includes current chat scope id", %{} do
+    context =
+      ContextBuilder.build_runtime_context("discord_main", "thread-1", parent_chat_id: "123")
+
+    assert context =~ "Channel: discord_main"
+    assert context =~ "Chat ID: thread-1"
+    assert context =~ "Chat Scope ID (parent_chat_id): 123"
+  end
+
   test "runtime context falls back to plain text guidance for non-feishu channels", %{} do
     config = Config.default()
 

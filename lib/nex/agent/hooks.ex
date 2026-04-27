@@ -320,6 +320,7 @@ defmodule Nex.Agent.Hooks do
       pointcut_value_matches?(Map.get(pointcut, "session"), Map.get(ctx, :session_key)) and
       pointcut_value_matches?(Map.get(pointcut, "channel"), Map.get(ctx, :channel)) and
       pointcut_value_matches?(Map.get(pointcut, "chat_id"), Map.get(ctx, :chat_id)) and
+      pointcut_value_matches?(Map.get(pointcut, "parent_chat_id"), Map.get(ctx, :parent_chat_id)) and
       workspace_matches?(Map.get(pointcut, "workspace"), Map.get(ctx, :workspace))
   end
 
@@ -349,6 +350,7 @@ defmodule Nex.Agent.Hooks do
       session_key: Map.get(ctx, :session_key) || Map.get(ctx, "session_key"),
       channel: Map.get(ctx, :channel) || Map.get(ctx, "channel"),
       chat_id: Map.get(ctx, :chat_id) || Map.get(ctx, "chat_id"),
+      parent_chat_id: Map.get(ctx, :parent_chat_id) || Map.get(ctx, "parent_chat_id"),
       workspace: Map.get(ctx, :workspace) || Map.get(ctx, "workspace"),
       run_id: Map.get(ctx, :run_id) || Map.get(ctx, "run_id")
     }
@@ -548,6 +550,7 @@ defmodule Nex.Agent.Hooks do
     |> maybe_put(:session_key, Map.get(ctx, :session_key))
     |> maybe_put(:channel, Map.get(ctx, :channel))
     |> maybe_put(:chat_id, Map.get(ctx, :chat_id))
+    |> maybe_put(:parent_chat_id, Map.get(ctx, :parent_chat_id))
     |> maybe_put(:run_id, Map.get(ctx, :run_id))
   end
 

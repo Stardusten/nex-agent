@@ -41,6 +41,47 @@ defmodule Nex.Agent.LLM.ProviderProfileTest do
     assert provider_options[:auth_mode] == :api_key
   end
 
+  test "openai_codex promotes model request options for responses payloads" do
+    profile = ProviderProfile.for(:openai_codex, [])
+
+    {_messages, options} =
+      ProviderProfile.prepare_messages_and_options(
+        [
+          %{"role" => "system", "content" => "Use the workspace rules."},
+          %{"role" => "user", "content" => "hello"}
+        ],
+        profile,
+        provider_options: [reasoning_effort: "xhigh", service_tier: "fast"]
+      )
+
+    assert options[:reasoning_effort] == "xhigh"
+    assert options[:service_tier] == "fast"
+    assert options[:provider_options][:reasoning_effort] == "xhigh"
+    assert options[:provider_options][:service_tier] == "fast"
+  end
+
+  test "openai_codex_custom promotes model request options for responses payloads" do
+    profile =
+      ProviderProfile.for(:openai_codex_custom,
+        base_url: "https://custom.example.com/backend-api/codex/"
+      )
+
+    {_messages, options} =
+      ProviderProfile.prepare_messages_and_options(
+        [
+          %{"role" => "system", "content" => "Use the workspace rules."},
+          %{"role" => "user", "content" => "hello"}
+        ],
+        profile,
+        provider_options: [reasoning_effort: "xhigh", service_tier: "fast"]
+      )
+
+    assert options[:reasoning_effort] == "xhigh"
+    assert options[:service_tier] == "fast"
+    assert options[:provider_options][:reasoning_effort] == "xhigh"
+    assert options[:provider_options][:service_tier] == "fast"
+  end
+
   test "openai_codex_custom always uses api key mode" do
     profile =
       ProviderProfile.for(:openai_codex_custom,

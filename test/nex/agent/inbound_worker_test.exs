@@ -512,6 +512,48 @@ defmodule Nex.Agent.InboundWorkerTest do
     assert [%Attachment{local_path: ^image_path, kind: :image, mime_type: "image/png"}] = media
   end
 
+  test "inbound worker forwards parent chat id metadata into owner prompt opts", %{
+    workspace: workspace
+  } do
+    parent = self()
+
+    worker_name =
+      String.to_atom("inbound_worker_parent_chat_#{System.unique_integer([:positive])}")
+
+    prompt_fun = fn agent, prompt, opts ->
+      send(
+        parent,
+        {:prompt_opts, prompt, Keyword.get(opts, :parent_chat_id), Keyword.get(opts, :metadata)}
+      )
+
+      {:ok, "done", %{agent | workspace: workspace}}
+    end
+
+    start_supervised!(
+      {InboundWorker,
+       name: worker_name, config: default_worker_config(), agent_prompt_fun: prompt_fun}
+    )
+
+    send(Process.whereis(worker_name), {
+      :bus_message,
+      :inbound,
+      %Envelope{
+        channel: @discord_instance,
+        chat_id: "thread-1",
+        sender_id: "tester",
+        text: "hello",
+        message_type: :text,
+        raw: %{},
+        metadata: %{"workspace" => workspace, "parent_chat_id" => "123"},
+        media_refs: [],
+        attachments: []
+      }
+    })
+
+    assert_receive {:prompt_opts, "hello", "123", metadata}, 1_000
+    assert is_nil(metadata)
+  end
+
   test "inbound worker creates new agents through configured agent_start_fun", %{
     workspace: workspace
   } do

@@ -542,29 +542,38 @@ defmodule Nex.Agent.Channel.Discord do
         Regex.replace(~r/<@!?#{state.bot_user_id}>/, content, "")
         |> String.trim()
 
-      allowed_channel_id =
-        thread_parent_id(thread_meta) || Map.get(data, "parent_id") || channel_id
+      parent_chat_id = parent_chat_id(data, thread_meta)
 
       cond do
         clean_content == "" ->
           state
 
-        not allowed?(allowed_channel_id, state.allow_from) ->
+        not allowed?(parent_chat_id, state.allow_from) ->
           state
 
         is_dm ->
-          publish_inbound(channel_id, author_id, clean_content, data, state)
+          publish_inbound(channel_id, author_id, clean_content, data, state,
+            parent_chat_id: parent_chat_id
+          )
+
           state
 
         is_thread ->
-          publish_inbound(channel_id, author_id, clean_content, data, state)
+          publish_inbound(channel_id, author_id, clean_content, data, state,
+            parent_chat_id: parent_chat_id
+          )
+
           state
 
         mentions_bot ->
           case create_thread_from_message(channel_id, message_id, clean_content, state) do
             {:ok, thread_id} ->
               Logger.info("[Discord] Auto-created thread #{thread_id} for message #{message_id}")
-              publish_inbound(thread_id, author_id, clean_content, data, state)
+
+              publish_inbound(thread_id, author_id, clean_content, data, state,
+                parent_chat_id: channel_id
+              )
+
               # THREAD_CREATE event will also add it, but cache parent immediately for allow_from.
               %{
                 state
@@ -580,7 +589,10 @@ defmodule Nex.Agent.Channel.Discord do
                 "[Discord] Failed to create thread: #{inspect(reason)}, replying in channel"
               )
 
-              publish_inbound(channel_id, author_id, clean_content, data, state)
+              publish_inbound(channel_id, author_id, clean_content, data, state,
+                parent_chat_id: parent_chat_id
+              )
+
               state
           end
 
@@ -613,9 +625,9 @@ defmodule Nex.Agent.Channel.Discord do
     args = Enum.flat_map(options, &interaction_option_values/1)
     raw = "/" <> Enum.join([name | args], " ")
     thread_meta = Map.get(state.known_threads, channel_id)
-    allowed_channel_id = thread_parent_id(thread_meta) || channel_id
+    parent_chat_id = parent_chat_id(data, thread_meta)
 
-    if allowed?(allowed_channel_id, state.allow_from) do
+    if allowed?(parent_chat_id, state.allow_from) do
       Bus.publish(:inbound, %Envelope{
         channel: state.instance_id,
         chat_id: to_string(channel_id),
@@ -631,6 +643,7 @@ defmodule Nex.Agent.Channel.Discord do
           "interaction_id" => Map.get(data, "id"),
           "interaction_token" => Map.get(data, "token"),
           "origin_channel_id" => channel_id,
+          "parent_chat_id" => parent_chat_id,
           "username" =>
             get_in(data, ["member", "user", "username"]) || get_in(data, ["user", "username"])
         },
@@ -667,8 +680,19 @@ defmodule Nex.Agent.Channel.Discord do
     end
   end
 
-  defp publish_inbound(chat_id, author_id, content, data, state) do
+  defp publish_inbound(chat_id, author_id, content, data, state, opts) do
     origin_channel_id = Map.get(data, "channel_id")
+    parent_chat_id = Keyword.get(opts, :parent_chat_id)
+
+    metadata =
+      %{
+        "channel_type" => "discord",
+        "guild_id" => Map.get(data, "guild_id"),
+        "message_id" => Map.get(data, "id"),
+        "origin_channel_id" => origin_channel_id,
+        "username" => get_in(data, ["author", "username"])
+      }
+      |> maybe_put_metadata("parent_chat_id", parent_chat_id)
 
     Bus.publish(:inbound, %Envelope{
       channel: state.instance_id,
@@ -677,13 +701,7 @@ defmodule Nex.Agent.Channel.Discord do
       text: content,
       message_type: :text,
       raw: data,
-      metadata: %{
-        "channel_type" => "discord",
-        "guild_id" => Map.get(data, "guild_id"),
-        "message_id" => Map.get(data, "id"),
-        "origin_channel_id" => origin_channel_id,
-        "username" => get_in(data, ["author", "username"])
-      },
+      metadata: metadata,
       media_refs: [],
       attachments: []
     })
@@ -1163,6 +1181,14 @@ defmodule Nex.Agent.Channel.Discord do
   end
 
   defp normalize_allow_from(_list), do: []
+
+  defp maybe_put_metadata(map, _key, nil), do: map
+  defp maybe_put_metadata(map, _key, ""), do: map
+  defp maybe_put_metadata(map, key, value), do: Map.put(map, key, to_string(value))
+
+  defp parent_chat_id(data, thread_meta) do
+    thread_parent_id(thread_meta) || Map.get(data, "parent_id") || Map.get(data, "channel_id")
+  end
 
   defp thread_meta(data) when is_map(data) do
     %{

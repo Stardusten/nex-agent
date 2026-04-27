@@ -285,6 +285,7 @@ defmodule Nex.Agent.Channel.DiscordTest do
     assert inbound.sender_id == "user-1"
     assert inbound.text == "hello discord"
     assert inbound.metadata["message_id"] == "msg-1"
+    assert inbound.metadata["parent_chat_id"] == "123"
   end
 
   test "message inside a thread responds without @mention", %{pid: pid} do
@@ -349,6 +350,7 @@ defmodule Nex.Agent.Channel.DiscordTest do
     assert inbound.channel == @instance_id
     assert inbound.metadata["channel_type"] == "discord"
     assert inbound.chat_id == "thread-1"
+    assert inbound.metadata["parent_chat_id"] == "123"
     assert inbound.text == "follow up question"
   end
 
@@ -399,6 +401,7 @@ defmodule Nex.Agent.Channel.DiscordTest do
 
     assert_receive {:bus_message, :inbound, inbound}
     assert inbound.chat_id == "thread-allowed"
+    assert inbound.metadata["parent_chat_id"] == "123"
     assert inbound.text == "allowed follow up"
   end
 

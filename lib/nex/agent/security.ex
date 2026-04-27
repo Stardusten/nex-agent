@@ -5,6 +5,8 @@ defmodule Nex.Agent.Security do
   Provides path validation, command blacklist validation, and other security checks.
   """
 
+  alias Nex.Agent.Config
+
   @blocked_commands [
     "mkfs",
     "fdisk",
@@ -54,11 +56,18 @@ defmodule Nex.Agent.Security do
   @doc """
   Get the list of allowed root directories for file access.
   """
-  @spec allowed_roots() :: [String.t()]
-  def allowed_roots do
+  @spec allowed_roots(map() | keyword() | Config.t()) :: [String.t()]
+  def allowed_roots(ctx) do
     case System.get_env("NEX_ALLOWED_ROOTS") do
-      nil -> default_allowed_roots()
-      paths -> String.split(paths, ":") |> Enum.map(&Path.expand/1)
+      nil ->
+        ctx
+        |> configured_allowed_roots()
+        |> normalize_roots()
+
+      paths ->
+        paths
+        |> String.split(":")
+        |> normalize_roots()
     end
   end
 
@@ -67,19 +76,25 @@ defmodule Nex.Agent.Security do
 
   Returns {:ok, expanded_path} if valid, {:error, reason} if not.
   """
-  @spec validate_path(String.t()) :: {:ok, String.t()} | {:error, String.t()}
-  def validate_path(path) do
+  @spec validate_path(String.t(), map() | keyword() | Config.t()) ::
+          {:ok, String.t()} | {:error, String.t()}
+  def validate_path(path, ctx) do
     expanded = Path.expand(path)
+    roots = allowed_roots(ctx)
 
-    if String.contains?(path, "..") and not safe_traversal?(path) do
+    if String.contains?(path, "..") and not safe_traversal?(path, roots) do
       {:error, "Path traversal not allowed: #{path}"}
     else
-      roots = allowed_roots()
-
-      if Enum.any?(roots, fn root -> String.starts_with?(expanded, root) end) do
+      with true <- path_within_allowed_roots?(expanded, roots),
+           {:ok, real_path} <- realpath_if_possible(expanded),
+           true <- path_within_allowed_roots?(real_path, roots) do
         {:ok, expanded}
       else
-        {:error, "Path not within allowed roots. Allowed: #{Enum.join(roots, ", ")}"}
+        false ->
+          {:error, "Path not within allowed roots. Allowed: #{Enum.join(roots, ", ")}"}
+
+        {:error, reason} ->
+          {:error, reason}
       end
     end
   end
@@ -90,15 +105,15 @@ defmodule Nex.Agent.Security do
   For non-existent paths, validation is anchored on the nearest existing ancestor
   so symlink escapes still fail the allowed-roots check.
   """
-  @spec validate_write_path(String.t()) :: {:ok, String.t()} | {:error, String.t()}
-  def validate_write_path(path) do
+  @spec validate_write_path(String.t(), map() | keyword() | Config.t()) ::
+          {:ok, String.t()} | {:error, String.t()}
+  def validate_write_path(path, ctx) do
     expanded = Path.expand(path)
+    roots = allowed_roots(ctx)
 
-    if String.contains?(path, "..") and not safe_traversal?(path) do
+    if String.contains?(path, "..") and not safe_traversal?(path, roots) do
       {:error, "Path traversal not allowed: #{path}"}
     else
-      roots = allowed_roots()
-
       with true <- path_within_allowed_roots?(expanded, roots),
            {:ok, ancestor} <- nearest_existing_ancestor(expanded),
            {:ok, real_ancestor} <- realpath_if_possible(ancestor),
@@ -114,16 +129,17 @@ defmodule Nex.Agent.Security do
     end
   end
 
-  defp safe_traversal?(path) do
+  defp safe_traversal?(path, roots) do
     expanded = Path.expand(path)
-    roots = allowed_roots()
 
     path_within_allowed_roots?(expanded, roots) and
       not symlink_escapes_to_forbidden_path?(expanded, roots)
   end
 
   defp path_within_allowed_roots?(expanded_path, roots) do
-    Enum.any?(roots, fn root -> String.starts_with?(expanded_path, root) end)
+    Enum.any?(roots, fn root ->
+      expanded_path == root or root == "/" or String.starts_with?(expanded_path, root <> "/")
+    end)
   end
 
   defp symlink_escapes_to_forbidden_path?(path, roots) do
@@ -234,5 +250,54 @@ defmodule Nex.Agent.Security do
       Path.join(System.get_env("HOME", "~"), "github"),
       "/tmp"
     ]
+  end
+
+  defp configured_allowed_roots(ctx) do
+    default_allowed_roots() ++ workspace_roots(ctx) ++ config_allowed_roots(ctx)
+  end
+
+  defp workspace_roots(ctx) do
+    case ctx_value(ctx, :workspace) || snapshot_workspace(ctx_value(ctx, :runtime_snapshot)) ||
+           configured_workspace(config_from_ctx(ctx)) do
+      workspace when is_binary(workspace) and workspace != "" -> [workspace]
+      _ -> []
+    end
+  end
+
+  defp config_allowed_roots(ctx), do: Config.file_access_allowed_roots(config_from_ctx(ctx))
+
+  defp config_from_ctx(%Config{} = config), do: config
+
+  defp config_from_ctx(ctx) do
+    case ctx_value(ctx, :config) || snapshot_config(ctx_value(ctx, :runtime_snapshot)) do
+      %Config{} = config -> config
+      _ -> nil
+    end
+  end
+
+  defp snapshot_config(%{config: %Config{} = config}), do: config
+  defp snapshot_config(%{"config" => %Config{} = config}), do: config
+  defp snapshot_config(_snapshot), do: nil
+
+  defp snapshot_workspace(%{workspace: workspace}) when is_binary(workspace), do: workspace
+  defp snapshot_workspace(%{"workspace" => workspace}) when is_binary(workspace), do: workspace
+  defp snapshot_workspace(_snapshot), do: nil
+
+  defp configured_workspace(%Config{} = config), do: Config.configured_workspace(config)
+  defp configured_workspace(_config), do: nil
+
+  defp ctx_value(ctx, key) when is_list(ctx),
+    do: Keyword.get(ctx, key) || Keyword.get(ctx, to_string(key))
+
+  defp ctx_value(ctx, key) when is_map(ctx), do: Map.get(ctx, key) || Map.get(ctx, to_string(key))
+  defp ctx_value(_ctx, _key), do: nil
+
+  defp normalize_roots(roots) do
+    roots
+    |> Enum.filter(&is_binary/1)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.map(&Path.expand/1)
+    |> Enum.uniq()
   end
 end

@@ -122,6 +122,46 @@ defmodule Nex.Agent.HooksTest do
     assert hd(fragments)["truncated"] == true
   end
 
+  test "run matches parent chat id pointcut for a child chat", %{workspace: workspace} do
+    hooks = %{
+      entries: [
+        %{
+          "id" => "discord-parent",
+          "enabled" => true,
+          "event" => "prompt.build.before",
+          "pointcut" => %{"channel" => "discord", "parent_chat_id" => "123"},
+          "advice" => %{
+            "kind" => "text",
+            "content" => "Parent channel instructions.",
+            "title" => "Parent Channel",
+            "priority" => 1,
+            "on_error" => "warn"
+          }
+        }
+      ]
+    }
+
+    assert {:ok, [fragment]} =
+             Hooks.run(:prompt_build_before, hooks, %{
+               session_key: "discord:thread-1",
+               channel: "discord",
+               chat_id: "thread-1",
+               parent_chat_id: "123",
+               workspace: workspace
+             })
+
+    assert fragment["id"] == "discord-parent"
+
+    assert {:ok, []} =
+             Hooks.run(:prompt_build_before, hooks, %{
+               session_key: "discord:thread-2",
+               channel: "discord",
+               chat_id: "thread-2",
+               parent_chat_id: "999",
+               workspace: workspace
+             })
+  end
+
   test "file advice rejects directories according to on_error policy", %{workspace: workspace} do
     hooks = %{
       entries: [
@@ -325,6 +365,125 @@ defmodule Nex.Agent.HooksTest do
     assert system =~ "## Context Hook: KB Instructions"
     assert system =~ "# KB Rules"
     assert tools == []
+  end
+
+  test "runner injects matching parent chat hook", %{workspace: workspace, kb_agents: kb_agents} do
+    parent = self()
+
+    snapshot = %Snapshot{
+      version: 1,
+      workspace: workspace,
+      prompt: %{system_prompt: "Base system prompt", diagnostics: [], hash: "prompt"},
+      tools: %{
+        definitions_all: [],
+        definitions_follow_up: [],
+        definitions_subagent: [],
+        definitions_cron: [],
+        hash: "tools"
+      },
+      hooks: %{
+        entries: [
+          %{
+            "id" => "discord-parent",
+            "enabled" => true,
+            "event" => "prompt.build.before",
+            "pointcut" => %{"channel" => "discord", "parent_chat_id" => "123"},
+            "advice" => %{
+              "kind" => "file",
+              "path" => kb_agents,
+              "title" => "Parent Instructions",
+              "priority" => 1,
+              "max_chars" => 12_000,
+              "on_error" => "warn"
+            }
+          }
+        ],
+        diagnostics: [],
+        hash: "hooks",
+        path: Hooks.registry_path(workspace: workspace),
+        version: 1
+      }
+    }
+
+    llm_client = fn messages, opts ->
+      send(parent, {:messages, messages, Keyword.get(opts, :tools, [])})
+      {:ok, %{content: "ok", finish_reason: nil, tool_calls: []}}
+    end
+
+    assert {:ok, "ok", _session} =
+             Runner.run(Session.new("discord:thread-1"), "hello",
+               llm_stream_client: stream_client_from_response(llm_client),
+               runtime_snapshot: snapshot,
+               workspace: workspace,
+               channel: "discord",
+               chat_id: "thread-1",
+               parent_chat_id: "123",
+               skip_consolidation: true,
+               skip_skills: true,
+               tool_allowlist: []
+             )
+
+    assert_receive {:messages, messages, []}
+
+    system = messages |> List.first() |> Map.fetch!("content")
+    assert system =~ "## Context Hook: Parent Instructions"
+    assert system =~ "# KB Rules"
+
+    user = Enum.find(messages, &(Map.get(&1, "role") == "user"))
+    assert user["content"] =~ "Chat Scope ID (parent_chat_id): 123"
+  end
+
+  test "runner tool ctx lets hook default to current parent chat", %{workspace: workspace} do
+    parent = self()
+
+    llm_client = fn messages, _opts ->
+      if Enum.any?(messages, &(&1["role"] == "tool" and &1["name"] == "hook")) do
+        {:ok, %{content: "ok", finish_reason: nil, tool_calls: []}}
+      else
+        send(parent, {:first_messages, messages})
+
+        {:ok,
+         %{
+           content: "",
+           finish_reason: nil,
+           tool_calls: [
+             %{
+               id: "call_hook_default_parent",
+               function: %{
+                 name: "hook",
+                 arguments: %{
+                   "action" => "add_text",
+                   "id" => "default-parent-from-runner",
+                   "content" => "Default parent scope."
+                 }
+               }
+             }
+           ]
+         }}
+      end
+    end
+
+    assert {:ok, "ok", _session} =
+             Runner.run(Session.new("discord:thread-1"), "add parent hook",
+               llm_stream_client: stream_client_from_response(llm_client),
+               workspace: workspace,
+               channel: "discord_main",
+               chat_id: "thread-1",
+               parent_chat_id: "123",
+               skip_consolidation: true,
+               skip_skills: true,
+               tool_allowlist: ["hook"]
+             )
+
+    assert_receive {:first_messages, messages}
+    user = Enum.find(messages, &(Map.get(&1, "role") == "user"))
+    assert user["content"] =~ "Chat Scope ID (parent_chat_id): 123"
+
+    assert [hook] =
+             Hooks.load(workspace: workspace).entries
+             |> Enum.filter(&(Map.get(&1, "id") == "default-parent-from-runner"))
+
+    assert hook["pointcut"] == %{"channel" => "discord_main", "parent_chat_id" => "123"}
   end
 
   test "nonmatching session does not receive hook", %{workspace: workspace, kb_agents: kb_agents} do

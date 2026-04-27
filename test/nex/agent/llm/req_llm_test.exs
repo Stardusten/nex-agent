@@ -150,6 +150,43 @@ defmodule Nex.Agent.LLM.ReqLLMTest do
     assert [%{"role" => "user", "content" => [%{"text" => "refresh memory"}]}] = body["input"]
   end
 
+  test "openai-codex model request options reach responses request body" do
+    parent = self()
+
+    stream_text_fun = fn model_spec, messages, opts ->
+      {:ok, model} = ReqLLM.model(model_spec)
+      {:ok, context} = ReqLLM.Context.normalize(messages, opts)
+      {:ok, request} = Stream.attach_stream(model, context, opts, ReqLLM.Finch)
+      body = request.body |> IO.iodata_to_binary() |> Jason.decode!()
+
+      send(parent, {:codex_body, body})
+      {:ok, %{stream: [%{type: :content, text: "ok"}], finish_reason: :stop}}
+    end
+
+    assert :ok =
+             AgentReqLLM.stream(
+               [
+                 %{"role" => "system", "content" => "You are the project copilot."},
+                 %{"role" => "user", "content" => "hello from codex"}
+               ],
+               [
+                 provider: :openai_codex,
+                 model: "gpt-5.5",
+                 api_key: "oauth-access-token",
+                 provider_options: [reasoning_effort: "xhigh", service_tier: "fast"],
+                 req_llm_stream_text_fun: stream_text_fun
+               ],
+               fn _event -> :ok end
+             )
+
+    assert_receive {:codex_body, body}
+
+    assert body["instructions"] == "You are the project copilot."
+    assert body["reasoning"] == %{"effort" => "xhigh"}
+    assert body["service_tier"] == "fast"
+    assert body["store"] == false
+  end
+
   test "openai-codex stream adapter disables server-side response chaining" do
     model =
       ReqLLM.model!(%{

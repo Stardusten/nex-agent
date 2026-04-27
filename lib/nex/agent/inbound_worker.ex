@@ -931,6 +931,7 @@ defmodule Nex.Agent.InboundWorker do
 
     parent = self()
     {channel, chat_id} = parse_session_key(session_key)
+    metadata = extract_metadata(envelope)
 
     observe_follow_up("inbound.follow_up.started", :info, envelope, %{
       "mode" => Atom.to_string(mode)
@@ -950,8 +951,9 @@ defmodule Nex.Agent.InboundWorker do
             tools_filter: :follow_up,
             schedule_memory_refresh: false,
             skip_skills: true,
+            parent_chat_id: Map.get(metadata, "parent_chat_id"),
             metadata:
-              (envelope.metadata || %{})
+              metadata
               |> Map.new()
               |> Map.put("_follow_up", true)
               |> Map.put("follow_up_question", question)
@@ -997,6 +999,7 @@ defmodule Nex.Agent.InboundWorker do
     from_cron = get_in(envelope.metadata, ["_from_cron"]) == true
     from_subagent = get_in(envelope.metadata, ["_from_subagent"]) == true
     attachments = envelope.attachments
+    metadata = extract_metadata(envelope)
     stream_key = stream_key(key, run.id)
 
     cron_opts =
@@ -1014,7 +1017,7 @@ defmodule Nex.Agent.InboundWorker do
       Nex.Agent.PersonalSummary.ensure_default_jobs(
         channel,
         chat_id,
-        metadata: extract_metadata(envelope),
+        metadata: metadata,
         workspace: workspace
       )
     end
@@ -1041,6 +1044,7 @@ defmodule Nex.Agent.InboundWorker do
               owner_run_id: run.id,
               cancel_ref: run.cancel_ref,
               workspace: workspace,
+              parent_chat_id: Map.get(metadata, "parent_chat_id"),
               schedule_memory_refresh: false
             ]
             |> maybe_put_opt(:media, attachments)

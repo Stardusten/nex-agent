@@ -308,12 +308,20 @@ defmodule Nex.Agent.ContextBuilder do
     cwd = Keyword.get(opts, :cwd)
     repo_root = git_root(cwd)
     config = Keyword.get(opts, :config)
+    parent_chat_id = Keyword.get(opts, :parent_chat_id)
 
     lines =
       [@runtime_context_tag, "Current Time: #{time_str}"]
       |> then(fn lines ->
         if channel && chat_id do
           lines ++ ["Channel: #{channel}", "Chat ID: #{chat_id}"]
+        else
+          lines
+        end
+      end)
+      |> then(fn lines ->
+        if present?(parent_chat_id) do
+          lines ++ ["Chat Scope ID (parent_chat_id): #{parent_chat_id}"]
         else
           lines
         end
@@ -342,6 +350,10 @@ defmodule Nex.Agent.ContextBuilder do
 
     Enum.join(lines, "\n")
   end
+
+  defp present?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present?(nil), do: false
+  defp present?(_value), do: true
 
   defp channel_runtime_lines(channel, %Config{} = config) do
     channel_runtime = Config.channel_runtime(config, channel)

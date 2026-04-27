@@ -46,6 +46,7 @@ defmodule Nex.Agent.LLM.Providers.OpenAICodexCustom do
   @impl true
   def prepare_messages_and_options(messages, _profile, options) do
     {instructions, filtered_messages} = Helpers.extract_system_instructions(messages)
+    options = promote_model_request_options(options)
 
     prepared_options =
       options
@@ -69,4 +70,19 @@ defmodule Nex.Agent.LLM.Providers.OpenAICodexCustom do
 
   defp effective_base_url(nil), do: default_base_url()
   defp effective_base_url(base_url) when is_binary(base_url), do: Helpers.trim_base_url(base_url)
+
+  defp promote_model_request_options(options) do
+    options
+    |> promote_provider_option(:reasoning_effort)
+    |> promote_provider_option(:service_tier)
+  end
+
+  defp promote_provider_option(options, key) do
+    provider_options = Keyword.get(options, :provider_options, [])
+
+    case {Keyword.get(options, key), Keyword.get(provider_options, key)} do
+      {nil, value} when not is_nil(value) -> Keyword.put(options, key, value)
+      _ -> options
+    end
+  end
 end

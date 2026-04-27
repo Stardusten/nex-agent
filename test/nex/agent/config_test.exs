@@ -59,6 +59,35 @@ defmodule Nex.Agent.ConfigTest do
            } = Config.subagent_profile_config(config)
   end
 
+  test "model entries carry provider-specific request options" do
+    config =
+      Config.from_map(%{
+        full_config()
+        | "model" => %{
+            "default_model" => "gpt-5.5-xhigh-fast",
+            "models" => %{
+              "gpt-5.5-xhigh-fast" => %{
+                "provider" => "openai-codex",
+                "id" => "gpt-5.5",
+                "reasoning_effort" => "xhigh",
+                "service_tier" => "fast"
+              }
+            }
+          }
+      })
+
+    assert %{
+             model_key: "gpt-5.5-xhigh-fast",
+             model_id: "gpt-5.5",
+             provider_key: "openai-codex",
+             provider_type: "openai-codex",
+             provider_options: provider_options
+           } = Config.default_model_runtime(config)
+
+    assert provider_options[:reasoning_effort] == "xhigh"
+    assert provider_options[:service_tier] == "fast"
+  end
+
   test "memory model falls back to cheap and then default model role" do
     config =
       Config.from_map(%{
@@ -355,6 +384,22 @@ defmodule Nex.Agent.ConfigTest do
              "provider" => "codex",
              "output_format" => "webp"
            }
+  end
+
+  test "file_access config normalizes allowed roots" do
+    root = Path.expand("../nex-agent-file-access-root", File.cwd!())
+
+    config =
+      Config.from_map(%{
+        full_config()
+        | "tools" => %{
+            "file_access" => %{
+              "allowed_roots" => [" #{root} ", "", 42, root]
+            }
+          }
+      })
+
+    assert Config.file_access_allowed_roots(config) == [root]
   end
 
   defp full_config do

@@ -1,6 +1,7 @@
 defmodule Nex.Agent.FindToolTest do
   use ExUnit.Case, async: false
 
+  alias Nex.Agent.Config
   alias Nex.Agent.Tool.Find
 
   test "find returns structured matches and truncation metadata" do
@@ -27,5 +28,35 @@ defmodule Nex.Agent.FindToolTest do
     assert match.line == 2
     assert is_integer(match.column)
     assert match.preview =~ "needle"
+  end
+
+  test "find honors file_access allowed roots from tool context config" do
+    previous_allowed_roots = System.get_env("NEX_ALLOWED_ROOTS")
+    System.delete_env("NEX_ALLOWED_ROOTS")
+
+    root =
+      Path.expand(
+        "../#{Path.basename(File.cwd!())}-find-allowed-#{System.unique_integer([:positive])}",
+        File.cwd!()
+      )
+
+    File.mkdir_p!(root)
+    File.write!(Path.join(root, "external.txt"), "needle\n")
+
+    on_exit(fn ->
+      if previous_allowed_roots,
+        do: System.put_env("NEX_ALLOWED_ROOTS", previous_allowed_roots),
+        else: System.delete_env("NEX_ALLOWED_ROOTS")
+
+      File.rm_rf!(root)
+    end)
+
+    assert {:error, message} = Find.execute(%{"query" => "needle", "path" => root}, %{})
+    assert message =~ "Path not within allowed roots"
+
+    config = Config.from_map(%{"tools" => %{"file_access" => %{"allowed_roots" => [root]}}})
+
+    assert {:ok, result} = Find.execute(%{"query" => "needle", "path" => root}, %{config: config})
+    assert [%{preview: "needle"}] = result.matches
   end
 end

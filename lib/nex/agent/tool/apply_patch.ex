@@ -32,9 +32,9 @@ defmodule Nex.Agent.Tool.ApplyPatch do
     }
   end
 
-  def execute(%{"patch" => patch}, _ctx) when is_binary(patch) and patch != "" do
+  def execute(%{"patch" => patch}, ctx) when is_binary(patch) and patch != "" do
     with {:ok, operations} <- parse_patch(patch),
-         {:ok, prepared_ops} <- prepare_operations(operations),
+         {:ok, prepared_ops} <- prepare_operations(operations, ctx),
          :ok <- apply_operations(prepared_ops) do
       {:ok,
        %{
@@ -210,10 +210,10 @@ defmodule Nex.Agent.Tool.ApplyPatch do
     end)
   end
 
-  defp prepare_operations(operations) do
+  defp prepare_operations(operations, ctx) do
     with :ok <- ensure_unique_targets(operations) do
       Enum.reduce_while(operations, {:ok, []}, fn operation, {:ok, acc} ->
-        case prepare_operation(operation) do
+        case prepare_operation(operation, ctx) do
           {:ok, prepared} -> {:cont, {:ok, [prepared | acc]}}
           {:error, reason} -> {:halt, {:error, reason}}
         end
@@ -241,8 +241,8 @@ defmodule Nex.Agent.Tool.ApplyPatch do
     end
   end
 
-  defp prepare_operation(%{type: :add, path: path, content: content}) do
-    with {:ok, expanded} <- validate_mutation_target(path),
+  defp prepare_operation(%{type: :add, path: path, content: content}, ctx) do
+    with {:ok, expanded} <- validate_mutation_target(path, ctx),
          false <- File.exists?(expanded) do
       {:ok, %{type: :add, path: expanded, content: content}}
     else
@@ -251,8 +251,8 @@ defmodule Nex.Agent.Tool.ApplyPatch do
     end
   end
 
-  defp prepare_operation(%{type: :delete, path: path}) do
-    with {:ok, expanded} <- validate_mutation_target(path),
+  defp prepare_operation(%{type: :delete, path: path}, ctx) do
+    with {:ok, expanded} <- validate_mutation_target(path, ctx),
          true <- File.regular?(expanded) do
       {:ok, %{type: :delete, path: expanded, original_content: File.read!(expanded)}}
     else
@@ -261,10 +261,10 @@ defmodule Nex.Agent.Tool.ApplyPatch do
     end
   end
 
-  defp prepare_operation(%{type: :update, path: path, move_to: move_to, hunks: hunks}) do
-    with {:ok, expanded} <- validate_mutation_target(path),
+  defp prepare_operation(%{type: :update, path: path, move_to: move_to, hunks: hunks}, ctx) do
+    with {:ok, expanded} <- validate_mutation_target(path, ctx),
          true <- File.regular?(expanded),
-         {:ok, destination} <- validate_update_destination(expanded, move_to),
+         {:ok, destination} <- validate_update_destination(expanded, move_to, ctx),
          {:ok, original_content} <- File.read(expanded),
          {:ok, updated_content} <- apply_hunks(original_content, hunks) do
       {:ok,
@@ -281,10 +281,10 @@ defmodule Nex.Agent.Tool.ApplyPatch do
     end
   end
 
-  defp validate_update_destination(source, nil), do: {:ok, source}
+  defp validate_update_destination(source, nil, _ctx), do: {:ok, source}
 
-  defp validate_update_destination(source, move_to) do
-    with {:ok, destination} <- validate_mutation_target(move_to) do
+  defp validate_update_destination(source, move_to, ctx) do
+    with {:ok, destination} <- validate_mutation_target(move_to, ctx) do
       cond do
         destination == source ->
           {:ok, source}
@@ -298,8 +298,8 @@ defmodule Nex.Agent.Tool.ApplyPatch do
     end
   end
 
-  defp validate_mutation_target(path) do
-    with {:ok, expanded} <- Security.validate_write_path(path),
+  defp validate_mutation_target(path, ctx) do
+    with {:ok, expanded} <- Security.validate_write_path(path, ctx),
          :ok <- reject_profile_shadow(expanded) do
       {:ok, expanded}
     else

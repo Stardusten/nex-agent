@@ -1,6 +1,7 @@
 defmodule Nex.Agent.ReadToolTest do
   use ExUnit.Case, async: false
 
+  alias Nex.Agent.Config
   alias Nex.Agent.Tool.Read
 
   test "read returns structured file pagination metadata" do
@@ -89,5 +90,36 @@ defmodule Nex.Agent.ReadToolTest do
     assert second_page.entries |> Enum.map(& &1.path) == ["c.txt", "d.txt"]
     assert second_page.has_more == false
     assert second_page.next_start_line == nil
+  end
+
+  test "read honors file_access allowed roots from tool context config" do
+    previous_allowed_roots = System.get_env("NEX_ALLOWED_ROOTS")
+    System.delete_env("NEX_ALLOWED_ROOTS")
+
+    root =
+      Path.expand(
+        "../#{Path.basename(File.cwd!())}-read-allowed-#{System.unique_integer([:positive])}",
+        File.cwd!()
+      )
+
+    path = Path.join(root, "external.txt")
+    File.mkdir_p!(root)
+    File.write!(path, "external\n")
+
+    on_exit(fn ->
+      if previous_allowed_roots,
+        do: System.put_env("NEX_ALLOWED_ROOTS", previous_allowed_roots),
+        else: System.delete_env("NEX_ALLOWED_ROOTS")
+
+      File.rm_rf!(root)
+    end)
+
+    assert {:error, message} = Read.execute(%{"path" => path}, %{})
+    assert message =~ "Path not within allowed roots"
+
+    config = Config.from_map(%{"tools" => %{"file_access" => %{"allowed_roots" => [root]}}})
+
+    assert {:ok, result} = Read.execute(%{"path" => path}, %{config: config})
+    assert result.content == "external\n"
   end
 end
