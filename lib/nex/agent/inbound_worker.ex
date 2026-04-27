@@ -1368,6 +1368,7 @@ defmodule Nex.Agent.InboundWorker do
       model: model_runtime && model_runtime.model_id,
       api_key: model_runtime && model_runtime.api_key,
       base_url: model_runtime && model_runtime.base_url,
+      model_runtime: model_runtime,
       provider_options: model_runtime && model_runtime.provider_options,
       tools: config.tools,
       workspace: workspace,

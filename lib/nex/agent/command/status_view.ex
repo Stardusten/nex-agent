@@ -10,7 +10,6 @@ defmodule Nex.Agent.Command.StatusView do
   @history_limit 50
   @status_model_limit 6
   @role_model_keys ["default_model", "cheap_model", "advisor_model", "memory_model"]
-  @context_limit_keys ["context_window", "context_tokens", "max_context_tokens", "context_limit"]
 
   @type model_source :: :session_override | :default | :first_available | :none
 
@@ -413,11 +412,10 @@ defmodule Nex.Agent.Command.StatusView do
 
   defp context_limit(_config, nil), do: nil
 
-  defp context_limit(%Config{} = config, %{model_key: model_key}) do
-    model_config = get_in(config.model || %{}, ["models", model_key]) || %{}
-
-    @context_limit_keys
-    |> Enum.find_value(fn key -> normalize_positive_integer(Map.get(model_config, key)) end)
+  defp context_limit(_config, runtime) when is_map(runtime) do
+    runtime
+    |> Map.get(:context_window, Map.get(runtime, "context_window"))
+    |> normalize_positive_integer()
   end
 
   defp normalize_positive_integer(value) when is_integer(value) and value > 0, do: value

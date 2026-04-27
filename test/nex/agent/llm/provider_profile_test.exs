@@ -150,6 +150,16 @@ defmodule Nex.Agent.LLM.ProviderProfileTest do
     assert function_target(ProviderProfile.stream_text_fun(custom)) == {ReqLLM, :stream_text, 3}
   end
 
+  test "deepseek-compatible openai base URL uses reasoning roundtrip stream wrapper" do
+    deepseek = ProviderProfile.for(:openai, base_url: "https://api.deepseek.com/v1")
+    hy3 = ProviderProfile.for(:openai, base_url: "https://hy3.example.com/v1")
+
+    assert function_target(ProviderProfile.stream_text_fun(deepseek)) ==
+             {Nex.Agent.LLM.Providers.DeepSeekChatStream, :stream_text, 3}
+
+    assert function_target(ProviderProfile.stream_text_fun(hy3)) == {ReqLLM, :stream_text, 3}
+  end
+
   test "unknown provider uses default adapter without raising" do
     profile = ProviderProfile.for(:future_provider, base_url: "https://future.example.com/v1")
 

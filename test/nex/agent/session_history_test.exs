@@ -14,6 +14,7 @@ defmodule Nex.Agent.SessionHistoryTest do
 
     assert hd(history)["role"] == "assistant"
     assert get_in(hd(history), ["tool_calls"]) |> hd() |> Map.get("id") == "read_19"
+    assert hd(history)["reasoning_content"] == "reasoning for tool call"
     assert Enum.at(history, 1)["role"] == "tool"
     assert Enum.at(history, 1)["tool_call_id"] == "read_19"
   end
@@ -41,6 +42,7 @@ defmodule Nex.Agent.SessionHistoryTest do
         "role" => "assistant",
         "content" => "继续看错误处理部分。",
         "timestamp" => now,
+        "reasoning_content" => "reasoning for tool call",
         "tool_calls" => [
           %{
             "id" => tool_call_id,

@@ -21,6 +21,7 @@ defmodule Nex.Agent do
           model: String.t(),
           api_key: String.t() | nil,
           base_url: String.t() | nil,
+          model_runtime: Config.model_runtime() | nil,
           provider_options: keyword(),
           tools: map(),
           workspace: String.t(),
@@ -36,6 +37,7 @@ defmodule Nex.Agent do
     :model,
     :api_key,
     :base_url,
+    :model_runtime,
     :provider_options,
     :tools,
     :workspace,
@@ -57,7 +59,8 @@ defmodule Nex.Agent do
     :ok = Skills.load()
 
     default_model_runtime =
-      if runtime_config, do: Config.default_model_runtime(runtime_config)
+      Keyword.get(opts, :model_runtime) ||
+        if(runtime_config, do: Config.default_model_runtime(runtime_config))
 
     provider =
       Keyword.get(opts, :provider) ||
@@ -108,6 +111,7 @@ defmodule Nex.Agent do
          model: model,
          api_key: api_key,
          base_url: base_url,
+         model_runtime: default_model_runtime,
          provider_options: provider_options,
          tools: tools,
          workspace: workspace,
@@ -126,6 +130,7 @@ defmodule Nex.Agent do
     model = Keyword.get(opts, :model, agent.model)
     api_key = Keyword.get(opts, :api_key) || agent.api_key || default_api_key(provider)
     base_url = Keyword.get(opts, :base_url, agent.base_url || default_base_url(provider))
+    model_runtime = Keyword.get(opts, :model_runtime, agent.model_runtime)
     provider_options = Keyword.get(opts, :provider_options, agent.provider_options || [])
     workspace = Keyword.get(opts, :workspace, agent.workspace || Workspace.root())
     cwd = Keyword.get(opts, :cwd, agent.cwd || File.cwd!())
@@ -162,6 +167,7 @@ defmodule Nex.Agent do
         model: model,
         api_key: api_key,
         base_url: base_url,
+        model_runtime: model_runtime,
         provider_options: provider_options,
         tools: tools,
         cwd: cwd,
@@ -206,6 +212,7 @@ defmodule Nex.Agent do
            | session: session,
              workspace: workspace,
              cwd: cwd,
+             model_runtime: model_runtime,
              provider_options: provider_options,
              runtime_version: runtime_snapshot && runtime_snapshot.version
          }}
@@ -226,6 +233,7 @@ defmodule Nex.Agent do
            | session: session,
              workspace: workspace,
              cwd: cwd,
+             model_runtime: model_runtime,
              provider_options: provider_options,
              runtime_version: runtime_snapshot && runtime_snapshot.version
          }}

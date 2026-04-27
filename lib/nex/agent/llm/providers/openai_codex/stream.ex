@@ -31,13 +31,17 @@ defmodule Nex.Agent.LLM.Providers.OpenAICodex.Stream do
 
   @spec decode_stream_event(map(), LLMDB.Model.t()) :: [ReqLLM.StreamChunk.t()]
   def decode_stream_event(event, model) do
-    ReqLLM.Providers.OpenAI.ResponsesAPI.decode_stream_event(event, model)
+    ReqLLM.Providers.OpenAI.ResponsesAPI.decode_stream_event(event, model) ++
+      ResponsesPolicy.compaction_chunks(event)
   end
 
   @spec decode_stream_event(map(), LLMDB.Model.t(), map() | nil) ::
           {[ReqLLM.StreamChunk.t()], map()}
   def decode_stream_event(event, model, state) do
-    ReqLLM.Providers.OpenAI.ResponsesAPI.decode_stream_event(event, model, state)
+    {chunks, state} =
+      ReqLLM.Providers.OpenAI.ResponsesAPI.decode_stream_event(event, model, state)
+
+    {chunks ++ ResponsesPolicy.compaction_chunks(event), state}
   end
 
   defp rewrite_request_body(%{body: raw_body} = request, opts) do

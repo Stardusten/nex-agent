@@ -291,6 +291,7 @@ defmodule Nex.Agent.Subagent do
         model: model,
         api_key: api_key,
         base_url: base_url,
+        model_runtime: model_runtime,
         provider_options: provider_options,
         max_iterations:
           Keyword.get(opts, :max_iterations) || profile.max_iterations || @max_subagent_iterations,

@@ -44,5 +44,27 @@ defmodule Nex.Agent.LLM.Providers.Default do
   def model_spec(profile, model), do: Helpers.default_model_spec(profile, model)
 
   @impl true
+  def stream_text_fun(%ProviderProfile{resolved_provider: :openai, base_url: base_url}) do
+    if deepseek_base_url?(base_url) do
+      &Nex.Agent.LLM.Providers.DeepSeekChatStream.stream_text/3
+    else
+      &ReqLLM.stream_text/3
+    end
+  end
+
   def stream_text_fun(_profile), do: &ReqLLM.stream_text/3
+
+  defp deepseek_base_url?(base_url) when is_binary(base_url) do
+    host =
+      case URI.parse(base_url) do
+        %URI{host: host} when is_binary(host) -> host
+        _ -> base_url
+      end
+
+    host
+    |> String.downcase()
+    |> String.contains?("deepseek")
+  end
+
+  defp deepseek_base_url?(_base_url), do: false
 end

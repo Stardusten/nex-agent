@@ -47,12 +47,17 @@ defmodule Nex.Agent.LLM.ReqLLM do
             end)
 
           tool_calls = summarized_tool_calls(state)
+          metadata = summarized_metadata(state)
 
-          emit_stream_done(callback, tool_calls, %{
-            finish_reason: normalize_finish_reason(StreamResponse.finish_reason(response)),
-            usage: StreamResponse.usage(response),
-            model: extract_stream_model(response)
-          })
+          emit_stream_done(
+            callback,
+            tool_calls,
+            Map.merge(metadata, %{
+              finish_reason: normalize_finish_reason(StreamResponse.finish_reason(response)),
+              usage: StreamResponse.usage(response),
+              model: extract_stream_model(response)
+            })
+          )
 
           duration_ms = System.monotonic_time(:millisecond) - started_at
 
@@ -74,15 +79,20 @@ defmodule Nex.Agent.LLM.ReqLLM do
             )
 
           tool_calls = summarized_tool_calls(state)
+          metadata = summarized_metadata(state)
 
-          emit_stream_done(callback, tool_calls, %{
-            finish_reason:
-              normalize_finish_reason(
-                Map.get(response, :finish_reason) || Map.get(response, "finish_reason")
-              ),
-            usage: Map.get(response, :usage) || Map.get(response, "usage"),
-            model: extract_stream_model(response)
-          })
+          emit_stream_done(
+            callback,
+            tool_calls,
+            Map.merge(metadata, %{
+              finish_reason:
+                normalize_finish_reason(
+                  Map.get(response, :finish_reason) || Map.get(response, "finish_reason")
+                ),
+              usage: Map.get(response, :usage) || Map.get(response, "usage"),
+              model: extract_stream_model(response)
+            })
+          )
 
           duration_ms = System.monotonic_time(:millisecond) - started_at
 
@@ -312,6 +322,31 @@ defmodule Nex.Agent.LLM.ReqLLM do
   end
 
   defp summarized_tool_calls(_), do: []
+
+  defp summarized_metadata(%{stream_chunks: chunks}) when is_list(chunks) do
+    chunks
+    |> Enum.reverse()
+    |> Enum.reduce(%{}, fn
+      %StreamChunk{type: :meta, metadata: metadata}, acc when is_map(metadata) ->
+        merge_stream_metadata(acc, metadata)
+
+      _chunk, acc ->
+        acc
+    end)
+  end
+
+  defp summarized_metadata(_), do: %{}
+
+  defp merge_stream_metadata(acc, metadata) when is_map(metadata) do
+    Enum.reduce(metadata, acc, fn
+      {key, value}, acc when key in [:context_compaction_items, "context_compaction_items"] ->
+        existing = Map.get(acc, :context_compaction_items, [])
+        Map.put(acc, :context_compaction_items, existing ++ List.wrap(value))
+
+      {key, value}, acc ->
+        Map.put(acc, key, value)
+    end)
+  end
 
   defp summary_chunk(%StreamChunk{} = chunk), do: chunk
 

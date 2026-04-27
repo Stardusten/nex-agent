@@ -7,6 +7,7 @@ defmodule Nex.Agent.Runner do
     Bus,
     Config,
     ContextBuilder,
+    ContextWindow,
     Evolution,
     Hooks,
     RunControl,
@@ -60,7 +61,8 @@ defmodule Nex.Agent.Runner do
     max_iterations = Keyword.get(opts, :max_iterations, @default_max_iterations)
 
     default_model_runtime =
-      if runtime_config, do: Nex.Agent.Config.default_model_runtime(runtime_config)
+      Keyword.get(opts, :model_runtime) ||
+        if(runtime_config, do: Nex.Agent.Config.default_model_runtime(runtime_config))
 
     provider =
       Keyword.get(opts, :provider) ||
@@ -85,6 +87,7 @@ defmodule Nex.Agent.Runner do
       |> Keyword.put(:workspace, workspace)
       |> Keyword.put(:provider, provider)
       |> Keyword.put(:model, model)
+      |> Keyword.put(:model_runtime, default_model_runtime)
       |> Keyword.put(:provider_options, provider_options)
       |> Keyword.put(:run_id, run_id)
       |> Keyword.put(:cancel_ref, cancel_ref)
@@ -99,9 +102,6 @@ defmodule Nex.Agent.Runner do
     {session, runtime_system_messages, prepared_run} =
       prepare_skill_runtime_turn(session, prompt, runtime_system_messages, opts)
 
-    history_limit = Keyword.get(opts, :history_limit, @memory_window)
-    history = Session.get_history(session, history_limit)
-
     channel = Keyword.get(opts, :channel, "feishu")
     chat_id = Keyword.get(opts, :chat_id, "default")
     media = Keyword.get(opts, :media)
@@ -113,7 +113,6 @@ defmodule Nex.Agent.Runner do
 
     case build_initial_messages(
            session,
-           history,
            prompt,
            channel,
            chat_id,
@@ -124,13 +123,16 @@ defmodule Nex.Agent.Runner do
            runtime_config,
            opts
          ) do
-      {:ok, messages} ->
+      {:ok, messages, history_message_count} ->
+        provider_options = ContextWindow.prepare_provider_options(opts, session)
+        opts = Keyword.put(opts, :provider_options, provider_options)
+
         do_run_with_messages(
           session,
           messages,
           prompt,
           initial_message_count,
-          length(history),
+          history_message_count,
           max_iterations,
           prepared_run,
           runtime_system_messages,
@@ -248,7 +250,6 @@ defmodule Nex.Agent.Runner do
 
   defp build_initial_messages(
          session,
-         history,
          prompt,
          channel,
          chat_id,
@@ -270,17 +271,37 @@ defmodule Nex.Agent.Runner do
 
     case Hooks.run(:prompt_build_before, runtime_hooks(runtime_snapshot), hook_ctx) do
       {:ok, context_hook_fragments} ->
-        {:ok,
-         ContextBuilder.build_messages(history, prompt, channel, chat_id, media,
-           system_prompt: runtime_system_prompt(runtime_snapshot),
-           skip_skills: Keyword.get(opts, :skip_skills, false),
-           workspace: workspace,
-           runtime_system_messages: runtime_system_messages,
-           context_hook_fragments: context_hook_fragments,
-           parent_chat_id: hook_ctx.parent_chat_id,
-           cwd: Keyword.get(opts, :cwd),
-           config: runtime_config
-         )}
+        build_opts = [
+          system_prompt: runtime_system_prompt(runtime_snapshot),
+          skip_skills: Keyword.get(opts, :skip_skills, false),
+          workspace: workspace,
+          runtime_system_messages: runtime_system_messages,
+          context_hook_fragments: context_hook_fragments,
+          parent_chat_id: hook_ctx.parent_chat_id,
+          cwd: Keyword.get(opts, :cwd),
+          config: runtime_config
+        ]
+
+        {history, context_window_attrs} =
+          ContextWindow.select_history(
+            session,
+            prompt,
+            channel,
+            chat_id,
+            media,
+            build_opts,
+            Keyword.put(opts, :default_history_limit, @memory_window)
+          )
+
+        emit_runner_lifecycle(
+          :info,
+          "runner.context_window.projected",
+          context_window_attrs,
+          opts
+        )
+
+        {:ok, ContextBuilder.build_messages(history, prompt, channel, chat_id, media, build_opts),
+         length(history)}
 
       {:error, reason} ->
         {:error, reason}
@@ -618,7 +639,7 @@ defmodule Nex.Agent.Runner do
          content,
          tool_calls,
          reasoning_content,
-         _response,
+         response,
          iteration,
          max_iterations,
          _on_progress,
@@ -642,11 +663,14 @@ defmodule Nex.Agent.Runner do
           tool_calls: tool_call_dicts,
           reasoning_content: reasoning_content
         )
+        |> ContextWindow.store_response_compaction(response, opts)
 
       {new_messages, results, session, opts} =
         execute_tools(session, messages, tool_call_dicts, opts)
 
       maybe_publish_tool_results(results, opts)
+
+      {new_messages, opts} = ContextWindow.compact_loop_messages(new_messages, response, opts)
 
       run_loop(session, new_messages, iteration + 1, max_iterations, opts)
     else
@@ -722,11 +746,14 @@ defmodule Nex.Agent.Runner do
             tool_calls: tool_call_dicts,
             reasoning_content: reasoning_content
           )
+          |> ContextWindow.store_response_compaction(response, opts)
 
         {new_messages, results, session, opts} =
           execute_tools(session, messages, tool_call_dicts, opts)
 
         maybe_publish_tool_results(results, opts)
+
+        {new_messages, opts} = ContextWindow.compact_loop_messages(new_messages, response, opts)
 
         message_sent_to_current_channel =
           Enum.any?(results, fn {_id, name, _r, args} ->
@@ -825,6 +852,7 @@ defmodule Nex.Agent.Runner do
       Session.add_message(session, "assistant", effective_text,
         reasoning_content: reasoning_content
       )
+      |> ContextWindow.store_response_compaction(response, opts)
 
     final_content =
       if Keyword.get(opts, :_suppress_current_reply_stream, false), do: nil, else: effective_text

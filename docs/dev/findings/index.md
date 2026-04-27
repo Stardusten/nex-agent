@@ -17,3 +17,4 @@ Findings are settled architecture or technical conclusions. Draft design notes a
 - [2026-04-25 Newmsg Literal Boundary](./2026-04-25-newmsg-literal-boundary.md)
 - [2026-04-25 Memory System Cost, Visibility, And Triggering](./2026-04-25-memory-system-cost-visibility-and-triggering.md)
 - [2026-04-27 File Access Allowed Roots](./2026-04-27-file-access-allowed-roots.md)
+- [2026-04-27 Model Context Window And Native Compaction](./2026-04-27-model-context-window-and-native-compaction.md)

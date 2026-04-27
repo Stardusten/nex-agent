@@ -349,6 +349,7 @@ defmodule Nex.Agent.Tool.AskAdvisor do
       model: runtime_value(model_runtime, :model_id) || ProviderProfile.default_model(provider),
       api_key: runtime_value(model_runtime, :api_key),
       base_url: runtime_value(model_runtime, :base_url),
+      model_runtime: model_runtime,
       provider_options: Keyword.merge(provider_options, profile.provider_options || []),
       max_iterations: profile.max_iterations || @max_advisor_iterations,
       channel: "system",

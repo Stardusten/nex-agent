@@ -175,6 +175,14 @@ Phase 17 is now implemented as the first memory-system polish step:
 - `memory.write.changed`, `memory.notice.sent/skipped`, and refresh job observations carry update metadata
 - trigger-frequency changes, ops-based merge, dedupe/staleness, and undo/edit affordances remain deferred
 
+Model context-window policy is now model runtime metadata:
+
+- configured models may carry `context_window`, `auto_compact_token_limit`, and `context_strategy`
+- `Nex.Agent.ContextWindow` is the single projection boundary for local history trimming and provider-native compaction
+- `Runner` uses that projection before the first LLM request and again inside tool-loop recursion when native compaction emits opaque items
+- OpenAI Codex Responses payload policy can inject `context_management` and carry returned `compaction` items into the next request
+- global `context` / ratio-style context config is not part of the current contract
+
 Docs/dev workflow is split into four lanes:
 
 - `designs/` keeps design drafts, alternatives, tradeoffs, and open questions
@@ -218,6 +226,7 @@ Docs/dev workflow is split into four lanes:
 - [2026-04-16 Streaming Phase4 Polish](../findings/2026-04-16-streaming-phase4-polish.md)
 - [2026-04-17 Feishu Streaming Converter Boundary](../findings/2026-04-17-feishu-streaming-converter-boundary.md)
 - [2026-04-16 OpenAI Native Computer Use Architecture](../findings/2026-04-16-openai-native-computer-use-architecture.md)
+- [2026-04-27 Model Context Window And Native Compaction](../findings/2026-04-27-model-context-window-and-native-compaction.md)
 - [2026-04-25 Local Tool Backend Selection](../findings/2026-04-25-local-tool-backend-selection.md)
 - [2026-04-25 Memory System Cost, Visibility, And Triggering](../findings/2026-04-25-memory-system-cost-visibility-and-triggering.md)
 - [2026-04-27 File Access Allowed Roots](../findings/2026-04-27-file-access-allowed-roots.md)

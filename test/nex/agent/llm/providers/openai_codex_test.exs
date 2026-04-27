@@ -118,6 +118,80 @@ defmodule Nex.Agent.LLM.Providers.OpenAICodexTest do
     assert body["tool_choice"] == %{"type" => "function", "name" => "save_memory"}
   end
 
+  test "OAuth request body injects native compaction controls and items" do
+    model =
+      ReqLLM.model!(%{
+        id: "gpt-5.5",
+        provider: :openai,
+        base_url: "https://chatgpt.com/backend-api/codex"
+      })
+
+    context = ReqLLM.Context.new([ReqLLM.Context.user("continue the task")])
+
+    compaction_item = %{
+      "id" => "cmp_123",
+      "type" => "compaction",
+      "encrypted_content" => "opaque"
+    }
+
+    assert {:ok, request} =
+             Stream.attach_stream(
+               model,
+               context,
+               [
+                 base_url: "https://chatgpt.com/backend-api/codex",
+                 provider_options: [
+                   auth_mode: :oauth,
+                   access_token: "oauth-access-token",
+                   instructions: "You are a coding assistant.",
+                   context_management: [%{type: :compaction, compact_threshold: 190_000}],
+                   context_compaction_items: [compaction_item]
+                 ]
+               ],
+               ReqLLM.Finch
+             )
+
+    body = request.body |> IO.iodata_to_binary() |> Jason.decode!()
+
+    assert body["context_management"] == [
+             %{"type" => "compaction", "compact_threshold" => 190_000}
+           ]
+
+    assert hd(body["input"]) == compaction_item
+    assert Enum.at(body["input"], 1)["role"] == "user"
+  end
+
+  test "stream decoder emits compaction output items as response metadata" do
+    model =
+      ReqLLM.model!(%{
+        id: "gpt-5.5",
+        provider: :openai,
+        base_url: "https://chatgpt.com/backend-api/codex"
+      })
+
+    compaction_item = %{
+      "id" => "cmp_123",
+      "type" => "compaction",
+      "encrypted_content" => "opaque"
+    }
+
+    chunks =
+      Stream.decode_stream_event(
+        %{
+          data: %{
+            "type" => "response.output_item.done",
+            "item" => compaction_item
+          }
+        },
+        model
+      )
+
+    assert %ReqLLM.StreamChunk{
+             type: :meta,
+             metadata: %{context_compaction_items: [^compaction_item]}
+           } = List.last(chunks)
+  end
+
   test "OAuth request body keeps web_search as function tool contract" do
     model =
       ReqLLM.model!(%{

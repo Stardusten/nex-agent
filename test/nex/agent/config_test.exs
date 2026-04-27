@@ -69,6 +69,9 @@ defmodule Nex.Agent.ConfigTest do
               "gpt-5.5-xhigh-fast" => %{
                 "provider" => "openai-codex",
                 "id" => "gpt-5.5",
+                "context_window" => 272_000,
+                "auto_compact_token_limit" => 190_000,
+                "context_strategy" => "server_side_then_recent",
                 "reasoning_effort" => "xhigh",
                 "service_tier" => "fast"
               }
@@ -81,11 +84,17 @@ defmodule Nex.Agent.ConfigTest do
              model_id: "gpt-5.5",
              provider_key: "openai-codex",
              provider_type: "openai-codex",
+             context_window: 272_000,
+             auto_compact_token_limit: 190_000,
+             context_strategy: "server_side_then_recent",
              provider_options: provider_options
            } = Config.default_model_runtime(config)
 
     assert provider_options[:reasoning_effort] == "xhigh"
     assert provider_options[:service_tier] == "fast"
+    refute Keyword.has_key?(provider_options, :context_window)
+    refute Keyword.has_key?(provider_options, :auto_compact_token_limit)
+    refute Keyword.has_key?(provider_options, :context_strategy)
   end
 
   test "memory model falls back to cheap and then default model role" do

@@ -455,4 +455,85 @@ defmodule Nex.Agent.LLM.ReqLLMTest do
     assert_receive {:stream_event, {:done, metadata}}
     assert metadata[:finish_reason] == "tool_calls"
   end
+
+  test "stream metadata preserves native context compaction items" do
+    callback = fn event -> send(self(), {:stream_event, event}) end
+
+    compaction_item = %{
+      "id" => "cmp_123",
+      "type" => "compaction",
+      "encrypted_content" => "opaque"
+    }
+
+    stream_text_fun = fn _model_spec, _messages, _opts ->
+      {:ok,
+       %{
+         stream: [
+           %ReqLLM.StreamChunk{
+             type: :meta,
+             metadata: %{context_compaction_items: [compaction_item]}
+           }
+         ],
+         finish_reason: :stop
+       }}
+    end
+
+    assert :ok =
+             AgentReqLLM.stream(
+               [%{"role" => "user", "content" => "continue"}],
+               [
+                 provider: :openai_codex,
+                 model: "gpt-5.4",
+                 api_key: "test-key",
+                 base_url: "https://api.aicodemirror.com/api/codex/backend-api/codex",
+                 req_llm_stream_text_fun: stream_text_fun
+               ],
+               callback
+             )
+
+    assert_receive {:stream_event, {:done, metadata}}
+    assert metadata[:context_compaction_items] == [compaction_item]
+    assert metadata[:finish_reason] == "stop"
+  end
+
+  test "deepseek chat stream promotes reasoning_content to assistant message top level" do
+    model =
+      ReqLLM.model!(%{
+        id: "deepseek-v4-pro",
+        provider: :openai,
+        base_url: "https://api.deepseek.com/v1"
+      })
+
+    assistant =
+      ReqLLM.Context.assistant("",
+        tool_calls: [
+          ReqLLM.ToolCall.new("call_web_1", "web_search", Jason.encode!(%{"query" => "nex"}))
+        ],
+        metadata: %{reasoning_content: "deepseek reasoning"}
+      )
+
+    context =
+      ReqLLM.Context.new([
+        ReqLLM.Context.user("search"),
+        assistant,
+        ReqLLM.Context.tool_result("call_web_1", "web_search", "result")
+      ])
+
+    assert {:ok, request} =
+             Nex.Agent.LLM.Providers.DeepSeekChatStream.attach_stream(
+               model,
+               context,
+               [
+                 api_key: "deepseek-test-key",
+                 base_url: "https://api.deepseek.com/v1"
+               ],
+               ReqLLM.Finch
+             )
+
+    body = request.body |> Jason.decode!()
+    assistant_body = Enum.find(body["messages"], &(&1["role"] == "assistant"))
+
+    assert assistant_body["reasoning_content"] == "deepseek reasoning"
+    refute Map.has_key?(assistant_body, "metadata")
+  end
 end

@@ -35,6 +35,9 @@ defmodule Nex.Agent.Config do
           provider: atom(),
           api_key: String.t() | nil,
           base_url: String.t() | nil,
+          context_window: pos_integer() | nil,
+          auto_compact_token_limit: pos_integer() | nil,
+          context_strategy: String.t() | nil,
           provider_options: keyword()
         }
 
@@ -409,6 +412,9 @@ defmodule Nex.Agent.Config do
          provider: provider,
          api_key: provider_api_key(provider, provider_config),
          base_url: provider_base_url(provider, provider_config),
+         context_window: model_context_window(model_config),
+         auto_compact_token_limit: model_auto_compact_token_limit(model_config),
+         context_strategy: model_context_strategy(model_config),
          provider_options: provider_options(provider_config, model_config)
        }}
     else
@@ -468,12 +474,55 @@ defmodule Nex.Agent.Config do
 
     model_options =
       model_config
-      |> Map.drop(["provider", "id"])
+      |> Map.drop(model_runtime_keys())
       |> stringify_map_keys()
 
     provider_options
     |> Map.merge(model_options)
     |> Enum.map(fn {key, value} -> {String.to_atom(key), value} end)
+  end
+
+  defp model_runtime_keys do
+    [
+      "provider",
+      "id",
+      "context_window",
+      "context_tokens",
+      "max_context_tokens",
+      "context_limit",
+      "model_context_window",
+      "auto_compact_token_limit",
+      "model_auto_compact_token_limit",
+      "context_strategy"
+    ]
+  end
+
+  defp model_context_window(model_config) do
+    model_config
+    |> first_positive_integer([
+      "context_window",
+      "model_context_window",
+      "context_tokens",
+      "max_context_tokens",
+      "context_limit"
+    ])
+  end
+
+  defp model_auto_compact_token_limit(model_config) do
+    first_positive_integer(model_config, [
+      "auto_compact_token_limit",
+      "model_auto_compact_token_limit"
+    ])
+  end
+
+  defp model_context_strategy(model_config) do
+    model_config
+    |> Map.get("context_strategy")
+    |> normalize_optional_string()
+  end
+
+  defp first_positive_integer(model_config, keys) do
+    Enum.find_value(keys, fn key -> normalize_positive_integer(Map.get(model_config, key)) end)
   end
 
   defp valid_new_shape?(%__MODULE__{} = config) do
@@ -518,6 +567,17 @@ defmodule Nex.Agent.Config do
   end
 
   defp normalize_max_iterations(_value), do: nil
+
+  defp normalize_positive_integer(value) when is_integer(value) and value > 0, do: value
+
+  defp normalize_positive_integer(value) when is_binary(value) do
+    case Integer.parse(String.trim(value)) do
+      {parsed, ""} when parsed > 0 -> parsed
+      _ -> nil
+    end
+  end
+
+  defp normalize_positive_integer(_value), do: nil
 
   defp normalize_channels(channels) when is_map(channels) do
     channels

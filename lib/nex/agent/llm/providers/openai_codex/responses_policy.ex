@@ -18,8 +18,20 @@ defmodule Nex.Agent.LLM.Providers.OpenAICodex.ResponsesPolicy do
     body
     |> put_instructions(opts)
     |> put_tool_choice(opts)
+    |> put_context_management(opts)
+    |> put_context_compaction_items(opts)
     |> apply_payload_policy()
   end
+
+  @spec compaction_chunks(map()) :: [ReqLLM.StreamChunk.t()]
+  def compaction_chunks(event) when is_map(event) do
+    case extract_compaction_items(event) do
+      [] -> []
+      items -> [ReqLLM.StreamChunk.meta(%{context_compaction_items: items})]
+    end
+  end
+
+  def compaction_chunks(_event), do: []
 
   defp strip_response_id_from_message(
          %ReqLLM.Message{role: :assistant, metadata: metadata} = message
@@ -78,6 +90,34 @@ defmodule Nex.Agent.LLM.Providers.OpenAICodex.ResponsesPolicy do
     end
   end
 
+  defp put_context_management(%{"context_management" => _} = body, _opts), do: body
+
+  defp put_context_management(body, opts) do
+    case get_provider_option(opts, :context_management) do
+      value when is_list(value) and value != [] ->
+        Map.put(body, "context_management", stringify_value(value))
+
+      value when is_map(value) ->
+        Map.put(body, "context_management", stringify_value(value))
+
+      _ ->
+        body
+    end
+  end
+
+  defp put_context_compaction_items(body, opts) do
+    items =
+      opts
+      |> get_provider_option(:context_compaction_items)
+      |> normalize_compaction_items()
+
+    case {items, Map.get(body, "input")} do
+      {[], _input} -> body
+      {items, input} when is_list(input) -> Map.put(body, "input", items ++ input)
+      {_items, _input} -> body
+    end
+  end
+
   defp apply_payload_policy(body) do
     body
     |> Map.delete("previous_response_id")
@@ -108,4 +148,71 @@ defmodule Nex.Agent.LLM.Providers.OpenAICodex.ResponsesPolicy do
   end
 
   defp get_option(_options, _key), do: nil
+
+  defp extract_compaction_items(event) do
+    data = event_data(event)
+
+    [data_item(data) | response_output_items(data)]
+    |> normalize_compaction_items()
+  end
+
+  defp event_data(%{data: data}) when is_map(data), do: data
+  defp event_data(%{"data" => data}) when is_map(data), do: data
+  defp event_data(data) when is_map(data), do: data
+  defp event_data(_data), do: %{}
+
+  defp data_item(data) when is_map(data), do: Map.get(data, "item") || Map.get(data, :item)
+  defp data_item(_data), do: nil
+
+  defp response_output_items(data) when is_map(data) do
+    response = Map.get(data, "response") || Map.get(data, :response) || %{}
+
+    output =
+      Map.get(response, "output") || Map.get(response, :output) || Map.get(data, "output") || []
+
+    if is_list(output), do: output, else: []
+  end
+
+  defp response_output_items(_data), do: []
+
+  defp normalize_compaction_items(items) when is_list(items) do
+    items
+    |> Enum.filter(&compaction_item?/1)
+    |> Enum.map(&stringify_value/1)
+    |> uniq_items()
+  end
+
+  defp normalize_compaction_items(item) when is_map(item) do
+    normalize_compaction_items([item])
+  end
+
+  defp normalize_compaction_items(_items), do: []
+
+  defp compaction_item?(%{"type" => "compaction"}), do: true
+  defp compaction_item?(%{type: "compaction"}), do: true
+  defp compaction_item?(%{type: :compaction}), do: true
+  defp compaction_item?(_item), do: false
+
+  defp uniq_items(items) do
+    {_seen, uniq} =
+      Enum.reduce(items, {MapSet.new(), []}, fn item, {seen, acc} ->
+        id = Map.get(item, "id") || :erlang.phash2(item)
+
+        if MapSet.member?(seen, id) do
+          {seen, acc}
+        else
+          {MapSet.put(seen, id), [item | acc]}
+        end
+      end)
+
+    Enum.reverse(uniq)
+  end
+
+  defp stringify_value(value) when is_map(value) do
+    Map.new(value, fn {key, value} -> {to_string(key), stringify_value(value)} end)
+  end
+
+  defp stringify_value(value) when is_list(value), do: Enum.map(value, &stringify_value/1)
+  defp stringify_value(value) when is_atom(value), do: Atom.to_string(value)
+  defp stringify_value(value), do: value
 end

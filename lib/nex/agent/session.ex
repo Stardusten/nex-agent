@@ -197,7 +197,13 @@ defmodule Nex.Agent.Session do
         entry
       end
 
-    entry
+    case Map.get(m, "reasoning_content") do
+      reasoning_content when is_binary(reasoning_content) and reasoning_content != "" ->
+        Map.put(entry, "reasoning_content", reasoning_content)
+
+      _ ->
+        entry
+    end
   end
 
   @doc """
