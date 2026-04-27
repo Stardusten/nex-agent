@@ -51,6 +51,87 @@ defmodule Nex.Agent.Channel.DiscordTest do
     {:ok, pid: pid}
   end
 
+  test "thread message publishes Discord attachments as media refs without gateway download", %{
+    pid: pid
+  } do
+    ws_pid = self()
+
+    :sys.replace_state(pid, fn state ->
+      %{state | ws_pid: ws_pid}
+    end)
+
+    send(
+      pid,
+      {:discord_ws_message, ws_pid,
+       Jason.encode!(%{
+         "op" => 0,
+         "t" => "READY",
+         "s" => 1,
+         "d" => %{
+           "user" => %{"id" => "bot-1", "username" => "nex-bot"},
+           "session_id" => "session-1",
+           "resume_gateway_url" => "wss://gateway.discord.gg"
+         }
+       })}
+    )
+
+    send(
+      pid,
+      {:discord_ws_message, ws_pid,
+       Jason.encode!(%{
+         "op" => 0,
+         "t" => "GUILD_CREATE",
+         "s" => 2,
+         "d" => %{
+           "id" => "guild-1",
+           "threads" => [
+             %{"id" => "thread-1", "type" => 11, "guild_id" => "guild-1", "parent_id" => "123"}
+           ]
+         }
+       })}
+    )
+
+    send(
+      pid,
+      {:discord_ws_message, ws_pid,
+       Jason.encode!(%{
+         "op" => 0,
+         "t" => "MESSAGE_CREATE",
+         "s" => 3,
+         "d" => %{
+           "id" => "msg-file-1",
+           "channel_id" => "thread-1",
+           "guild_id" => "guild-1",
+           "content" => "你能看到这个文件内容吗",
+           "author" => %{"id" => "user-1", "username" => "alice"},
+           "mentions" => [],
+           "attachments" => [
+             %{
+               "id" => "att-1",
+               "filename" => "note.txt",
+               "content_type" => "text/plain",
+               "size" => 23,
+               "url" => "https://cdn.discordapp.com/attachments/123/note.txt",
+               "proxy_url" => "https://media.discordapp.net/attachments/123/note.txt"
+             }
+           ]
+         }
+       })}
+    )
+
+    assert_receive {:bus_message, :inbound, inbound}
+    assert inbound.chat_id == "thread-1"
+    assert inbound.text == "你能看到这个文件内容吗"
+    assert inbound.attachments == []
+    assert [ref] = inbound.media_refs
+    assert %Nex.Agent.Media.Ref{} = ref
+    assert ref.kind == :file
+    assert ref.mime_type == "text/plain"
+    assert ref.filename == "note.txt"
+    assert ref.message_id == "msg-file-1"
+    assert ref.platform_ref["url"] == "https://cdn.discordapp.com/attachments/123/note.txt"
+  end
+
   test "outbound newmsg text creates multiple Discord messages", %{pid: pid} do
     send(
       pid,

@@ -26,6 +26,7 @@ defmodule Nex.Agent.Channel.Discord do
   alias Nex.Agent.Inbound.Envelope
   alias Nex.Agent.IMIR.Renderers.Discord, as: DiscordRenderer
   alias Nex.Agent.IMIR.Text, as: IMText
+  alias Nex.Agent.Media.Ref
 
   require ControlPlaneLog
 
@@ -544,8 +545,10 @@ defmodule Nex.Agent.Channel.Discord do
 
       parent_chat_id = parent_chat_id(data, thread_meta)
 
+      attachment_refs = discord_attachment_refs(data, state.instance_id)
+
       cond do
-        clean_content == "" ->
+        clean_content == "" and attachment_refs == [] ->
           state
 
         not allowed?(parent_chat_id, state.allow_from) ->
@@ -553,6 +556,7 @@ defmodule Nex.Agent.Channel.Discord do
 
         is_dm ->
           publish_inbound(channel_id, author_id, clean_content, data, state,
+            media_refs: attachment_refs,
             parent_chat_id: parent_chat_id
           )
 
@@ -560,6 +564,7 @@ defmodule Nex.Agent.Channel.Discord do
 
         is_thread ->
           publish_inbound(channel_id, author_id, clean_content, data, state,
+            media_refs: attachment_refs,
             parent_chat_id: parent_chat_id
           )
 
@@ -571,6 +576,7 @@ defmodule Nex.Agent.Channel.Discord do
               Logger.info("[Discord] Auto-created thread #{thread_id} for message #{message_id}")
 
               publish_inbound(thread_id, author_id, clean_content, data, state,
+                media_refs: attachment_refs,
                 parent_chat_id: channel_id
               )
 
@@ -590,6 +596,7 @@ defmodule Nex.Agent.Channel.Discord do
               )
 
               publish_inbound(channel_id, author_id, clean_content, data, state,
+                media_refs: attachment_refs,
                 parent_chat_id: parent_chat_id
               )
 
@@ -683,6 +690,7 @@ defmodule Nex.Agent.Channel.Discord do
   defp publish_inbound(chat_id, author_id, content, data, state, opts) do
     origin_channel_id = Map.get(data, "channel_id")
     parent_chat_id = Keyword.get(opts, :parent_chat_id)
+    media_refs = Keyword.get(opts, :media_refs, [])
 
     metadata =
       %{
@@ -702,10 +710,71 @@ defmodule Nex.Agent.Channel.Discord do
       message_type: :text,
       raw: data,
       metadata: metadata,
-      media_refs: [],
+      media_refs: media_refs,
       attachments: []
     })
   end
+
+  defp discord_attachment_refs(data, instance_id) do
+    data
+    |> Map.get("attachments", [])
+    |> Enum.flat_map(fn
+      attachment when is_map(attachment) ->
+        url = Map.get(attachment, "url")
+
+        if is_binary(url) and url != "" do
+          mime_type = Map.get(attachment, "content_type")
+          filename = Map.get(attachment, "filename")
+
+          [
+            %Ref{
+              channel: instance_id,
+              kind: discord_attachment_kind(mime_type, filename),
+              message_id: Map.get(data, "id"),
+              mime_type: mime_type,
+              filename: filename,
+              platform_ref: %{
+                "id" => Map.get(attachment, "id"),
+                "url" => url,
+                "proxy_url" => Map.get(attachment, "proxy_url")
+              },
+              metadata: %{
+                "size" => Map.get(attachment, "size"),
+                "width" => Map.get(attachment, "width"),
+                "height" => Map.get(attachment, "height")
+              }
+            }
+          ]
+        else
+          []
+        end
+
+      _other ->
+        []
+    end)
+  end
+
+  defp discord_attachment_kind(mime_type, filename) do
+    cond do
+      is_binary(mime_type) and String.starts_with?(mime_type, "image/") -> :image
+      is_binary(mime_type) and String.starts_with?(mime_type, "audio/") -> :audio
+      is_binary(mime_type) and String.starts_with?(mime_type, "video/") -> :video
+      image_extension?(filename) -> :image
+      audio_extension?(filename) -> :audio
+      video_extension?(filename) -> :video
+      true -> :file
+    end
+  end
+
+  defp image_extension?(filename), do: extension_in?(filename, ~w(.png .jpg .jpeg .gif .webp))
+  defp audio_extension?(filename), do: extension_in?(filename, ~w(.mp3 .wav .m4a .ogg .flac))
+  defp video_extension?(filename), do: extension_in?(filename, ~w(.mp4 .mov .webm .mkv))
+
+  defp extension_in?(filename, extensions) when is_binary(filename) do
+    filename |> Path.extname() |> String.downcase() |> Kernel.in(extensions)
+  end
+
+  defp extension_in?(_filename, _extensions), do: false
 
   defp create_thread_from_message(channel_id, message_id, content, state) do
     thread_name =

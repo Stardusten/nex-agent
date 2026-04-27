@@ -17,8 +17,14 @@ defmodule Nex.Agent.Media.Hydrator do
         :unhandled ->
           {attachments, [ref | unresolved]}
 
+        {:error, reason} when reason in [:unsupported_media_ref, :unhandled] ->
+          {attachments, [ref | unresolved]}
+
         {:error, reason} ->
-          Logger.warning("[Media.Hydrator] Failed to hydrate #{inspect(ref)}: #{inspect(reason)}")
+          Logger.warning(
+            "[Media.Hydrator] Failed to hydrate #{inspect(ref_summary(ref))}: #{inspect(reason)}"
+          )
+
           {attachments, [ref | unresolved]}
       end
     end)
@@ -27,7 +33,7 @@ defmodule Nex.Agent.Media.Hydrator do
     end)
   end
 
-  defp hydrate_ref(%Ref{kind: :image} = ref, opts) do
+  defp hydrate_ref(%Ref{} = ref, opts) do
     fetch_binary_fun = Keyword.fetch!(opts, :fetch_binary_fun)
 
     with {:ok, body, mime_type} <- fetch_binary_fun.(ref),
@@ -36,7 +42,7 @@ defmodule Nex.Agent.Media.Hydrator do
              body,
              channel: ref.channel,
              kind: ref.kind,
-             mime_type: mime_type || ref.mime_type || "image/jpeg",
+             mime_type: mime_type || ref.mime_type || default_mime_type(ref.kind),
              filename: ref.filename,
              message_id: ref.message_id,
              platform_ref: ref.platform_ref,
@@ -49,5 +55,18 @@ defmodule Nex.Agent.Media.Hydrator do
     error -> {:error, error}
   end
 
-  defp hydrate_ref(%Ref{}, _opts), do: :unhandled
+  defp default_mime_type(:image), do: "image/jpeg"
+  defp default_mime_type(:audio), do: "audio/mpeg"
+  defp default_mime_type(:video), do: "video/mp4"
+  defp default_mime_type(:file), do: "application/octet-stream"
+
+  defp ref_summary(%Ref{} = ref) do
+    %{
+      channel: ref.channel,
+      kind: ref.kind,
+      message_id: ref.message_id,
+      mime_type: ref.mime_type,
+      filename: ref.filename
+    }
+  end
 end

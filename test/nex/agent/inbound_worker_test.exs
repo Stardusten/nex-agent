@@ -16,7 +16,7 @@ defmodule Nex.Agent.InboundWorkerTest do
   alias Nex.Agent.Channel.{Discord, Feishu}
   alias Nex.Agent.ControlPlane.Query, as: ControlPlaneQuery
   alias Nex.Agent.Inbound.Envelope
-  alias Nex.Agent.Media.Attachment
+  alias Nex.Agent.Media.{Attachment, Ref}
   alias Nex.Agent.Stream.Result
 
   @feishu_instance "feishu_test"
@@ -510,6 +510,121 @@ defmodule Nex.Agent.InboundWorkerTest do
     assert_receive {:prompt_opts, "看图", media}, 1_000
 
     assert [%Attachment{local_path: ^image_path, kind: :image, mime_type: "image/png"}] = media
+  end
+
+  test "inbound worker hydrates Discord media refs inside owner task", %{} do
+    parent = self()
+
+    worker_name =
+      String.to_atom("inbound_worker_discord_media_#{System.unique_integer([:positive])}")
+
+    Application.put_env(:nex_agent, :http_test_req_get, fn _url, _opts ->
+      {:ok,
+       %{
+         status: 200,
+         body: "hello from discord file",
+         headers: [{"content-type", "text/plain; charset=utf-8"}]
+       }}
+    end)
+
+    on_exit(fn -> Application.delete_env(:nex_agent, :http_test_req_get) end)
+
+    prompt_fun = fn agent, prompt, opts ->
+      send(parent, {:prompt_opts, prompt, Keyword.get(opts, :media)})
+      {:ok, "done", agent}
+    end
+
+    start_supervised!(
+      {InboundWorker,
+       name: worker_name, config: default_worker_config(), agent_prompt_fun: prompt_fun}
+    )
+
+    send(Process.whereis(worker_name), {
+      :bus_message,
+      :inbound,
+      %Envelope{
+        channel: @discord_instance,
+        chat_id: "thread-1",
+        sender_id: "tester",
+        text: "",
+        message_type: :text,
+        raw: %{},
+        metadata: %{},
+        media_refs: [
+          %Ref{
+            channel: @discord_instance,
+            kind: :file,
+            message_id: "msg-file-1",
+            mime_type: "text/plain",
+            filename: "note.txt",
+            platform_ref: %{"url" => "https://cdn.discordapp.com/attachments/123/note.txt"},
+            metadata: %{"size" => 23}
+          }
+        ],
+        attachments: []
+      }
+    })
+
+    assert_receive {:prompt_opts, "", media}, 1_000
+
+    assert [%Attachment{kind: :file, mime_type: "text/plain", filename: "note.txt"} = attachment] =
+             media
+
+    assert File.read!(attachment.local_path) == "hello from discord file"
+  end
+
+  test "inbound worker exposes unresolved media refs as deterministic prompt text", %{} do
+    parent = self()
+
+    worker_name =
+      String.to_atom("inbound_worker_unresolved_media_#{System.unique_integer([:positive])}")
+
+    Application.put_env(:nex_agent, :http_test_req_get, fn _url, _opts ->
+      {:ok, %{status: 403, body: "forbidden", headers: []}}
+    end)
+
+    on_exit(fn -> Application.delete_env(:nex_agent, :http_test_req_get) end)
+
+    prompt_fun = fn agent, prompt, opts ->
+      send(parent, {:prompt_opts, prompt, Keyword.get(opts, :media)})
+      {:ok, "done", agent}
+    end
+
+    start_supervised!(
+      {InboundWorker,
+       name: worker_name, config: default_worker_config(), agent_prompt_fun: prompt_fun}
+    )
+
+    send(Process.whereis(worker_name), {
+      :bus_message,
+      :inbound,
+      %Envelope{
+        channel: @discord_instance,
+        chat_id: "thread-1",
+        sender_id: "tester",
+        text: "你能看到这个文件内容吗",
+        message_type: :text,
+        raw: %{},
+        metadata: %{},
+        media_refs: [
+          %Ref{
+            channel: @discord_instance,
+            kind: :file,
+            message_id: "msg-file-1",
+            mime_type: "text/plain",
+            filename: "note.txt",
+            platform_ref: %{"url" => "https://cdn.discordapp.com/attachments/123/note.txt"},
+            metadata: %{"size" => 23}
+          }
+        ],
+        attachments: []
+      }
+    })
+
+    assert_receive {:prompt_opts, prompt, []}, 1_000
+    assert prompt =~ "你能看到这个文件内容吗"
+    assert prompt =~ "User sent file: note.txt; mime=text/plain"
+    assert prompt =~ "could not be downloaded"
   end
 
   test "inbound worker forwards parent chat id metadata into owner prompt opts", %{

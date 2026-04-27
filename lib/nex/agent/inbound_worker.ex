@@ -14,6 +14,7 @@ defmodule Nex.Agent.InboundWorker do
     Command,
     Config,
     FollowUp,
+    HTTP,
     MemoryUpdater,
     Outbound,
     RunControl,
@@ -32,9 +33,11 @@ defmodule Nex.Agent.InboundWorker do
   alias Nex.Agent.Channel.Feishu.StreamState, as: FeishuStreamState
   alias Nex.Agent.ControlPlane.{Query, Redactor}
   alias Nex.Agent.Inbound.Envelope
+  alias Nex.Agent.Media.{Hydrator, Projector, Ref}
   alias Nex.Agent.Runtime.Snapshot
   alias Nex.Agent.Stream.Result
 
+  @max_inbound_attachment_bytes 20 * 1024 * 1024
   @feishu_stream_flush_ms 500
   @discord_stream_flush_ms 1000
   @discord_placeholder_tick_ms 1_000
@@ -651,7 +654,7 @@ defmodule Nex.Agent.InboundWorker do
       "InboundWorker received channel=#{channel} chat_id=#{chat_id} workspace=#{workspace} cmd=#{inspect(cmd)}"
     )
 
-    with false <- cmd == "",
+    with false <- empty_inbound?(cmd, envelope),
          {:command, %Invocation{} = invocation, definition} when is_map(definition) <-
            resolve_command(envelope, workspace, state.config) do
       dispatch_command(state, key, session_key, workspace, envelope, invocation, definition)
@@ -665,6 +668,10 @@ defmodule Nex.Agent.InboundWorker do
       {:command, _invocation, nil} ->
         maybe_dispatch_prompt(state, key, session_key, workspace, content, envelope)
     end
+  end
+
+  defp empty_inbound?(cmd, %Envelope{} = envelope) do
+    cmd == "" and (envelope.media_refs || []) == [] and (envelope.attachments || []) == []
   end
 
   defp resolve_command(%Envelope{} = envelope, workspace, %Config{} = config) do
@@ -922,13 +929,6 @@ defmodule Nex.Agent.InboundWorker do
 
     mode = if owner_snapshot, do: :busy, else: :idle
 
-    prompt =
-      FollowUp.prompt(owner_snapshot, question,
-        mode: mode,
-        workspace: workspace,
-        session_key: session_key
-      )
-
     parent = self()
     {channel, chat_id} = parse_session_key(session_key)
     metadata = extract_metadata(envelope)
@@ -939,6 +939,21 @@ defmodule Nex.Agent.InboundWorker do
 
     {:ok, pid} =
       Task.Supervisor.start_child(Nex.Agent.TaskSupervisor, fn ->
+        {prompt_envelope, prompt_question} =
+          hydrate_inbound_media_for_prompt(envelope, question,
+            workspace: workspace,
+            session_key: session_key,
+            channel: channel,
+            chat_id: chat_id
+          )
+
+        prompt =
+          FollowUp.prompt(owner_snapshot, prompt_question,
+            mode: mode,
+            workspace: workspace,
+            session_key: session_key
+          )
+
         result =
           run_prompt_task(
             state.agent_prompt_fun,
@@ -951,16 +966,17 @@ defmodule Nex.Agent.InboundWorker do
             tools_filter: :follow_up,
             schedule_memory_refresh: false,
             skip_skills: true,
+            media: prompt_envelope.attachments,
             parent_chat_id: Map.get(metadata, "parent_chat_id"),
             metadata:
               metadata
               |> Map.new()
               |> Map.put("_follow_up", true)
-              |> Map.put("follow_up_question", question)
+              |> Map.put("follow_up_question", prompt_question)
               |> Map.put("follow_up_mode", Atom.to_string(mode))
           )
 
-        send(parent, {:follow_up_result, key, self(), result, envelope})
+        send(parent, {:follow_up_result, key, self(), result, prompt_envelope})
       end)
 
     Process.monitor(pid)
@@ -998,7 +1014,6 @@ defmodule Nex.Agent.InboundWorker do
     parent = self()
     from_cron = get_in(envelope.metadata, ["_from_cron"]) == true
     from_subagent = get_in(envelope.metadata, ["_from_subagent"]) == true
-    attachments = envelope.attachments
     metadata = extract_metadata(envelope)
     stream_key = stream_key(key, run.id)
 
@@ -1031,11 +1046,21 @@ defmodule Nex.Agent.InboundWorker do
             build_stream_sink(parent, stream_key, channel, chat_id, envelope, state.config)
           end
 
+        {prompt_envelope, prompt_content} =
+          hydrate_inbound_media_for_prompt(envelope, content,
+            workspace: workspace,
+            run_id: run.id,
+            cancel_ref: run.cancel_ref,
+            session_key: session_key,
+            channel: channel,
+            chat_id: chat_id
+          )
+
         result =
           run_prompt_task(
             state.agent_prompt_fun,
             agent,
-            content,
+            prompt_content,
             [
               channel: channel,
               chat_id: chat_id,
@@ -1047,11 +1072,11 @@ defmodule Nex.Agent.InboundWorker do
               parent_chat_id: Map.get(metadata, "parent_chat_id"),
               schedule_memory_refresh: false
             ]
-            |> maybe_put_opt(:media, attachments)
+            |> maybe_put_opt(:media, prompt_envelope.attachments)
             |> Kernel.++(cron_opts)
           )
 
-        send(parent, {:async_result, key, run.id, result, envelope})
+        send(parent, {:async_result, key, run.id, result, prompt_envelope})
       end)
 
     Process.monitor(pid)
@@ -1800,6 +1825,143 @@ defmodule Nex.Agent.InboundWorker do
   defp normalize_inbound_content(content) when is_binary(content), do: content
   defp normalize_inbound_content(nil), do: ""
   defp normalize_inbound_content(content), do: inspect(content, printable_limit: 500, limit: 50)
+
+  defp hydrate_inbound_media_for_prompt(%Envelope{} = envelope, content, opts) do
+    refs = envelope.media_refs || []
+
+    if refs == [] do
+      {envelope, content}
+    else
+      {attachments, unresolved_refs} =
+        Hydrator.hydrate_refs(refs,
+          workspace: Keyword.get(opts, :workspace),
+          fetch_binary_fun: &fetch_inbound_media_binary(&1, opts)
+        )
+
+      envelope = %{
+        envelope
+        | attachments: (envelope.attachments || []) ++ attachments,
+          media_refs: unresolved_refs
+      }
+
+      {envelope, append_unresolved_media_notice(content, unresolved_refs)}
+    end
+  end
+
+  defp fetch_inbound_media_binary(
+         %Ref{platform_ref: %{"url" => url}, metadata: metadata} = ref,
+         opts
+       )
+       when is_binary(url) and url != "" do
+    with :ok <- ensure_inbound_media_size(metadata),
+         {:ok, response} <-
+           HTTP.get(url,
+             receive_timeout: 30_000,
+             cancel_ref: Keyword.get(opts, :cancel_ref),
+             observe_context: http_observe_context(opts)
+           ),
+         {:ok, body, mime_type} <- extract_inbound_media_response(response, ref) do
+      ensure_inbound_media_body_size(body)
+      |> case do
+        :ok -> {:ok, body, mime_type}
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  defp fetch_inbound_media_binary(%Ref{}, _opts), do: :unhandled
+
+  defp ensure_inbound_media_size(metadata) when is_map(metadata) do
+    case Map.get(metadata, "size") || Map.get(metadata, :size) do
+      size when is_integer(size) and size > @max_inbound_attachment_bytes ->
+        {:error, {:attachment_too_large, size, @max_inbound_attachment_bytes}}
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp ensure_inbound_media_size(_metadata), do: :ok
+
+  defp ensure_inbound_media_body_size(body)
+       when byte_size(body) > @max_inbound_attachment_bytes do
+    {:error, {:attachment_too_large, byte_size(body), @max_inbound_attachment_bytes}}
+  end
+
+  defp ensure_inbound_media_body_size(_body), do: :ok
+
+  defp extract_inbound_media_response(
+         %{status: status, body: body} = response,
+         %Ref{} = ref
+       )
+       when status in 200..299 and is_binary(body) do
+    {:ok, body, response_content_type(response) || ref.mime_type}
+  end
+
+  defp extract_inbound_media_response(%{status: status}, _ref),
+    do: {:error, {:http_status, status}}
+
+  defp extract_inbound_media_response(response, %Ref{} = ref) when is_binary(response) do
+    {:ok, response, ref.mime_type}
+  end
+
+  defp extract_inbound_media_response({:error, reason}, _ref), do: {:error, reason}
+  defp extract_inbound_media_response(_response, _ref), do: {:error, :invalid_response}
+
+  defp response_content_type(%{headers: headers}), do: header_value(headers, "content-type")
+  defp response_content_type(%{"headers" => headers}), do: header_value(headers, "content-type")
+  defp response_content_type(_response), do: nil
+
+  defp header_value(headers, name) when is_list(headers) do
+    name = String.downcase(name)
+
+    headers
+    |> Enum.find_value(fn
+      {key, value} when is_binary(key) ->
+        if String.downcase(key) == name, do: value
+
+      {key, value} when is_atom(key) ->
+        if key |> Atom.to_string() |> String.downcase() == name, do: value
+
+      _other ->
+        nil
+    end)
+    |> normalize_header_value()
+  end
+
+  defp header_value(headers, name) when is_map(headers) do
+    headers
+    |> Map.get(name, Map.get(headers, String.downcase(name)))
+    |> normalize_header_value()
+  end
+
+  defp header_value(_headers, _name), do: nil
+
+  defp normalize_header_value([value | _rest]), do: normalize_header_value(value)
+  defp normalize_header_value(value) when is_binary(value), do: value |> String.split(";") |> hd()
+  defp normalize_header_value(_value), do: nil
+
+  defp append_unresolved_media_notice(content, unresolved_refs) do
+    case Projector.unresolved_refs_text(unresolved_refs) do
+      nil ->
+        content
+
+      notice ->
+        [content, notice]
+        |> Enum.reject(&(&1 in [nil, ""]))
+        |> Enum.join("\n\n")
+    end
+  end
+
+  defp http_observe_context(opts) do
+    %{
+      workspace: Keyword.get(opts, :workspace),
+      run_id: Keyword.get(opts, :run_id),
+      session_key: Keyword.get(opts, :session_key),
+      channel: Keyword.get(opts, :channel),
+      chat_id: Keyword.get(opts, :chat_id)
+    }
+  end
 
   defp observe_inbound_received(%Envelope{} = envelope, workspace, session_key, content) do
     observe_log(

@@ -130,6 +130,50 @@ defmodule Nex.Agent.MemoryConsolidationTest do
     assert Memory.read_long_term(workspace: workspace) =~ "Consolidation succeeded"
   end
 
+  test "consolidation skips forced tool_choice for deepseek-compatible openai runtime", %{
+    workspace: workspace
+  } do
+    parent = self()
+    session = build_session()
+
+    llm_stream_text_fun = fn _model_spec, _messages, opts ->
+      send(parent, {:llm_opts, opts})
+
+      {:ok,
+       %{
+         stream: [
+           %{
+             type: :tool_call,
+             name: "save_memory",
+             arguments: %{
+               "history_entry" => "[2026-03-18 12:30] DeepSeek consolidation worked.",
+               "memory_update" => "# Long-term Memory\n\nDeepSeek consolidation succeeded.\n"
+             }
+           }
+         ],
+         finish_reason: :stop
+       }}
+    end
+
+    assert {:ok, updated_session} =
+             Memory.consolidate(session, :openai, "deepseek-v4-pro",
+               archive_all: true,
+               base_url: "https://api.deepseek.com/v1",
+               workspace: workspace,
+               llm_call_fun: &Runner.call_llm_for_consolidation/2,
+               req_llm_stream_text_fun: llm_stream_text_fun
+             )
+
+    assert_receive {:llm_opts, opts}
+    refute Keyword.has_key?(opts, :tool_choice)
+    assert updated_session.last_consolidated == length(session.messages)
+
+    assert File.read!(Path.join(workspace, "memory/HISTORY.md")) =~
+             "DeepSeek consolidation worked"
+
+    assert Memory.read_long_term(workspace: workspace) =~ "DeepSeek consolidation succeeded"
+  end
+
   test "template-only memory compacts to empty prompt context without rewriting MEMORY.md", %{
     workspace: workspace
   } do

@@ -8,6 +8,7 @@ defmodule Nex.Agent.Memory do
 
   alias Nex.Agent.{Config, Evolution, Workspace}
   alias Nex.Agent.ControlPlane.Log
+  alias Nex.Agent.LLM.Providers.Default, as: DefaultProvider
   require Log
 
   @empty_memory_context "(empty)"
@@ -190,7 +191,7 @@ defmodule Nex.Agent.Memory do
             base_url: base_url,
             provider_options: provider_options,
             tools: save_memory_tool(),
-            tool_choice: tool_choice_for(provider, "save_memory")
+            tool_choice: tool_choice_for(provider, base_url, "save_memory")
           ]
           |> maybe_put_llm_opt(
             :req_llm_stream_text_fun,
@@ -810,7 +811,11 @@ defmodule Nex.Agent.Memory do
      }}
   end
 
-  defp tool_choice_for(_provider, name), do: %{type: "tool", name: name}
+  defp tool_choice_for(:openai, base_url, name) do
+    if DefaultProvider.deepseek_base_url?(base_url), do: nil, else: %{type: "tool", name: name}
+  end
+
+  defp tool_choice_for(_provider, _base_url, name), do: %{type: "tool", name: name}
 
   defp maybe_put_llm_opt(opts, _key, nil), do: opts
   defp maybe_put_llm_opt(opts, key, value), do: Keyword.put(opts, key, value)
