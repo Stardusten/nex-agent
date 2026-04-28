@@ -23,6 +23,9 @@
       --danger: #a33a32;
       --critical: #6f1f2d;
       --shadow: rgba(32, 37, 31, 0.12);
+      --weight-medium: 500;
+      --weight-semibold: 600;
+      --weight-strong: 700;
     }
 
     * { box-sizing: border-box; }
@@ -33,6 +36,10 @@
       font-family: "Avenir Next", "Segoe UI", sans-serif;
       color: var(--ink);
       background: var(--paper);
+      overflow: hidden;
+    }
+
+    body.modal-open {
       overflow: hidden;
     }
 
@@ -108,6 +115,24 @@
       font-size: 12px;
     }
 
+    .status[data-tone="success"],
+    .subtle[data-tone="success"] {
+      color: var(--accent);
+      font-weight: var(--weight-strong);
+    }
+
+    .status[data-tone="warning"],
+    .subtle[data-tone="warning"] {
+      color: var(--warning);
+      font-weight: var(--weight-strong);
+    }
+
+    .status[data-tone="error"],
+    .subtle[data-tone="error"] {
+      color: var(--danger);
+      font-weight: var(--weight-strong);
+    }
+
     .nav-group {
       padding: 12px;
       display: grid;
@@ -118,7 +143,7 @@
       padding: 0 3px;
       color: var(--muted);
       font-size: 11px;
-      font-weight: 700;
+      font-weight: var(--weight-strong);
       letter-spacing: .08em;
       text-transform: uppercase;
     }
@@ -155,7 +180,7 @@
     }
 
     .app-title {
-      font-weight: 700;
+      font-weight: var(--weight-semibold);
       font-size: 15px;
       line-height: 1.2;
     }
@@ -198,7 +223,7 @@
     .stage-title {
       font-size: clamp(24px, 3vw, 40px);
       line-height: 1;
-      font-weight: 800;
+      font-weight: var(--weight-strong);
       letter-spacing: 0;
     }
 
@@ -222,11 +247,24 @@
     .panel-toggle,
     .permission button,
     .level-button {
-      min-height: 32px;
+      min-height: 36px;
       border: 1px solid var(--accent);
       background: var(--accent);
       color: var(--accent-ink);
-      padding: 6px 10px;
+      padding: 7px 11px;
+      transition: background 140ms ease-out, border-color 140ms ease-out, color 140ms ease-out, opacity 140ms ease-out;
+    }
+
+    button:disabled,
+    select:disabled,
+    input:disabled,
+    textarea:disabled {
+      cursor: not-allowed;
+      opacity: .58;
+    }
+
+    button[aria-busy="true"] {
+      cursor: progress;
     }
 
     .panel-toggle {
@@ -328,7 +366,7 @@
     }
 
     .session-key {
-      font-weight: 800;
+      font-weight: var(--weight-strong);
       overflow-wrap: anywhere;
     }
 
@@ -357,7 +395,7 @@
       background: rgba(255, 254, 249, 0.66);
       color: var(--ink);
       padding: 7px 12px;
-      font-weight: 700;
+      font-weight: var(--weight-semibold);
     }
 
     .config-tab[aria-selected="true"] {
@@ -382,6 +420,11 @@
       grid-template-rows: auto minmax(0, 1fr);
     }
 
+    .config-editor-shell[data-dirty="true"] {
+      border-color: var(--warning);
+      box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--warning), transparent 72%);
+    }
+
     .config-list-head {
       padding: 12px;
       border-bottom: 1px solid var(--line);
@@ -393,7 +436,7 @@
 
     .config-list-title {
       font-size: 14px;
-      font-weight: 800;
+      font-weight: var(--weight-strong);
     }
 
     .config-list {
@@ -427,7 +470,7 @@
 
     .config-item-key {
       color: var(--ink);
-      font-weight: 800;
+      font-weight: var(--weight-strong);
       font-size: 14px;
       line-height: 1.2;
       white-space: nowrap;
@@ -467,7 +510,7 @@
     .secret-preview {
       color: var(--muted);
       font-size: 11px;
-      font-weight: 500;
+      font-weight: var(--weight-medium);
       letter-spacing: 0;
       line-height: 1.4;
       text-transform: none;
@@ -485,7 +528,7 @@
     .config-type-guide strong,
     .secret-preview strong {
       color: var(--ink);
-      font-weight: 800;
+      font-weight: var(--weight-semibold);
     }
 
     textarea {
@@ -497,6 +540,9 @@
       color: var(--ink);
       font: inherit;
       font-size: 13px;
+      font-weight: var(--weight-medium);
+      letter-spacing: 0;
+      text-transform: none;
       resize: vertical;
     }
 
@@ -514,7 +560,7 @@
       text-transform: none;
       letter-spacing: 0;
       font-size: 13px;
-      font-weight: 600;
+      font-weight: var(--weight-semibold);
     }
 
     .checkbox-row input {
@@ -556,7 +602,7 @@
       gap: 5px;
       color: var(--muted);
       font-size: 11px;
-      font-weight: 700;
+      font-weight: var(--weight-semibold);
       letter-spacing: .04em;
       text-transform: uppercase;
     }
@@ -570,6 +616,9 @@
       padding: 6px 8px;
       color: var(--ink);
       font-size: 13px;
+      font-weight: var(--weight-medium);
+      letter-spacing: 0;
+      text-transform: none;
     }
 
     input:focus,
@@ -615,7 +664,7 @@
       gap: 10px;
       color: var(--muted);
       font-size: 12px;
-      font-weight: 700;
+      font-weight: var(--weight-semibold);
       letter-spacing: .06em;
       text-transform: uppercase;
     }
@@ -624,7 +673,7 @@
       display: flex;
       align-items: baseline;
       gap: 8px;
-      font-weight: 800;
+      font-weight: var(--weight-strong);
       font-size: 28px;
       line-height: 1;
     }
@@ -632,7 +681,7 @@
     .budget-value span:last-child {
       color: var(--muted);
       font-size: 13px;
-      font-weight: 600;
+      font-weight: var(--weight-semibold);
     }
 
     .meter {
@@ -666,7 +715,7 @@
 
     .gauge .name {
       font-size: 12px;
-      font-weight: 700;
+      font-weight: var(--weight-semibold);
       overflow-wrap: anywhere;
     }
 
@@ -704,7 +753,7 @@
 
     .timeline-title {
       font-size: 14px;
-      font-weight: 800;
+      font-weight: var(--weight-strong);
     }
 
     .timeline {
@@ -786,12 +835,12 @@
     }
 
     .event .tag {
-      font-weight: 800;
+      font-weight: var(--weight-strong);
       overflow-wrap: anywhere;
     }
 
     .candidate .summary {
-      font-weight: 800;
+      font-weight: var(--weight-strong);
       overflow-wrap: anywhere;
     }
 
@@ -867,7 +916,7 @@
     }
 
     .detail-tag {
-      font-weight: 800;
+      font-weight: var(--weight-strong);
       font-size: 16px;
       overflow-wrap: anywhere;
     }
@@ -1000,7 +1049,7 @@
     }
 
     .mini-event .tag {
-      font-weight: 700;
+      font-weight: var(--weight-semibold);
       overflow-wrap: anywhere;
     }
 
@@ -1013,6 +1062,114 @@
       color: var(--danger);
       font-size: 12px;
       overflow-wrap: anywhere;
+    }
+
+    .toast-region {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      z-index: 120;
+      display: grid;
+      gap: 10px;
+      width: min(420px, calc(100vw - 36px));
+      pointer-events: none;
+    }
+
+    .toast {
+      pointer-events: auto;
+      border: 1px solid var(--line-strong);
+      background: var(--surface);
+      box-shadow: 0 18px 48px var(--shadow);
+      padding: 12px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: start;
+    }
+
+    .toast[data-tone="success"] {
+      border-color: var(--accent);
+    }
+
+    .toast[data-tone="warning"] {
+      border-color: var(--warning);
+    }
+
+    .toast[data-tone="error"] {
+      border-color: var(--danger);
+    }
+
+    .toast-title {
+      font-size: 13px;
+      font-weight: var(--weight-strong);
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+
+    .toast-detail {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.4;
+      overflow-wrap: anywhere;
+    }
+
+    .toast-close {
+      min-width: 32px;
+      min-height: 32px;
+      border: 1px solid var(--line);
+      background: transparent;
+      color: var(--ink);
+      padding: 0 8px;
+    }
+
+    .confirm-modal {
+      position: fixed;
+      inset: 0;
+      z-index: 110;
+      display: grid;
+      place-items: center;
+      padding: 20px;
+      background: rgba(32, 37, 31, 0.36);
+    }
+
+    .confirm-modal[hidden] {
+      display: none;
+    }
+
+    .confirm-card {
+      width: min(560px, 100%);
+      border: 1px solid var(--line-strong);
+      background: var(--surface);
+      box-shadow: 0 28px 80px rgba(32, 37, 31, 0.24);
+      padding: 18px;
+      display: grid;
+      gap: 16px;
+    }
+
+    .confirm-card h2 {
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.2;
+    }
+
+    .confirm-card p {
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+
+    .confirm-detail {
+      max-height: 180px;
+    }
+
+    .confirm-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      flex-wrap: wrap;
     }
 
     @media (max-width: 1500px) {
@@ -1164,11 +1321,41 @@
         width: 100%;
         justify-content: flex-start;
       }
+
+      .refresh,
+      .action,
+      .panel-toggle,
+      .permission button,
+      .level-button,
+      input,
+      select {
+        min-height: 44px;
+      }
+
+      .toast-region {
+        right: 12px;
+        bottom: 12px;
+        width: calc(100vw - 24px);
+      }
     }
   </style>
 </head>
 <body>
   <div id="panel-scrim" class="panel-scrim" aria-hidden="true"></div>
+  <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="false"></div>
+  <div id="confirm-modal" class="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-message" hidden>
+    <div class="confirm-card">
+      <div>
+        <h2 id="confirm-title">Confirm action</h2>
+        <p id="confirm-message"></p>
+        <pre id="confirm-detail" class="confirm-detail" hidden></pre>
+      </div>
+      <div class="confirm-actions">
+        <button class="action secondary" id="confirm-cancel" type="button">Cancel</button>
+        <button class="action" id="confirm-accept" type="button">Confirm</button>
+      </div>
+    </div>
+  </div>
   <main class="shell">
     <aside class="sidebar" id="workbench-sidebar">
       <header>
@@ -1203,7 +1390,7 @@
       <div class="stage-bar">
         <div>
           <h2 class="stage-title">Observability</h2>
-          <p id="observe-state" class="subtle">syncing</p>
+          <p id="observe-state" class="subtle" role="status" aria-live="polite">syncing</p>
         </div>
         <div class="stage-actions">
           <button class="panel-toggle sidebar-toggle" type="button" aria-controls="workbench-sidebar" aria-expanded="false">Menu</button>
@@ -1290,7 +1477,7 @@
       <div class="stage-bar">
         <div>
           <h2 class="stage-title">Self Evolution</h2>
-          <p id="evolution-state" class="subtle">syncing</p>
+          <p id="evolution-state" class="subtle" role="status" aria-live="polite">syncing</p>
         </div>
         <div class="stage-actions">
           <button class="panel-toggle sidebar-toggle" type="button" aria-controls="workbench-sidebar" aria-expanded="false">Menu</button>
@@ -1347,7 +1534,7 @@
       <div class="stage-bar">
         <div>
           <h2 class="stage-title">Sessions</h2>
-          <p id="sessions-state" class="subtle">syncing</p>
+          <p id="sessions-state" class="subtle" role="status" aria-live="polite">syncing</p>
         </div>
         <div class="stage-actions">
           <button class="panel-toggle sidebar-toggle" type="button" aria-controls="workbench-sidebar" aria-expanded="false">Menu</button>
@@ -1401,7 +1588,7 @@
       <div class="stage-bar">
         <div>
           <h2 class="stage-title">Configuration</h2>
-          <p id="config-state" class="subtle">syncing</p>
+          <p id="config-state" class="subtle" role="status" aria-live="polite">syncing</p>
         </div>
         <div class="stage-actions">
           <button class="panel-toggle sidebar-toggle" type="button" aria-controls="workbench-sidebar" aria-expanded="false">Menu</button>
@@ -1412,9 +1599,9 @@
 
       <div class="config-workspace">
         <div class="config-tabs" role="tablist" aria-label="Configuration sections">
-          <button class="config-tab" type="button" data-config-section="providers" aria-selected="true">Providers</button>
-          <button class="config-tab" type="button" data-config-section="models" aria-selected="false">Models</button>
-          <button class="config-tab" type="button" data-config-section="channels" aria-selected="false">Channels</button>
+          <button class="config-tab" role="tab" type="button" data-config-section="providers" aria-selected="true" aria-controls="config-list">Providers</button>
+          <button class="config-tab" role="tab" type="button" data-config-section="models" aria-selected="false" aria-controls="config-list">Models</button>
+          <button class="config-tab" role="tab" type="button" data-config-section="channels" aria-selected="false" aria-controls="config-list">Channels</button>
         </div>
 
         <section class="config-board">
@@ -1437,6 +1624,7 @@
       <div class="stage-bar">
         <div>
           <h2 id="stage-title" class="stage-title">Workbench</h2>
+          <p id="app-state" class="subtle" role="status" aria-live="polite">No app selected</p>
         </div>
         <div class="stage-actions">
           <button class="panel-toggle sidebar-toggle" type="button" aria-controls="workbench-sidebar" aria-expanded="false">Menu</button>
@@ -1551,7 +1739,9 @@
         section: "providers",
         selectedKey: null,
         creating: false,
-        reloadStatus: null
+        reloadStatus: null,
+        dirty: false,
+        baseline: null
       },
       view: "observe",
       appFrameVersion: 0,
@@ -1565,7 +1755,8 @@
         limit: "80"
       },
       bridgeFrame: null,
-      bridgeFrameAppId: null
+      bridgeFrameAppId: null,
+      pending: {}
     };
 
     const $ = (id) => document.getElementById(id);
@@ -1618,19 +1809,168 @@
         cache: "no-store",
         ...options
       });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || response.statusText);
+      const contentType = response.headers.get("content-type") || "";
+      let payload = {};
+
+      try {
+        payload = contentType.includes("application/json")
+          ? await response.json()
+          : { error: await response.text() };
+      } catch (_error) {
+        payload = {};
+      }
+
+      if (!response.ok) {
+        throw new Error(payload.error || response.statusText || `HTTP ${response.status}`);
+      }
+
       return payload;
     }
 
+    function setStatus(id, text, tone = "") {
+      const node = $(id);
+      if (!node) return;
+      node.textContent = text;
+      if (tone) {
+        node.dataset.tone = tone;
+      } else {
+        delete node.dataset.tone;
+      }
+    }
+
+    function notify(title, tone = "info", detail = "") {
+      const root = $("toast-region");
+      const toast = document.createElement("div");
+      toast.className = "toast";
+      toast.dataset.tone = tone;
+      toast.setAttribute("role", tone === "error" ? "alert" : "status");
+      toast.innerHTML = `
+        <div>
+          <div class="toast-title"></div>
+          <div class="toast-detail"></div>
+        </div>
+        <button class="toast-close" type="button" aria-label="Dismiss notification">Close</button>
+      `;
+      toast.querySelector(".toast-title").textContent = title;
+      const detailNode = toast.querySelector(".toast-detail");
+      detailNode.textContent = detail || "";
+      detailNode.hidden = !detail;
+      toast.querySelector(".toast-close").addEventListener("click", () => toast.remove());
+      root.appendChild(toast);
+      window.setTimeout(() => toast.remove(), tone === "error" ? 9000 : 5200);
+    }
+
+    function boundedMessage(error) {
+      const message = error instanceof Error
+        ? error.message
+        : (error && typeof error === "object" && error.message ? error.message : String(error || "Something went wrong"));
+      return message.length > 500 ? `${message.slice(0, 500)}...[truncated]` : message;
+    }
+
+    function confirmAction({ title, message, detail = "", confirmText = "Confirm", cancelText = "Cancel", danger = false }) {
+      const modal = $("confirm-modal");
+      const accept = $("confirm-accept");
+      const cancel = $("confirm-cancel");
+      const detailNode = $("confirm-detail");
+      const previousFocus = document.activeElement;
+
+      $("confirm-title").textContent = title;
+      $("confirm-message").textContent = message;
+      detailNode.textContent = detail;
+      detailNode.hidden = !detail;
+      accept.textContent = confirmText;
+      cancel.textContent = cancelText;
+      accept.className = danger ? "action danger" : "action";
+      modal.hidden = false;
+      document.body.classList.add("modal-open");
+
+      return new Promise((resolve) => {
+        const finish = (value) => {
+          modal.hidden = true;
+          document.body.classList.remove("modal-open");
+          accept.onclick = null;
+          cancel.onclick = null;
+          modal.onclick = null;
+          document.removeEventListener("keydown", onKeydown);
+          if (previousFocus && typeof previousFocus.focus === "function") previousFocus.focus();
+          resolve(value);
+        };
+
+        const onKeydown = (event) => {
+          if (event.key === "Escape") finish(false);
+        };
+
+        accept.onclick = () => finish(true);
+        cancel.onclick = () => finish(false);
+        modal.onclick = (event) => {
+          if (event.target === modal) finish(false);
+        };
+        document.addEventListener("keydown", onKeydown);
+        accept.focus();
+      });
+    }
+
+    async function runMutation(key, options, task) {
+      if (state.pending[key]) {
+        notify("Still working on that action", "warning");
+        return null;
+      }
+
+      const button = options?.button || null;
+      const previousText = button ? button.textContent : "";
+      state.pending[key] = true;
+
+      if (button) {
+        button.disabled = true;
+        button.setAttribute("aria-busy", "true");
+        if (options.pendingLabel) button.textContent = options.pendingLabel;
+      }
+
+      if (options?.statusId && options.pendingStatus) {
+        setStatus(options.statusId, options.pendingStatus, "warning");
+      }
+
+      try {
+        const result = await task();
+        if (options?.successTitle) {
+          notify(options.successTitle, "success", options.successDetail || "");
+        }
+        if (options?.statusId && options.successStatus) {
+          setStatus(options.statusId, options.successStatus, "success");
+        }
+        return result;
+      } catch (error) {
+        const message = boundedMessage(error);
+        if (options?.statusId) setStatus(options.statusId, options.errorStatus || "action failed", "error");
+        notify(options?.errorTitle || "Action failed", "error", message);
+        return null;
+      } finally {
+        delete state.pending[key];
+        if (button) {
+          button.disabled = false;
+          button.removeAttribute("aria-busy");
+          button.textContent = previousText;
+        }
+      }
+    }
+
+    async function safeLoad(label, statusId, loader) {
+      try {
+        await loader();
+      } catch (error) {
+        if (statusId) setStatus(statusId, "load failed", "error");
+        notify(`${label} failed to load`, "error", boundedMessage(error));
+      }
+    }
+
     async function loadApps() {
-      $("connection").textContent = "syncing";
+      setStatus("connection", "syncing", "warning");
       const payload = await api("/api/workbench/apps");
       state.apps = payload.apps || [];
       state.diagnostics = payload.diagnostics || [];
       renderApps();
       renderDiagnostics();
-      $("connection").textContent = "local";
+      setStatus("connection", "local", "success");
     }
 
     function renderApps() {
@@ -1645,7 +1985,7 @@
       if (!state.apps.length) {
         const empty = document.createElement("div");
         empty.className = "empty";
-        empty.textContent = "No apps";
+        empty.textContent = "No apps installed. Add a static app under workbench/apps and refresh.";
         root.appendChild(empty);
         return;
       }
@@ -1687,6 +2027,7 @@
     }
 
     async function selectApp(appId) {
+      if (!(await ensureSafeToLeaveConfig("open another app"))) return;
       const app = state.apps.find((candidate) => candidate.id === appId);
       if (!app) return;
 
@@ -1694,10 +2035,17 @@
       switchView("app");
       $("stage-title").textContent = app.title || app.id;
       $("stage-entry").textContent = app.entry || "";
+      setStatus("app-state", "loading app", "warning");
       renderManifest(app);
       renderFrame(app);
-      await loadPermissions(app.id);
-      await loadObserve();
+      try {
+        await loadPermissions(app.id);
+        await loadObserve();
+        setStatus("app-state", "app loaded", "success");
+      } catch (error) {
+        setStatus("app-state", "app metadata failed", "error");
+        notify("App metadata failed to load", "error", boundedMessage(error));
+      }
     }
 
     function renderManifest(app) {
@@ -1730,10 +2078,42 @@
       state.bridgeFrameAppId = app.id;
     }
 
-    function reloadCurrentApp() {
+    async function reloadCurrentApp() {
       const app = state.apps.find((candidate) => candidate.id === state.selectedId);
       if (!app || state.view !== "app") return;
-      renderFrame(app);
+
+      await runMutation(`app:reload:${app.id}`, {
+        button: $("reload-app"),
+        statusId: "app-state",
+        pendingLabel: "Reloading...",
+        pendingStatus: "reloading app",
+        successTitle: "App reloaded",
+        successStatus: "app reloaded",
+        errorTitle: "App reload failed"
+      }, async () => {
+        const payload = await api("/api/workbench/apps");
+        state.apps = payload.apps || [];
+        state.diagnostics = payload.diagnostics || [];
+        const fresh = state.apps.find((candidate) => candidate.id === state.selectedId);
+        renderApps();
+        renderDiagnostics();
+
+        if (!fresh) {
+          state.selectedId = null;
+          $("stage-title").textContent = "Workbench";
+          $("stage-entry").textContent = "";
+          $("frame-wrap").innerHTML = `<div class="empty">Selected app is no longer available</div>`;
+          setStatus("app-state", "app missing", "error");
+          throw new Error("Selected app is no longer available");
+        }
+
+        $("stage-title").textContent = fresh.title || fresh.id;
+        $("stage-entry").textContent = fresh.entry || "";
+        renderManifest(fresh);
+        renderFrame(fresh);
+        await loadPermissions(fresh.id);
+        await loadObserve();
+      });
     }
 
     function currentBridgeFrame() {
@@ -1889,7 +2269,7 @@
         const button = row.querySelector("button");
         button.textContent = allowed ? "Revoke" : "Grant";
         button.dataset.mode = allowed ? "revoke" : "grant";
-        button.addEventListener("click", () => togglePermission(permission, allowed));
+        button.addEventListener("click", (event) => togglePermission(permission, allowed, event.currentTarget));
         root.appendChild(row);
       }
 
@@ -1898,21 +2278,43 @@
         row.className = "permission";
         row.innerHTML = `<code></code><button type="button" data-mode="revoke">Revoke</button>`;
         row.querySelector("code").textContent = `${permission} (stale)`;
-        row.querySelector("button").addEventListener("click", () => togglePermission(permission, true));
+        row.querySelector("button").addEventListener("click", (event) => togglePermission(permission, true, event.currentTarget));
         root.appendChild(row);
       }
     }
 
-    async function togglePermission(permission, currentlyGranted) {
+    async function togglePermission(permission, currentlyGranted, button) {
       const action = currentlyGranted ? "revoke" : "grant";
       const appId = state.selectedId;
-      const payload = await api(`/api/workbench/permissions/${encodeURIComponent(appId)}/${action}`, {
-        method: "POST",
-        body: JSON.stringify({ permission })
+
+      const confirmed = await confirmAction({
+        title: `${currentlyGranted ? "Revoke" : "Grant"} ${permission}?`,
+        message: currentlyGranted
+          ? "The app will lose this capability immediately after the permission update."
+          : "The app will be able to use this declared capability through the Workbench bridge.",
+        confirmText: currentlyGranted ? "Revoke permission" : "Grant permission",
+        danger: currentlyGranted
       });
-      state.permissions = payload.permissions;
-      renderPermissions();
-      await loadObserve();
+
+      if (!confirmed) return;
+
+      await runMutation(`permission:${appId}:${permission}:${action}`, {
+        button,
+        statusId: "app-state",
+        pendingLabel: currentlyGranted ? "Revoking..." : "Granting...",
+        pendingStatus: currentlyGranted ? "revoking permission" : "granting permission",
+        successTitle: currentlyGranted ? "Permission revoked" : "Permission granted",
+        successStatus: "permissions updated",
+        errorTitle: "Permission update failed"
+      }, async () => {
+        const payload = await api(`/api/workbench/permissions/${encodeURIComponent(appId)}/${action}`, {
+          method: "POST",
+          body: JSON.stringify({ permission })
+        });
+        state.permissions = payload.permissions;
+        renderPermissions();
+        await loadObserve();
+      });
     }
 
     function filtersFromForm() {
@@ -1933,7 +2335,7 @@
 
     async function loadObserve() {
       filtersFromForm();
-      $("observe-state").textContent = "syncing";
+      setStatus("observe-state", "syncing", "warning");
 
       const params = filterParams();
       const [summary, query] = await Promise.all([
@@ -1952,11 +2354,11 @@
       renderTimeline();
       renderObservationDetail();
       renderMiniEvents(summary.recent || []);
-      $("observe-state").textContent = "local facts";
+      setStatus("observe-state", "local facts");
     }
 
     async function loadEvolution() {
-      $("evolution-state").textContent = "syncing";
+      setStatus("evolution-state", "syncing", "warning");
       const payload = await api("/api/workbench/evolution");
       state.evolution.energy = payload.energy || {};
       state.evolution.gauges = payload.gauges || {};
@@ -1976,7 +2378,7 @@
         renderEvolutionDetail();
       }
 
-      $("evolution-state").textContent = "local facts";
+      setStatus("evolution-state", "local facts");
     }
 
     async function loadEvolutionCandidate(candidateId) {
@@ -1988,8 +2390,13 @@
     }
 
     async function selectEvolutionCandidate(candidateId) {
-      await loadEvolutionCandidate(candidateId);
-      openInspectorPanel();
+      try {
+        await loadEvolutionCandidate(candidateId);
+        openInspectorPanel();
+      } catch (error) {
+        setStatus("evolution-state", "candidate load failed", "error");
+        notify("Candidate detail failed to load", "error", boundedMessage(error));
+      }
     }
 
     function renderEvolutionMetrics() {
@@ -2022,7 +2429,7 @@
       if (!candidates.length) {
         const empty = document.createElement("div");
         empty.className = "empty";
-        empty.textContent = "No evolution candidates";
+        empty.textContent = "No evolution candidates awaiting review";
         root.appendChild(empty);
         $("evolution-selection-state").textContent = "No selection";
         return;
@@ -2149,7 +2556,7 @@
         button.type = "button";
         button.className = ["action", style].filter(Boolean).join(" ");
         button.textContent = label;
-        button.addEventListener("click", () => performEvolutionAction(action, candidate));
+        button.addEventListener("click", (event) => performEvolutionAction(action, candidate, event.currentTarget));
         row.appendChild(button);
       }
 
@@ -2197,16 +2604,35 @@
       }
     }
 
-    async function performEvolutionAction(action, candidate) {
+    async function performEvolutionAction(action, candidate, button) {
       const label = action === "discard" ? "discard" : action;
       const impact = action === "apply"
         ? "This can write memory, skills, soul, or code through the owner-approved lane."
         : "This records an owner decision in ControlPlane.";
-      const confirmed = window.confirm(`${label} candidate ${candidate.candidate_id}?\n\n${impact}`);
+      const confirmed = await confirmAction({
+        title: `${label} candidate ${candidate.candidate_id}?`,
+        message: impact,
+        detail: JSON.stringify({
+          risk: candidate.risk || "unknown",
+          status: candidate.status,
+          evidence: (candidate.evidence_ids || []).length,
+          latest_error: candidate.latest_error || ""
+        }, null, 2),
+        confirmText: action === "apply" ? "Apply candidate" : `${label[0].toUpperCase()}${label.slice(1)} candidate`,
+        cancelText: "Keep reviewing",
+        danger: action !== "approve"
+      });
       if (!confirmed) return;
 
-      try {
-        $("evolution-state").textContent = `${action} in progress`;
+      await runMutation(`evolution:${candidate.candidate_id}:${action}`, {
+        button,
+        pendingLabel: "Working...",
+        statusId: "evolution-state",
+        pendingStatus: `${action} in progress`,
+        successTitle: `Candidate ${label} complete`,
+        successStatus: `${action} complete`,
+        errorTitle: "Candidate action failed"
+      }, async () => {
         await api(`/api/workbench/evolution/candidates/${encodeURIComponent(candidate.candidate_id)}/${encodeURIComponent(action)}`, {
           method: "POST",
           body: JSON.stringify({
@@ -2215,14 +2641,11 @@
           })
         });
         await loadEvolution();
-      } catch (error) {
-        $("evolution-state").textContent = "action failed";
-        alert(error.message);
-      }
+      });
     }
 
     async function loadSessions() {
-      $("sessions-state").textContent = "syncing";
+      setStatus("sessions-state", "syncing", "warning");
       const payload = await api("/api/workbench/sessions");
       state.sessions.items = payload.sessions || [];
       state.sessions.summary = payload.summary || {};
@@ -2241,7 +2664,7 @@
         renderSessionDetail();
       }
 
-      $("sessions-state").textContent = "local state";
+      setStatus("sessions-state", "local state");
     }
 
     async function loadSessionDetail(sessionKey) {
@@ -2254,8 +2677,13 @@
     }
 
     async function selectSessionDetail(sessionKey) {
-      await loadSessionDetail(sessionKey);
-      openInspectorPanel();
+      try {
+        await loadSessionDetail(sessionKey);
+        openInspectorPanel();
+      } catch (error) {
+        setStatus("sessions-state", "session load failed", "error");
+        notify("Session detail failed to load", "error", boundedMessage(error));
+      }
     }
 
     function renderSessionMetrics() {
@@ -2278,7 +2706,7 @@
       if (!sessions.length) {
         const empty = document.createElement("div");
         empty.className = "empty";
-        empty.textContent = "No sessions";
+        empty.textContent = "No sessions yet. New channel conversations will appear here.";
         root.appendChild(empty);
         return;
       }
@@ -2390,7 +2818,7 @@
       stop.className = detail.status === "running" ? "action danger" : "action secondary";
       stop.textContent = "Stop";
       stop.disabled = detail.status !== "running";
-      stop.addEventListener("click", () => stopSession(detail.key));
+      stop.addEventListener("click", (event) => stopSession(detail.key, event.currentTarget));
       root.appendChild(stop);
 
       const modelRow = document.createElement("div");
@@ -2417,12 +2845,12 @@
       apply.className = "action";
       apply.textContent = "Apply model";
       apply.disabled = !select.options.length;
-      apply.addEventListener("click", () => setSessionModel(detail.key, select.value));
+      apply.addEventListener("click", (event) => setSessionModel(detail.key, select.value, event.currentTarget));
       const reset = document.createElement("button");
       reset.type = "button";
       reset.className = "action secondary";
       reset.textContent = "Reset";
-      reset.addEventListener("click", () => setSessionModel(detail.key, "reset"));
+      reset.addEventListener("click", (event) => setSessionModel(detail.key, "reset", event.currentTarget));
       row.appendChild(apply);
       row.appendChild(reset);
       root.appendChild(row);
@@ -2472,50 +2900,71 @@
       if (!root.children.length) {
         const empty = document.createElement("div");
         empty.className = "empty";
-        empty.textContent = "No observations";
+        empty.textContent = "No observations match the current filters";
         root.appendChild(empty);
       }
     }
 
-    async function stopSession(sessionKey) {
-      const confirmed = window.confirm(`Stop ${sessionKey}?`);
+    async function stopSession(sessionKey, button) {
+      const confirmed = await confirmAction({
+        title: `Stop ${sessionKey}?`,
+        message: "This cancels the active owner run, follow-up work, subagents, and queued turns for this session.",
+        confirmText: "Stop session",
+        cancelText: "Keep running",
+        danger: true
+      });
       if (!confirmed) return;
 
-      try {
-        $("sessions-state").textContent = "stopping";
+      await runMutation(`session:${sessionKey}:stop`, {
+        button,
+        pendingLabel: "Stopping...",
+        statusId: "sessions-state",
+        pendingStatus: "stopping",
+        successTitle: "Session stop requested",
+        successStatus: "stop requested",
+        errorTitle: "Session stop failed"
+      }, async () => {
         await api(`/api/workbench/sessions/${encodeURIComponent(sessionKey)}/stop`, {
           method: "POST",
           body: JSON.stringify({ reason: "workbench_stop" })
         });
         await loadSessions();
-      } catch (error) {
-        $("sessions-state").textContent = "stop failed";
-        alert(error.message);
-      }
+      });
     }
 
-    async function setSessionModel(sessionKey, model) {
-      try {
-        $("sessions-state").textContent = "saving model";
+    async function setSessionModel(sessionKey, model, button) {
+      const confirmed = await confirmAction({
+        title: model === "reset" ? `Reset model for ${sessionKey}?` : `Apply ${model} to ${sessionKey}?`,
+        message: "This affects future turns. Running work keeps the model it already started with.",
+        confirmText: model === "reset" ? "Reset model" : "Apply model"
+      });
+      if (!confirmed) return;
+
+      await runMutation(`session:${sessionKey}:model`, {
+        button,
+        pendingLabel: "Saving...",
+        statusId: "sessions-state",
+        pendingStatus: "saving model",
+        successTitle: model === "reset" ? "Session model reset" : "Session model saved",
+        successStatus: "model saved",
+        errorTitle: "Session model update failed"
+      }, async () => {
         const payload = await api(`/api/workbench/sessions/${encodeURIComponent(sessionKey)}/model`, {
           method: "POST",
           body: JSON.stringify({ model })
         });
         state.sessions.detail = payload.session;
         await loadSessions();
-      } catch (error) {
-        $("sessions-state").textContent = "model update failed";
-        alert(error.message);
-      }
+      });
     }
 
     async function loadConfig() {
-      $("config-state").textContent = "syncing";
+      setStatus("config-state", "syncing", "warning");
       const payload = await api("/api/workbench/config");
       applyConfigPayload(payload);
       ensureConfigSelection();
       renderConfig();
-      $("config-state").textContent = "local config";
+      setStatus("config-state", "local config");
     }
 
     function applyConfigPayload(payload) {
@@ -2546,11 +2995,90 @@
       return configItems().find((item) => configItemKey(item) === state.config.selectedKey) || null;
     }
 
+    function configFormSnapshot() {
+      const form = $("config-editor");
+      const snapshot = {};
+      if (!form) return snapshot;
+
+      for (const control of form.querySelectorAll("input, select, textarea")) {
+        if (!control.id) continue;
+        snapshot[control.id] = control.type === "checkbox" ? control.checked : control.value;
+      }
+
+      return snapshot;
+    }
+
+    function sameSnapshot(left, right) {
+      return JSON.stringify(left || {}) === JSON.stringify(right || {});
+    }
+
+    function resetConfigDirty() {
+      state.config.baseline = configFormSnapshot();
+      state.config.dirty = false;
+      updateConfigDirtyUI();
+    }
+
+    function markConfigDirty() {
+      state.config.dirty = !sameSnapshot(state.config.baseline, configFormSnapshot());
+      updateConfigDirtyUI();
+    }
+
+    function attachConfigDirtyTracking() {
+      const form = $("config-editor");
+      if (!form) return;
+      form.oninput = markConfigDirty;
+      form.onchange = markConfigDirty;
+    }
+
+    function updateConfigDirtyUI() {
+      const shell = document.querySelector(".config-editor-shell");
+      if (shell) shell.dataset.dirty = state.config.dirty ? "true" : "false";
+      if (state.view === "config" && state.config.dirty) {
+        setStatus("config-state", "unsaved changes", "warning");
+      } else if (state.view === "config" && $("config-state")?.textContent === "unsaved changes") {
+        setStatus("config-state", "local config");
+      }
+    }
+
+    function configChangedOutsideRoles() {
+      const current = configFormSnapshot();
+      const baseline = state.config.baseline || {};
+      const keys = new Set([...Object.keys(current), ...Object.keys(baseline)]);
+
+      for (const key of keys) {
+        if (key.startsWith("role-")) continue;
+        if (current[key] !== baseline[key]) return true;
+      }
+
+      return false;
+    }
+
+    async function ensureSafeToLeaveConfig(action = "continue") {
+      if (state.view !== "config" || !state.config.dirty) return true;
+
+      const confirmed = await confirmAction({
+        title: "Discard unsaved configuration changes?",
+        message: `You have edits that have not been saved. Discard them and ${action}?`,
+        confirmText: "Discard changes",
+        cancelText: "Keep editing",
+        danger: true
+      });
+
+      if (confirmed) {
+        state.config.dirty = false;
+        updateConfigDirtyUI();
+      }
+
+      return confirmed;
+    }
+
     function renderConfig() {
       renderConfigTabs();
       renderConfigList();
       renderConfigEditor();
       renderConfigDetail();
+      attachConfigDirtyTracking();
+      resetConfigDirty();
     }
 
     function renderConfigTabs() {
@@ -2590,7 +3118,8 @@
         node.querySelector(".config-item-key").textContent = key;
         node.querySelector(".config-item-subline").textContent = configItemSubline(section, item);
         renderConfigChips(node.querySelector(".chips"), section, item);
-        node.addEventListener("click", () => {
+        node.addEventListener("click", async () => {
+          if (!(await ensureSafeToLeaveConfig(`open ${key}`))) return;
           state.config.creating = false;
           state.config.selectedKey = key;
           renderConfig();
@@ -2662,11 +3191,12 @@
       $("provider-base-url").value = item?.base_url || "";
       fillSecretMode("provider-secret-mode", item?.api_key, creating);
       $("provider-secret-env").value = item?.api_key?.env || "";
+      bindSecretMode("provider-secret-mode", "provider-secret-env", "provider-secret-value");
       renderProviderTypeGuide();
       renderSecretPreview("provider-secret-preview", "Current API key", item?.api_key);
       $("provider-type").addEventListener("change", renderProviderTypeGuide);
       $("config-delete").hidden = creating;
-      $("config-delete").addEventListener("click", () => deleteConfigEntity("providers", item.key));
+      $("config-delete").addEventListener("click", (event) => deleteConfigEntity("providers", item.key, event.currentTarget));
       form.onsubmit = (event) => saveProvider(event);
     }
 
@@ -2723,7 +3253,7 @@
       updateContextStrategyHelp();
       $("model-context-strategy").addEventListener("change", updateContextStrategyHelp);
       $("config-delete").hidden = creating;
-      $("config-delete").addEventListener("click", () => deleteConfigEntity("models", item.key));
+      $("config-delete").addEventListener("click", (event) => deleteConfigEntity("models", item.key, event.currentTarget));
       $("save-model-roles").addEventListener("click", saveModelRoles);
       form.onsubmit = (event) => saveModel(event);
       renderModelRoleControls();
@@ -2797,6 +3327,8 @@
       $("feishu-secret-env").value = item?.app_secret?.env || "";
       fillSecretMode("discord-token-mode", item?.token, creating);
       $("discord-token-env").value = item?.token?.env || "";
+      bindSecretMode("feishu-secret-mode", "feishu-secret-env", "feishu-secret-value");
+      bindSecretMode("discord-token-mode", "discord-token-env", "discord-token-value");
       renderChannelTypeGuide();
       renderSecretPreview("feishu-secret-preview", "Current app secret", item?.app_secret);
       renderSecretPreview("discord-token-preview", "Current bot token", item?.token);
@@ -2808,7 +3340,7 @@
       });
       updateChannelTypeFields();
       $("config-delete").hidden = creating;
-      $("config-delete").addEventListener("click", () => deleteConfigEntity("channels", item.id));
+      $("config-delete").addEventListener("click", (event) => deleteConfigEntity("channels", item.id, event.currentTarget));
       form.onsubmit = (event) => saveChannel(event);
     }
 
@@ -2838,92 +3370,222 @@
 
     async function saveProvider(event) {
       event.preventDefault();
+      const button = event.submitter;
       const key = $("config-key").value.trim();
-      const payload = await api(`/api/workbench/config/providers/${encodeURIComponent(key)}`, {
-        method: "PUT",
-        body: JSON.stringify({
-          type: $("provider-type").value,
-          base_url: $("provider-base-url").value.trim(),
-          api_key_mode: $("provider-secret-mode").value,
-          api_key_env: $("provider-secret-env").value.trim(),
-          api_key_value: $("provider-secret-value").value
-        })
+
+      if (!key) {
+        notify("Provider key is required", "error");
+        $("config-key").focus();
+        return;
+      }
+
+      const confirmed = await confirmAction({
+        title: `Save provider ${key}?`,
+        message: "This writes the runtime config and asks NexAgent to reload provider settings.",
+        confirmText: "Save provider"
       });
-      afterConfigSave(payload, key);
+
+      if (!confirmed) return;
+
+      await runMutation(`config:provider:${key}`, {
+        button,
+        statusId: "config-state",
+        pendingLabel: "Saving...",
+        pendingStatus: "saving provider",
+        successStatus: "provider saved",
+        errorTitle: "Provider was not saved"
+      }, async () => {
+        const payload = await api(`/api/workbench/config/providers/${encodeURIComponent(key)}`, {
+          method: "PUT",
+          body: JSON.stringify({
+            type: $("provider-type").value,
+            base_url: $("provider-base-url").value.trim(),
+            api_key_mode: $("provider-secret-mode").value,
+            api_key_env: $("provider-secret-env").value.trim(),
+            api_key_value: $("provider-secret-value").value
+          })
+        });
+        afterConfigSave(payload, key, "Provider");
+      });
     }
 
     async function saveModel(event) {
       event.preventDefault();
+      const button = event.submitter;
       const key = $("config-key").value.trim();
-      const payload = await api(`/api/workbench/config/models/${encodeURIComponent(key)}`, {
-        method: "PUT",
-        body: JSON.stringify({
-          provider: $("model-provider").value,
-          id: $("model-id").value.trim(),
-          context_window: $("model-context-window").value.trim(),
-          auto_compact_token_limit: $("model-auto-compact").value.trim(),
-          context_strategy: $("model-context-strategy").value.trim()
-        })
+
+      if (!key) {
+        notify("Model key is required", "error");
+        $("config-key").focus();
+        return;
+      }
+
+      const confirmed = await confirmAction({
+        title: `Save model ${key}?`,
+        message: "This writes the runtime config and reloads model routing for future turns.",
+        confirmText: "Save model"
       });
-      afterConfigSave(payload, key);
+
+      if (!confirmed) return;
+
+      await runMutation(`config:model:${key}`, {
+        button,
+        statusId: "config-state",
+        pendingLabel: "Saving...",
+        pendingStatus: "saving model",
+        successStatus: "model saved",
+        errorTitle: "Model was not saved"
+      }, async () => {
+        const payload = await api(`/api/workbench/config/models/${encodeURIComponent(key)}`, {
+          method: "PUT",
+          body: JSON.stringify({
+            provider: $("model-provider").value,
+            id: $("model-id").value.trim(),
+            context_window: $("model-context-window").value.trim(),
+            auto_compact_token_limit: $("model-auto-compact").value.trim(),
+            context_strategy: $("model-context-strategy").value.trim()
+          })
+        });
+        afterConfigSave(payload, key, "Model");
+      });
     }
 
     async function saveModelRoles() {
+      const button = $("save-model-roles");
       const body = {};
       for (const role of ["default_model", "cheap_model", "memory_model", "advisor_model"]) {
         body[role] = $(`role-${role}`).value;
       }
-      const payload = await api("/api/workbench/config/model-roles", {
-        method: "PATCH",
-        body: JSON.stringify(body)
+
+      if (state.config.dirty && configChangedOutsideRoles()) {
+        const discard = await confirmAction({
+          title: "Save roles and discard other edits?",
+          message: "The role button only saves model-role assignments. Unsaved model fields in this editor will be discarded after reload.",
+          confirmText: "Save roles",
+          cancelText: "Keep editing",
+          danger: true
+        });
+        if (!discard) return;
+      } else {
+        const confirmed = await confirmAction({
+          title: "Save model roles?",
+          message: "This updates which configured models NexAgent uses for default, cheap, memory, and advisor work.",
+          confirmText: "Save roles"
+        });
+        if (!confirmed) return;
+      }
+
+      await runMutation("config:model-roles", {
+        button,
+        statusId: "config-state",
+        pendingLabel: "Saving...",
+        pendingStatus: "saving roles",
+        successStatus: "roles saved",
+        errorTitle: "Model roles were not saved"
+      }, async () => {
+        const payload = await api("/api/workbench/config/model-roles", {
+          method: "PATCH",
+          body: JSON.stringify(body)
+        });
+        afterConfigSave(payload, state.config.selectedKey, "Model roles");
       });
-      afterConfigSave(payload, state.config.selectedKey);
     }
 
     async function saveChannel(event) {
       event.preventDefault();
+      const button = event.submitter;
       const key = $("config-key").value.trim();
-      const payload = await api(`/api/workbench/config/channels/${encodeURIComponent(key)}`, {
-        method: "PUT",
-        body: JSON.stringify({
-          type: $("channel-type").value,
-          enabled: $("channel-enabled").checked,
-          streaming: $("channel-streaming").checked,
-          allow_from: $("channel-allow-from").value,
-          app_id: $("feishu-app-id").value.trim(),
-          app_secret_mode: $("feishu-secret-mode").value,
-          app_secret_env: $("feishu-secret-env").value.trim(),
-          app_secret_value: $("feishu-secret-value").value,
-          token_mode: $("discord-token-mode").value,
-          token_env: $("discord-token-env").value.trim(),
-          token_value: $("discord-token-value").value,
-          show_table_as: $("discord-table-mode").value,
-          guild_id: $("discord-guild-id").value.trim()
-        })
+
+      if (!key) {
+        notify("Channel ID is required", "error");
+        $("config-key").focus();
+        return;
+      }
+
+      const enabled = $("channel-enabled").checked;
+      const confirmed = await confirmAction({
+        title: `Save channel ${key}?`,
+        message: enabled
+          ? "This writes runtime config and may reconnect a live chat gateway after reload."
+          : "This writes runtime config and may disconnect this channel after reload.",
+        confirmText: "Save channel",
+        danger: !enabled
       });
-      afterConfigSave(payload, key);
-    }
 
-    async function deleteConfigEntity(section, key) {
-      if (!key) return;
-      const confirmed = window.confirm(`Delete ${key}?`);
       if (!confirmed) return;
-      const payload = await api(`/api/workbench/config/${section}/${encodeURIComponent(key)}`, { method: "DELETE" });
-      applyConfigPayload(payload);
-      state.config.creating = false;
-      state.config.selectedKey = null;
-      ensureConfigSelection();
-      renderConfig();
-      $("config-state").textContent = "saved";
+
+      await runMutation(`config:channel:${key}`, {
+        button,
+        statusId: "config-state",
+        pendingLabel: "Saving...",
+        pendingStatus: "saving channel",
+        successStatus: "channel saved",
+        errorTitle: "Channel was not saved"
+      }, async () => {
+        const payload = await api(`/api/workbench/config/channels/${encodeURIComponent(key)}`, {
+          method: "PUT",
+          body: JSON.stringify({
+            type: $("channel-type").value,
+            enabled,
+            streaming: $("channel-streaming").checked,
+            allow_from: $("channel-allow-from").value,
+            app_id: $("feishu-app-id").value.trim(),
+            app_secret_mode: $("feishu-secret-mode").value,
+            app_secret_env: $("feishu-secret-env").value.trim(),
+            app_secret_value: $("feishu-secret-value").value,
+            token_mode: $("discord-token-mode").value,
+            token_env: $("discord-token-env").value.trim(),
+            token_value: $("discord-token-value").value,
+            show_table_as: $("discord-table-mode").value,
+            guild_id: $("discord-guild-id").value.trim()
+          })
+        });
+        afterConfigSave(payload, key, "Channel");
+      });
     }
 
-    function afterConfigSave(payload, key) {
+    async function deleteConfigEntity(section, key, button) {
+      if (!key) return;
+      const impact = configImpact(section, currentConfigItem() || {});
+      const confirmed = await confirmAction({
+        title: `Delete ${key}?`,
+        message: "This writes the runtime config and reloads NexAgent. The action cannot be undone from this screen.",
+        detail: JSON.stringify(impact, null, 2),
+        confirmText: `Delete ${sectionTitle(section).slice(0, -1).toLowerCase()}`,
+        cancelText: "Keep it",
+        danger: true
+      });
+      if (!confirmed) return;
+
+      await runMutation(`config:delete:${section}:${key}`, {
+        button,
+        statusId: "config-state",
+        pendingLabel: "Deleting...",
+        pendingStatus: "deleting",
+        successTitle: `${key} deleted`,
+        successStatus: "deleted",
+        errorTitle: `${key} was not deleted`
+      }, async () => {
+        const payload = await api(`/api/workbench/config/${section}/${encodeURIComponent(key)}`, { method: "DELETE" });
+        applyConfigPayload(payload);
+        state.config.creating = false;
+        state.config.selectedKey = null;
+        ensureConfigSelection();
+        renderConfig();
+        setStatus("config-state", `${key} deleted`, "success");
+      });
+    }
+
+    function afterConfigSave(payload, key, label = "Configuration") {
       applyConfigPayload(payload);
       state.config.creating = false;
       state.config.selectedKey = key;
       ensureConfigSelection();
       renderConfig();
-      $("config-state").textContent = "saved";
+      const reload = state.config.reloadStatus;
+      const reloadText = reload?.version ? `Runtime ${reload.status} · v${reload.version}` : `Runtime ${reload?.status || "updated"}`;
+      setStatus("config-state", `${label} saved`, "success");
+      notify(`${label} saved`, "success", reloadText);
     }
 
     function fillSelect(select, values, selected, labels = {}) {
@@ -2952,6 +3614,21 @@
         literal: "set new secret",
         none: "clear"
       });
+    }
+
+    function bindSecretMode(modeId, envId, valueId) {
+      const mode = $(modeId);
+      const env = $(envId);
+      const value = $(valueId);
+      if (!mode || !env || !value) return;
+
+      const update = () => {
+        env.disabled = mode.value !== "env";
+        value.disabled = mode.value !== "literal";
+      };
+
+      mode.addEventListener("change", update);
+      update();
     }
 
     function renderProviderTypeGuide() {
@@ -3294,6 +3971,13 @@
         node.querySelector(".time").textContent = event.timestamp || "";
         root.appendChild(node);
       }
+
+      if (!root.children.length) {
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = "No recent app observations";
+        root.appendChild(empty);
+      }
     }
 
     function renderDiagnostics() {
@@ -3329,7 +4013,7 @@
       $("filter-limit").value = "80";
       state.filters.limit = "80";
       setLevel("");
-      loadObserve();
+      safeLoad("Observability", "observe-state", loadObserve);
     }
 
     function numberOrNull(value) {
@@ -3349,24 +4033,28 @@
       return date.toLocaleString();
     }
 
-    $("observe-nav").addEventListener("click", () => {
+    $("observe-nav").addEventListener("click", async () => {
+      if (!(await ensureSafeToLeaveConfig("open Observability"))) return;
       switchView("observe");
-      loadObserve();
+      safeLoad("Observability", "observe-state", loadObserve);
     });
 
-    $("evolution-nav").addEventListener("click", () => {
+    $("evolution-nav").addEventListener("click", async () => {
+      if (!(await ensureSafeToLeaveConfig("open Self Evolution"))) return;
       switchView("evolution");
-      loadEvolution();
+      safeLoad("Self Evolution", "evolution-state", loadEvolution);
     });
 
-    $("sessions-nav").addEventListener("click", () => {
+    $("sessions-nav").addEventListener("click", async () => {
+      if (!(await ensureSafeToLeaveConfig("open Sessions"))) return;
       switchView("sessions");
-      loadSessions();
+      safeLoad("Sessions", "sessions-state", loadSessions);
     });
 
-    $("config-nav").addEventListener("click", () => {
+    $("config-nav").addEventListener("click", async () => {
+      if (!(await ensureSafeToLeaveConfig("reload Configuration"))) return;
       switchView("config");
-      loadConfig();
+      safeLoad("Configuration", "config-state", loadConfig);
     });
 
     for (const button of document.querySelectorAll(".sidebar-toggle")) {
@@ -3383,6 +4071,12 @@
       if (event.key === "Escape") closePanels();
     });
 
+    window.addEventListener("beforeunload", (event) => {
+      if (!state.config.dirty) return;
+      event.preventDefault();
+      event.returnValue = "";
+    });
+
     if (compactLayout.addEventListener) {
       compactLayout.addEventListener("change", (event) => {
         if (!event.matches) closePanels();
@@ -3393,13 +4087,17 @@
       });
     }
 
-    $("refresh-observe").addEventListener("click", loadObserve);
-    $("refresh-evolution").addEventListener("click", loadEvolution);
-    $("refresh-sessions").addEventListener("click", loadSessions);
-    $("refresh-config").addEventListener("click", loadConfig);
+    $("refresh-observe").addEventListener("click", () => safeLoad("Observability", "observe-state", loadObserve));
+    $("refresh-evolution").addEventListener("click", () => safeLoad("Self Evolution", "evolution-state", loadEvolution));
+    $("refresh-sessions").addEventListener("click", () => safeLoad("Sessions", "sessions-state", loadSessions));
+    $("refresh-config").addEventListener("click", async () => {
+      if (!(await ensureSafeToLeaveConfig("refresh configuration"))) return;
+      safeLoad("Configuration", "config-state", loadConfig);
+    });
     $("reload-app").addEventListener("click", reloadCurrentApp);
     window.addEventListener("message", handleBridgeMessage);
-    $("config-new").addEventListener("click", () => {
+    $("config-new").addEventListener("click", async () => {
+      if (!(await ensureSafeToLeaveConfig("create a new entry"))) return;
       state.config.creating = true;
       state.config.selectedKey = null;
       renderConfig();
@@ -3407,11 +4105,12 @@
     $("clear-filters").addEventListener("click", clearFilters);
     $("observe-filters").addEventListener("submit", (event) => {
       event.preventDefault();
-      loadObserve();
+      safeLoad("Observability", "observe-state", loadObserve);
     });
 
     for (const button of document.querySelectorAll(".config-tab")) {
-      button.addEventListener("click", () => {
+      button.addEventListener("click", async () => {
+        if (!(await ensureSafeToLeaveConfig(`open ${sectionTitle(button.dataset.configSection).toLowerCase()}`))) return;
         state.config.section = button.dataset.configSection;
         state.config.creating = false;
         state.config.selectedKey = null;
@@ -3423,7 +4122,7 @@
     for (const button of document.querySelectorAll(".level-button")) {
       button.addEventListener("click", () => {
         setLevel(button.dataset.level || "");
-        loadObserve();
+        safeLoad("Observability", "observe-state", loadObserve);
       });
     }
 
@@ -3432,9 +4131,10 @@
     loadApps()
       .then(loadObserve)
       .catch((error) => {
-        $("connection").textContent = "error";
+        setStatus("connection", "error", "error");
         $("observation-detail").innerHTML = `<div class="diag"></div>`;
         $("observation-detail").querySelector(".diag").textContent = error.message;
+        notify("Workbench failed to load", "error", boundedMessage(error));
       });
   </script>
 </body>

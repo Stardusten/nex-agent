@@ -139,13 +139,23 @@ defmodule Nex.Agent.Workbench.Shell do
     """
   end
 
-  @spec inject_sdk_bootstrap(String.t()) :: String.t()
-  def inject_sdk_bootstrap(html) when is_binary(html) do
+  @spec inject_sdk_bootstrap(String.t(), String.t() | nil) :: String.t()
+  def inject_sdk_bootstrap(html, app_id \\ nil) when is_binary(html) do
     script = sdk_bootstrap()
+
+    head_injection =
+      [app_base_tag(html, app_id), script]
+      |> Enum.reject(&(&1 in [nil, ""]))
+      |> Enum.join("\n")
 
     cond do
       Regex.match?(~r/<\/head\s*>/i, html) ->
-        Regex.replace(~r/<\/head\s*>/i, html, script <> "\n</head>", global: false)
+        Regex.replace(~r/<\/head\s*>/i, html, head_injection <> "\n</head>", global: false)
+
+      Regex.match?(~r/<html[^>]*>/i, html) ->
+        Regex.replace(~r/<html[^>]*>/i, html, "\\0\n<head>\n" <> head_injection <> "\n</head>",
+          global: false
+        )
 
       Regex.match?(~r/<body[^>]*>/i, html) ->
         Regex.replace(~r/<body[^>]*>/i, html, "\\0\n" <> script, global: false)
@@ -154,6 +164,16 @@ defmodule Nex.Agent.Workbench.Shell do
         script <> "\n" <> html
     end
   end
+
+  defp app_base_tag(html, app_id) when is_binary(app_id) and app_id != "" do
+    if Regex.match?(~r/<base\s/i, html) do
+      nil
+    else
+      ~s(<base href="/app-assets/#{escape(app_id)}/">)
+    end
+  end
+
+  defp app_base_tag(_html, _app_id), do: nil
 
   @spec frame_error(String.t(), String.t()) :: String.t()
   def frame_error(title, message) do

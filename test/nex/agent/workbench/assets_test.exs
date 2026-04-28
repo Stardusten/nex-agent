@@ -23,6 +23,7 @@ defmodule Nex.Agent.Workbench.AssetsTest do
     assert {:ok, html} = Assets.app_frame("demo", workspace: workspace)
 
     assert html =~ "<h1>Hello</h1>"
+    assert html =~ ~s(<base href="/app-assets/demo/">)
     assert html =~ "window.Nex"
     assert html =~ "workbench.bridge.request"
 
@@ -102,7 +103,12 @@ defmodule Nex.Agent.Workbench.AssetsTest do
              )
 
     app_dir = Path.join([workspace, "workbench", "apps", "demo"])
-    File.write!(Path.join(app_dir, "index.html"), "<!doctype html><h1>Hello</h1>")
+
+    File.write!(
+      Path.join(app_dir, "index.html"),
+      "<!doctype html><html><head><title>Demo</title></head><body><h1>Hello</h1></body></html>"
+    )
+
     File.write!(Path.join(app_dir, "app.js"), "console.log('hello');")
     File.write!(Path.join(app_dir, "style.css"), "body { color: #20251f; }")
   end

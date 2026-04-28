@@ -28,7 +28,7 @@ defmodule Nex.Agent.Workbench.Assets do
                 opts
               )
 
-            {:ok, Shell.inject_sdk_bootstrap(body)}
+            {:ok, Shell.inject_sdk_bootstrap(body, app_id)}
 
           {:error, reason} ->
             _ = frame_failed(app_id, manifest.entry, reason, opts)

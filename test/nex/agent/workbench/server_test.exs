@@ -169,7 +169,7 @@ defmodule Nex.Agent.Workbench.ServerTest do
 
     File.write!(
       Path.join(app_dir, "index.html"),
-      ~s(<!doctype html><html><head><title>Notes</title><link rel="stylesheet" href="/app-assets/notes/style.css"></head><body><h1>Notes App</h1><script src="/app-assets/notes/app.js"></script></body></html>)
+      ~s(<!doctype html><html><head><title>Notes</title><link rel="stylesheet" href="style.css"></head><body><h1>Notes App</h1><script src="app.js"></script></body></html>)
     )
 
     File.write!(Path.join(app_dir, "app.js"), "window.notesLoaded = true;")
@@ -184,7 +184,13 @@ defmodule Nex.Agent.Workbench.ServerTest do
     assert shell =~ "Sessions"
     assert shell =~ "sandbox = \"allow-scripts\""
     assert shell =~ "id=\"reload-app\""
+    assert shell =~ "id=\"toast-region\""
+    assert shell =~ "id=\"confirm-modal\""
+    assert shell =~ "Discard unsaved configuration changes?"
+    assert shell =~ "aria-live=\"polite\""
     assert shell =~ "window.addEventListener(\"message\", handleBridgeMessage)"
+    refute shell =~ "window.confirm"
+    refute shell =~ "alert(error.message)"
     assert shell =~ "/api/workbench/apps"
     assert shell =~ "/api/workbench/evolution"
     assert shell =~ "/api/workbench/sessions"
@@ -192,6 +198,7 @@ defmodule Nex.Agent.Workbench.ServerTest do
     assert {200, frame} = get_raw(port, "/app-frame/notes")
     assert frame =~ "<title>Notes</title>"
     assert frame =~ "Notes App"
+    assert frame =~ ~s(<base href="/app-assets/notes/">)
     assert frame =~ "window.Nex"
     assert frame =~ "workbench.bridge.request"
 
