@@ -136,6 +136,12 @@ defmodule Nex.Agent.RunControl do
     )
   end
 
+  @spec owner_snapshots(String.t()) :: [owner_snapshot()]
+  @spec owner_snapshots(String.t(), keyword()) :: [owner_snapshot()]
+  def owner_snapshots(workspace, opts \\ []) do
+    GenServer.call(server_name(opts), {:owner_snapshots, normalize_workspace(workspace)})
+  end
+
   @spec append_tool_output(String.t(), String.t(), iodata()) :: :ok | {:error, :stale}
   @spec append_tool_output(String.t(), String.t(), iodata(), keyword()) :: :ok | {:error, :stale}
   def append_tool_output(run_id, tool_name, output, opts \\ []) do
@@ -273,6 +279,16 @@ defmodule Nex.Agent.RunControl do
       end
 
     {:reply, reply, prune_state(state)}
+  end
+
+  def handle_call({:owner_snapshots, workspace}, _from, state) do
+    runs =
+      state.owners
+      |> Map.values()
+      |> Enum.filter(&(&1.workspace == workspace))
+      |> Enum.sort_by(& &1.started_at_ms)
+
+    {:reply, runs, prune_state(state)}
   end
 
   def handle_call({:append_tool_output, run_id, tool_name, output}, _from, state) do

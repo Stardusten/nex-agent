@@ -22,6 +22,7 @@ defmodule Nex.Agent.Admin do
 
   alias Nex.Agent.ControlPlane.{Log, Query}
   alias Nex.Agent.Tool.{CustomTools, Registry}
+  alias Nex.Agent.Workbench.Store, as: WorkbenchStore
   alias Nex.SkillRuntime.Store
   require Log
 
@@ -95,6 +96,7 @@ defmodule Nex.Agent.Admin do
       tasks: tasks_summary(opts),
       recent_sessions: Enum.take(list_sessions(opts), 6),
       code: code_summary(opts),
+      workbench: workbench_summary(opts),
       cron: cron_status(opts)
     }
   end
@@ -474,6 +476,28 @@ defmodule Nex.Agent.Admin do
       modules: length(code_modules()),
       recent_events:
         Query.recent_events(Keyword.merge(workspace_opts(opts), limit: 8, tag_prefix: "code."))
+    }
+  end
+
+  defp workbench_summary(opts) do
+    %{"apps" => apps, "diagnostics" => diagnostics} =
+      WorkbenchStore.load_all(workspace_opts(opts))
+
+    %{
+      app_count: length(apps),
+      diagnostics_count: length(diagnostics),
+      apps:
+        apps
+        |> Enum.take(8)
+        |> Enum.map(fn app ->
+          %{
+            id: app.id,
+            title: app.title,
+            entry: app.entry,
+            permissions_count: length(app.permissions)
+          }
+        end),
+      diagnostics: Enum.take(diagnostics, 8)
     }
   end
 

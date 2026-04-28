@@ -5,6 +5,7 @@ defmodule Nex.Agent.AdminTest do
   alias Nex.Agent.ControlPlane.Log
   alias Nex.Agent.SelfUpdate.ReleaseStore
   alias Nex.Agent.Tool.CustomTools
+  alias Nex.Agent.Workbench.Store, as: WorkbenchStore
   require Log
 
   setup do
@@ -85,6 +86,39 @@ defmodule Nex.Agent.AdminTest do
     refute Enum.any?(sessions_state.sessions, &(&1.key == "telegram_123"))
 
     assert Enum.map(overview_state.recent_sessions, & &1.key) == ["telegram:123"]
+  end
+
+  test "overview_state includes workbench app summary and diagnostics", %{workspace: workspace} do
+    assert {:ok, _} =
+             WorkbenchStore.save(
+               %{
+                 "id" => "notes",
+                 "title" => "Notes",
+                 "entry" => "src/App.tsx",
+                 "permissions" => ["notes:read", "notes:write"]
+               },
+               workspace: workspace
+             )
+
+    invalid_dir = Path.join([workspace, "workbench", "apps", "broken-app"])
+    File.mkdir_p!(invalid_dir)
+    File.write!(Path.join(invalid_dir, "nex.app.json"), "{bad json")
+
+    overview_state = Admin.overview_state(workspace: workspace)
+
+    assert overview_state.workbench.app_count == 1
+    assert overview_state.workbench.diagnostics_count == 1
+
+    assert [
+             %{
+               id: "notes",
+               title: "Notes",
+               entry: "src/App.tsx",
+               permissions_count: 2
+             }
+           ] = overview_state.workbench.apps
+
+    assert [%{"app_id" => "broken-app"}] = overview_state.workbench.diagnostics
   end
 
   test "skills_state and overview_state skip malformed runtime run logs", %{workspace: workspace} do

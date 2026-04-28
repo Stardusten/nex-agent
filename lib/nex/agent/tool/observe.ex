@@ -7,7 +7,7 @@ defmodule Nex.Agent.Tool.Observe do
   alias Nex.Agent.Workspace
 
   @actions ~w(summary query tail metrics incident)
-  @filter_keys ~w(tag level run_id session_key query since limit)
+  @filter_keys ~w(tag tag_prefix kind level run_id session_key channel chat_id tool tool_call_id tool_name trace_id query since limit)
 
   def name, do: "observe"
 
@@ -30,9 +30,17 @@ defmodule Nex.Agent.Tool.Observe do
             description: "Observation query action to run"
           },
           tag: %{type: "string", description: "Optional exact observation tag filter"},
+          tag_prefix: %{type: "string", description: "Optional observation tag prefix filter"},
+          kind: %{type: "string", description: "Optional observation kind filter"},
           level: %{type: "string", description: "Optional observation level filter"},
           run_id: %{type: "string", description: "Optional run id filter"},
           session_key: %{type: "string", description: "Optional session key filter"},
+          channel: %{type: "string", description: "Optional channel filter"},
+          chat_id: %{type: "string", description: "Optional chat id filter"},
+          tool: %{type: "string", description: "Optional tool name or tool call id filter"},
+          tool_call_id: %{type: "string", description: "Optional tool call id filter"},
+          tool_name: %{type: "string", description: "Optional tool name filter"},
+          trace_id: %{type: "string", description: "Optional trace id filter"},
           query: %{type: "string", description: "Optional text search across observation JSON"},
           since: %{type: "string", description: "Optional ISO8601 lower timestamp bound"},
           limit: %{type: "integer", description: "Maximum observations to return"}

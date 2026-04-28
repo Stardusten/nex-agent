@@ -43,7 +43,10 @@ defmodule Nex.Agent.Application do
           Nex.Agent.Channel.Registry,
           Nex.Agent.Runtime,
           Nex.Agent.Runtime.Watcher,
-          Nex.Agent.Runtime.Reconciler,
+          Nex.Agent.Runtime.Reconciler
+        ] ++
+        maybe_workbench_server() ++
+        [
           Nex.Agent.WorkerSupervisor,
           {DynamicSupervisor, name: Nex.Agent.ChannelSupervisor, strategy: :one_for_one},
           Nex.Agent.Gateway
@@ -56,6 +59,14 @@ defmodule Nex.Agent.Application do
     case Process.whereis(Req.Finch) do
       nil -> [{Finch, name: Req.Finch}]
       _pid -> []
+    end
+  end
+
+  defp maybe_workbench_server do
+    if Application.get_env(:nex_agent, :supervise_workbench_server?, true) do
+      [Nex.Agent.Workbench.Server]
+    else
+      []
     end
   end
 end

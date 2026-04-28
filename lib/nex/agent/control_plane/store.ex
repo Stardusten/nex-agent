@@ -32,9 +32,8 @@ defmodule Nex.Agent.ControlPlane.Store do
 
     opts
     |> observation_files()
-    |> Enum.flat_map(&read_file/1)
-    |> Enum.filter(&match_filters?(&1, filters))
-    |> Enum.take(-limit)
+    |> recent_first_observation_files(filters)
+    |> collect_recent_matches(filters, limit, [])
   rescue
     _e -> []
   end
@@ -191,15 +190,52 @@ defmodule Nex.Agent.ControlPlane.Store do
     end
   end
 
-  defp read_file(path) do
+  defp recent_first_observation_files(files, filters) do
+    since_date = since_date(filters)
+
+    files
+    |> Enum.reverse()
+    |> Enum.reject(&older_than_since_date?(&1, since_date))
+  end
+
+  defp collect_recent_matches(_files, _filters, limit, acc) when length(acc) >= limit,
+    do: Enum.take(acc, limit)
+
+  defp collect_recent_matches([], _filters, _limit, acc), do: acc
+
+  defp collect_recent_matches([path | rest], filters, limit, acc) do
+    acc =
+      reduce_file_recent_first(path, acc, fn observation, acc ->
+        cond do
+          length(acc) >= limit ->
+            {:halt, acc}
+
+          match_filters?(observation, filters) ->
+            {:cont, [observation | acc]}
+
+          true ->
+            {:cont, acc}
+        end
+      end)
+
+    collect_recent_matches(rest, filters, limit, acc)
+  end
+
+  defp reduce_file_recent_first(path, acc, fun) do
     case File.read(path) do
       {:ok, body} ->
         body
         |> String.split("\n", trim: true)
-        |> Enum.flat_map(&decode_line/1)
+        |> Enum.reverse()
+        |> Enum.reduce_while(acc, fn line, acc ->
+          case decode_line(line) do
+            [observation] -> fun.(observation, acc)
+            [] -> {:cont, acc}
+          end
+        end)
 
       {:error, _reason} ->
-        []
+        acc
     end
   end
 
@@ -210,10 +246,38 @@ defmodule Nex.Agent.ControlPlane.Store do
     end
   end
 
+  defp older_than_since_date?(_path, nil), do: false
+
+  defp older_than_since_date?(path, since_date) do
+    path
+    |> Path.basename(".jsonl")
+    |> Date.from_iso8601()
+    |> case do
+      {:ok, file_date} -> Date.compare(file_date, since_date) == :lt
+      {:error, _reason} -> false
+    end
+  end
+
+  defp since_date(%{"since" => value}) do
+    if blank?(value) do
+      nil
+    else
+      case DateTime.from_iso8601(to_string(value)) do
+        {:ok, datetime, _offset} -> DateTime.to_date(datetime)
+        {:error, _reason} -> nil
+      end
+    end
+  end
+
+  defp since_date(_filters), do: nil
+
   defp match_filters?(observation, filters) do
     Enum.all?(filters, fn
       {"limit", _value} ->
         true
+
+      {"id", value} ->
+        id_matches?(observation, value)
 
       {"tag", value} ->
         blank?(value) or observation["tag"] == value
@@ -238,6 +302,15 @@ defmodule Nex.Agent.ControlPlane.Store do
 
       {"chat_id", value} ->
         blank?(value) or get_in(observation, ["context", "chat_id"]) == value
+
+      {"tool_call_id", value} ->
+        blank?(value) or get_in(observation, ["context", "tool_call_id"]) == value
+
+      {"tool_name", value} ->
+        blank?(value) or get_in(observation, ["attrs", "tool_name"]) == value
+
+      {"tool", value} ->
+        blank?(value) or tool_matches?(observation, value)
 
       {"trace_id", value} ->
         blank?(value) or get_in(observation, ["context", "trace_id"]) == value
@@ -269,6 +342,24 @@ defmodule Nex.Agent.ControlPlane.Store do
       |> String.downcase()
 
     String.contains?(haystack, query |> to_string() |> String.downcase())
+  end
+
+  defp tool_matches?(observation, value) do
+    value = to_string(value)
+
+    get_in(observation, ["context", "tool_call_id"]) == value or
+      get_in(observation, ["attrs", "tool_name"]) == value
+  end
+
+  defp id_matches?(_observation, []), do: false
+
+  defp id_matches?(observation, values) when is_list(values) do
+    values = Enum.reject(values, &blank?/1)
+    Enum.any?(values, &id_matches?(observation, &1))
+  end
+
+  defp id_matches?(observation, value) do
+    blank?(value) or observation["id"] == to_string(value)
   end
 
   defp normalize_tag!(tag) when is_binary(tag) do

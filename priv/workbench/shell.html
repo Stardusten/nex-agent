@@ -1,0 +1,3441 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Nex Workbench</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #20251f;
+      --muted: #637062;
+      --faint: #899287;
+      --paper: #f4f7f1;
+      --surface: #fffef9;
+      --panel: #e8eee4;
+      --line: #c9d3c4;
+      --line-strong: #9bae93;
+      --accent: #1b6d57;
+      --accent-ink: #f7fff8;
+      --blue: #315f7a;
+      --warm: #a95a24;
+      --warning: #a66a00;
+      --danger: #a33a32;
+      --critical: #6f1f2d;
+      --shadow: rgba(32, 37, 31, 0.12);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Avenir Next", "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: var(--paper);
+      overflow: hidden;
+    }
+
+    button,
+    input,
+    select {
+      font: inherit;
+      color: inherit;
+    }
+
+    button,
+    select {
+      cursor: pointer;
+    }
+
+    code,
+    pre,
+    .mono {
+      font-family: "SFMono-Regular", Consolas, monospace;
+    }
+
+    h1, h2, h3, p {
+      margin: 0;
+    }
+
+    .shell {
+      height: 100vh;
+      display: grid;
+      grid-template-columns: 260px minmax(520px, 1fr) 420px;
+      border-top: 5px solid var(--accent);
+    }
+
+    .sidebar,
+    .inspector {
+      min-width: 0;
+      background: var(--panel);
+      display: flex;
+      flex-direction: column;
+    }
+
+    .sidebar {
+      border-right: 1px solid var(--line);
+    }
+
+    .inspector {
+      border-left: 1px solid var(--line);
+    }
+
+    .panel-scrim {
+      display: none;
+    }
+
+    header {
+      padding: 19px 18px 15px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .brand {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    h1 {
+      font-size: 20px;
+      line-height: 1;
+      letter-spacing: 0;
+    }
+
+    .status {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .nav-group {
+      padding: 12px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .nav-label {
+      padding: 0 3px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    .system-button,
+    .app-button {
+      width: 100%;
+      border: 1px solid transparent;
+      background: transparent;
+      padding: 11px 12px;
+      text-align: left;
+      display: grid;
+      gap: 5px;
+    }
+
+    .system-button:hover,
+    .app-button:hover {
+      border-color: var(--line);
+      background: rgba(255, 254, 249, 0.58);
+    }
+
+    .system-button[aria-selected="true"],
+    .app-button[aria-selected="true"] {
+      background: var(--surface);
+      border-color: var(--accent);
+      box-shadow: 0 12px 26px var(--shadow);
+    }
+
+    .app-list {
+      min-height: 0;
+      overflow: auto;
+      display: grid;
+      gap: 8px;
+    }
+
+    .app-title {
+      font-weight: 700;
+      font-size: 15px;
+      line-height: 1.2;
+    }
+
+    .app-id,
+    .subtle {
+      color: var(--muted);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+
+    .stage {
+      min-width: 0;
+      min-height: 0;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      background:
+        linear-gradient(90deg, rgba(27, 109, 87, 0.045) 1px, transparent 1px),
+        linear-gradient(180deg, rgba(49, 95, 122, 0.045) 1px, transparent 1px),
+        var(--paper);
+      background-size: 42px 42px;
+    }
+
+    .stage[hidden],
+    .inspector-mode[hidden] {
+      display: none;
+    }
+
+    .stage-bar {
+      min-height: 70px;
+      padding: 17px 22px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      background: rgba(244, 247, 241, 0.84);
+    }
+
+    .stage-title {
+      font-size: clamp(24px, 3vw, 40px);
+      line-height: 1;
+      font-weight: 800;
+      letter-spacing: 0;
+    }
+
+    .stage-entry {
+      color: var(--muted);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+      text-align: right;
+    }
+
+    .stage-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .refresh,
+    .action,
+    .panel-toggle,
+    .permission button,
+    .level-button {
+      min-height: 32px;
+      border: 1px solid var(--accent);
+      background: var(--accent);
+      color: var(--accent-ink);
+      padding: 6px 10px;
+    }
+
+    .panel-toggle {
+      display: none;
+    }
+
+    .action.secondary,
+    .panel-toggle,
+    .permission button[data-mode="revoke"],
+    .level-button {
+      border-color: var(--line-strong);
+      background: transparent;
+      color: var(--ink);
+    }
+
+    .level-button[aria-pressed="true"] {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: var(--accent-ink);
+    }
+
+    .observe-workspace {
+      min-height: 0;
+      padding: 18px 22px 20px;
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+      gap: 16px;
+      overflow: hidden;
+    }
+
+    .evolution-workspace {
+      min-height: 0;
+      padding: 18px 22px 20px;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      gap: 16px;
+      overflow: hidden;
+    }
+
+    .config-workspace {
+      min-height: 0;
+      padding: 18px 22px 20px;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      gap: 14px;
+      overflow: hidden;
+    }
+
+    .sessions-workspace {
+      min-height: 0;
+      padding: 18px 22px 20px;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      gap: 16px;
+      overflow: hidden;
+    }
+
+    .session-board {
+      min-height: 0;
+      background: rgba(255, 254, 249, 0.92);
+      border: 1px solid var(--line);
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+
+    .session-list {
+      min-height: 0;
+      overflow: auto;
+      padding: 8px 0;
+    }
+
+    .session-row {
+      width: 100%;
+      border: 0;
+      border-left: 4px solid var(--line-strong);
+      border-bottom: 1px solid rgba(201, 211, 196, 0.72);
+      background: transparent;
+      padding: 12px 14px 12px 12px;
+      text-align: left;
+      display: grid;
+      gap: 8px;
+    }
+
+    .session-row[data-status="running"] {
+      border-left-color: var(--accent);
+      background: color-mix(in srgb, var(--accent), transparent 94%);
+    }
+
+    .session-row:hover,
+    .session-row[aria-selected="true"] {
+      background: rgba(232, 238, 228, 0.68);
+    }
+
+    .session-main {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: baseline;
+    }
+
+    .session-key {
+      font-weight: 800;
+      overflow-wrap: anywhere;
+    }
+
+    .session-status {
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .session-preview {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+
+    .config-tabs {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .config-tab {
+      min-height: 34px;
+      border: 1px solid var(--line-strong);
+      background: rgba(255, 254, 249, 0.66);
+      color: var(--ink);
+      padding: 7px 12px;
+      font-weight: 700;
+    }
+
+    .config-tab[aria-selected="true"] {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: var(--accent-ink);
+    }
+
+    .config-board {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(280px, 0.78fr) minmax(440px, 1.22fr);
+      gap: 14px;
+    }
+
+    .config-list-shell,
+    .config-editor-shell {
+      min-height: 0;
+      background: rgba(255, 254, 249, 0.92);
+      border: 1px solid var(--line);
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+
+    .config-list-head {
+      padding: 12px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .config-list-title {
+      font-size: 14px;
+      font-weight: 800;
+    }
+
+    .config-list {
+      min-height: 0;
+      overflow: auto;
+      padding: 8px 0;
+    }
+
+    .config-item {
+      width: 100%;
+      border: 0;
+      border-left: 4px solid var(--blue);
+      border-bottom: 1px solid rgba(201, 211, 196, 0.72);
+      background: transparent;
+      padding: 12px 12px;
+      text-align: left;
+      display: grid;
+      gap: 8px;
+    }
+
+    .config-item:hover,
+    .config-item[aria-selected="true"] {
+      background: rgba(232, 238, 228, 0.68);
+    }
+
+    .config-item-main {
+      display: grid;
+      gap: 4px;
+      min-width: 0;
+    }
+
+    .config-item-key {
+      color: var(--ink);
+      font-weight: 800;
+      font-size: 14px;
+      line-height: 1.2;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .config-item-subline {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+
+    .config-editor {
+      min-height: 0;
+      overflow: auto;
+      padding: 14px;
+      display: grid;
+      align-content: start;
+      gap: 14px;
+    }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      align-items: end;
+    }
+
+    .field-wide {
+      grid-column: 1 / -1;
+    }
+
+    .field-help,
+    .config-type-guide,
+    .secret-preview {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: 0;
+      line-height: 1.4;
+      text-transform: none;
+    }
+
+    .config-type-guide,
+    .secret-preview {
+      border: 1px solid var(--line);
+      background: rgba(232, 238, 228, 0.42);
+      padding: 9px 10px;
+      display: grid;
+      gap: 3px;
+    }
+
+    .config-type-guide strong,
+    .secret-preview strong {
+      color: var(--ink);
+      font-weight: 800;
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 76px;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      padding: 8px;
+      color: var(--ink);
+      font: inherit;
+      font-size: 13px;
+      resize: vertical;
+    }
+
+    textarea:focus {
+      outline: 2px solid color-mix(in srgb, var(--accent), transparent 35%);
+      outline-offset: 2px;
+    }
+
+    .checkbox-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 34px;
+      color: var(--ink);
+      text-transform: none;
+      letter-spacing: 0;
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .checkbox-row input {
+      width: 16px;
+      min-height: 16px;
+    }
+
+    .button-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .config-roles {
+      border-top: 1px solid var(--line);
+      padding-top: 14px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .filter-panel {
+      background: rgba(255, 254, 249, 0.88);
+      border: 1px solid var(--line);
+      padding: 14px;
+      display: grid;
+      gap: 13px;
+    }
+
+    .filter-grid {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 10px;
+      align-items: end;
+    }
+
+    label {
+      display: grid;
+      gap: 5px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+    }
+
+    input,
+    select {
+      width: 100%;
+      min-height: 34px;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      padding: 6px 8px;
+      color: var(--ink);
+      font-size: 13px;
+    }
+
+    input:focus,
+    select:focus,
+    button:focus-visible {
+      outline: 2px solid color-mix(in srgb, var(--accent), transparent 35%);
+      outline-offset: 2px;
+    }
+
+    .level-row {
+      display: flex;
+      gap: 7px;
+      flex-wrap: wrap;
+    }
+
+    .filter-actions {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .metric-band {
+      display: grid;
+      grid-template-columns: minmax(240px, 0.85fr) minmax(280px, 1.15fr);
+      gap: 12px;
+      min-height: 112px;
+    }
+
+    .metric-panel {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      padding: 13px;
+      display: grid;
+      gap: 10px;
+      align-content: start;
+    }
+
+    .metric-title {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+    }
+
+    .budget-value {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      font-weight: 800;
+      font-size: 28px;
+      line-height: 1;
+    }
+
+    .budget-value span:last-child {
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .meter {
+      height: 9px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      overflow: hidden;
+    }
+
+    .meter span {
+      display: block;
+      height: 100%;
+      width: 0;
+      background: linear-gradient(90deg, var(--accent), var(--blue));
+    }
+
+    .gauge-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .gauge {
+      border: 1px solid var(--line);
+      background: rgba(232, 238, 228, 0.52);
+      padding: 9px;
+      display: grid;
+      gap: 5px;
+      min-height: 72px;
+    }
+
+    .gauge .name {
+      font-size: 12px;
+      font-weight: 700;
+      overflow-wrap: anywhere;
+    }
+
+    .gauge .value {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+
+    .timeline-shell {
+      min-height: 0;
+      background: rgba(255, 254, 249, 0.92);
+      border: 1px solid var(--line);
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+
+    .candidate-shell {
+      min-height: 0;
+      background: rgba(255, 254, 249, 0.92);
+      border: 1px solid var(--line);
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+
+    .timeline-head {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .timeline-title {
+      font-size: 14px;
+      font-weight: 800;
+    }
+
+    .timeline {
+      min-height: 0;
+      overflow: auto;
+      padding: 8px 0;
+    }
+
+    .candidate-list {
+      min-height: 0;
+      overflow: auto;
+      padding: 8px 0;
+    }
+
+    .event {
+      width: 100%;
+      border: 0;
+      border-left: 4px solid var(--accent);
+      border-bottom: 1px solid rgba(201, 211, 196, 0.72);
+      background: transparent;
+      padding: 11px 14px 11px 12px;
+      text-align: left;
+      display: grid;
+      gap: 7px;
+    }
+
+    .candidate {
+      width: 100%;
+      border: 0;
+      border-left: 4px solid var(--blue);
+      border-bottom: 1px solid rgba(201, 211, 196, 0.72);
+      background: transparent;
+      padding: 12px 14px 12px 12px;
+      text-align: left;
+      display: grid;
+      gap: 9px;
+    }
+
+    .event:hover,
+    .event[aria-selected="true"],
+    .candidate:hover,
+    .candidate[aria-selected="true"] {
+      background: rgba(232, 238, 228, 0.68);
+    }
+
+    .candidate[data-risk="medium"] {
+      border-left-color: var(--warning);
+    }
+
+    .candidate[data-risk="high"] {
+      border-left-color: var(--danger);
+    }
+
+    .event[data-level="warning"] {
+      border-left-color: var(--warning);
+      background: color-mix(in srgb, var(--warning), transparent 92%);
+    }
+
+    .event[data-level="error"] {
+      border-left-color: var(--danger);
+      background: color-mix(in srgb, var(--danger), transparent 91%);
+    }
+
+    .event[data-level="critical"] {
+      border-left-color: var(--critical);
+      background: color-mix(in srgb, var(--critical), transparent 88%);
+    }
+
+    .event-main {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .candidate-main {
+      display: grid;
+      gap: 5px;
+    }
+
+    .event .tag {
+      font-weight: 800;
+      overflow-wrap: anywhere;
+    }
+
+    .candidate .summary {
+      font-weight: 800;
+      overflow-wrap: anywhere;
+    }
+
+    .candidate .meta-line {
+      color: var(--muted);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+
+    .event .time {
+      flex: 0 0 auto;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+    }
+
+    .chip {
+      border: 1px solid var(--line);
+      background: rgba(244, 247, 241, 0.88);
+      color: var(--muted);
+      padding: 2px 6px;
+      font-size: 11px;
+      max-width: 100%;
+      overflow-wrap: anywhere;
+    }
+
+    .frame-wrap {
+      min-height: 0;
+      padding: 18px;
+    }
+
+    iframe {
+      width: 100%;
+      height: 100%;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      box-shadow: 0 18px 48px var(--shadow);
+    }
+
+    .empty {
+      min-height: 90px;
+      display: grid;
+      place-items: center;
+      color: var(--muted);
+      border: 1px dashed var(--line);
+      background: rgba(255, 254, 249, 0.48);
+      padding: 18px;
+      text-align: center;
+    }
+
+    .section {
+      padding: 15px;
+      border-bottom: 1px solid var(--line);
+      display: grid;
+      gap: 12px;
+    }
+
+    .section h2 {
+      font-size: 12px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .08em;
+    }
+
+    .detail-head {
+      display: grid;
+      gap: 7px;
+    }
+
+    .detail-tag {
+      font-weight: 800;
+      font-size: 16px;
+      overflow-wrap: anywhere;
+    }
+
+    .detail-meta {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .detail-block {
+      display: grid;
+      gap: 7px;
+    }
+
+    .detail-block h3 {
+      color: var(--muted);
+      font-size: 11px;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    pre {
+      max-height: 260px;
+      margin: 0;
+      overflow: auto;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      padding: 10px;
+      color: var(--ink);
+      font-size: 11px;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    .kv {
+      display: grid;
+      gap: 8px;
+      font-size: 13px;
+    }
+
+    .kv div {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      border-bottom: 1px solid rgba(201, 211, 196, 0.72);
+      padding-bottom: 7px;
+    }
+
+    .kv span:last-child {
+      color: var(--muted);
+      text-align: right;
+      overflow-wrap: anywhere;
+    }
+
+    .permissions {
+      display: grid;
+      gap: 8px;
+    }
+
+    .permission {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 8px;
+      padding: 9px;
+      border: 1px solid var(--line);
+      background: rgba(255, 254, 249, 0.76);
+    }
+
+    .permission code {
+      overflow-wrap: anywhere;
+      font-size: 11px;
+    }
+
+    .events {
+      overflow: auto;
+      display: grid;
+      gap: 8px;
+      max-height: 210px;
+      padding-right: 3px;
+    }
+
+    .action-stack {
+      display: grid;
+      gap: 8px;
+    }
+
+    .action-row {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .action.danger {
+      border-color: var(--danger);
+      background: var(--danger);
+      color: var(--accent-ink);
+    }
+
+    .evidence-list {
+      display: grid;
+      gap: 8px;
+      max-height: 260px;
+      overflow: auto;
+      padding-right: 3px;
+    }
+
+    .evidence-item {
+      border-left: 3px solid var(--blue);
+      padding: 7px 0 7px 9px;
+      display: grid;
+      gap: 4px;
+      font-size: 12px;
+    }
+
+    .mini-event {
+      border-left: 3px solid var(--accent);
+      padding: 6px 0 6px 9px;
+      font-size: 12px;
+      display: grid;
+      gap: 3px;
+    }
+
+    .mini-event[data-level="warning"],
+    .mini-event[data-level="error"],
+    .mini-event[data-level="critical"] {
+      border-left-color: var(--danger);
+    }
+
+    .mini-event .tag {
+      font-weight: 700;
+      overflow-wrap: anywhere;
+    }
+
+    .mini-event .time {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .diag {
+      color: var(--danger);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+
+    @media (max-width: 1500px) {
+      body {
+        overflow: auto;
+      }
+
+      body.sidebar-open,
+      body.inspector-open {
+        overflow: hidden;
+      }
+
+      .shell {
+        height: auto;
+        min-height: 100vh;
+        grid-template-columns: minmax(0, 1fr);
+      }
+
+      .sidebar,
+      .inspector {
+        position: fixed;
+        top: 5px;
+        bottom: 0;
+        z-index: 70;
+        width: min(380px, calc(100vw - 42px));
+        box-shadow: 0 20px 60px rgba(32, 37, 31, 0.22);
+        transition: transform 160ms ease-out;
+        overflow: auto;
+      }
+
+      .sidebar {
+        left: 0;
+        border-right: 1px solid var(--line);
+        transform: translateX(-105%);
+      }
+
+      .inspector {
+        right: 0;
+        width: min(520px, calc(100vw - 42px));
+        border-left: 1px solid var(--line);
+        transform: translateX(105%);
+      }
+
+      body.sidebar-open .sidebar,
+      body.inspector-open .inspector {
+        transform: translateX(0);
+      }
+
+      .panel-scrim {
+        position: fixed;
+        inset: 0;
+        z-index: 60;
+        display: none;
+        background: rgba(32, 37, 31, 0.28);
+      }
+
+      body.sidebar-open .panel-scrim,
+      body.inspector-open .panel-scrim {
+        display: block;
+      }
+
+      .panel-toggle {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .stage {
+        min-height: 100vh;
+      }
+
+      .observe-workspace {
+        overflow: visible;
+      }
+
+      .evolution-workspace {
+        overflow: visible;
+      }
+
+      .sessions-workspace {
+        overflow: visible;
+      }
+
+      .timeline-shell {
+        min-height: 560px;
+      }
+
+      .config-workspace {
+        overflow: visible;
+      }
+
+      .config-board {
+        grid-template-columns: 1fr;
+      }
+
+      .config-list-shell,
+      .config-editor-shell {
+        min-height: 420px;
+      }
+
+      .candidate-shell {
+        min-height: 520px;
+      }
+
+      .session-board {
+        min-height: 520px;
+      }
+
+      .frame-wrap {
+        min-height: 520px;
+      }
+    }
+
+    @media (max-width: 980px) {
+      .filter-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .metric-band {
+        grid-template-columns: 1fr;
+      }
+
+      .stage-bar {
+        align-items: flex-start;
+      }
+    }
+
+    @media (max-width: 760px) {
+      .filter-grid,
+      .metric-band,
+      .gauge-grid,
+      .action-row,
+      .form-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .stage-bar,
+      .event-main,
+      .filter-actions {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .stage-entry {
+        text-align: left;
+      }
+
+      .stage-actions {
+        width: 100%;
+        justify-content: flex-start;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="panel-scrim" class="panel-scrim" aria-hidden="true"></div>
+  <main class="shell">
+    <aside class="sidebar" id="workbench-sidebar">
+      <header>
+        <div class="brand">
+          <h1>Nex Workbench</h1>
+          <span id="connection" class="status">loading</span>
+        </div>
+      </header>
+      <nav class="nav-group" aria-label="Workbench views">
+        <div class="nav-label">System</div>
+        <button class="system-button" id="observe-nav" type="button" aria-selected="true">
+          <span class="app-title">Observability</span>
+          <span class="app-id">ControlPlane</span>
+        </button>
+        <button class="system-button" id="evolution-nav" type="button" aria-selected="false">
+          <span class="app-title">Self Evolution</span>
+          <span class="app-id">Candidates</span>
+        </button>
+        <button class="system-button" id="sessions-nav" type="button" aria-selected="false">
+          <span class="app-title">Sessions</span>
+          <span class="app-id">Runs / Models</span>
+        </button>
+        <button class="system-button" id="config-nav" type="button" aria-selected="false">
+          <span class="app-title">Configuration</span>
+          <span class="app-id">Providers / Models / Channels</span>
+        </button>
+      </nav>
+      <nav class="nav-group app-list" id="apps" aria-label="Workbench apps"></nav>
+    </aside>
+
+    <section id="observe-view" class="stage" aria-label="Observability">
+      <div class="stage-bar">
+        <div>
+          <h2 class="stage-title">Observability</h2>
+          <p id="observe-state" class="subtle">syncing</p>
+        </div>
+        <div class="stage-actions">
+          <button class="panel-toggle sidebar-toggle" type="button" aria-controls="workbench-sidebar" aria-expanded="false">Menu</button>
+          <button class="panel-toggle inspector-toggle" type="button" aria-controls="workbench-inspector" aria-expanded="false">Detail</button>
+          <button class="refresh" id="refresh-observe" type="button">Refresh</button>
+        </div>
+      </div>
+
+      <div class="observe-workspace">
+        <form id="observe-filters" class="filter-panel">
+          <div class="filter-grid">
+            <label>Tag prefix
+              <input id="filter-tag-prefix" name="tag_prefix" autocomplete="off" placeholder="runner.">
+            </label>
+            <label>Run
+              <input id="filter-run" name="run_id" autocomplete="off" placeholder="run_">
+            </label>
+            <label>Session
+              <input id="filter-session" name="session_key" autocomplete="off" placeholder="session">
+            </label>
+            <label>Channel
+              <input id="filter-channel" name="channel" autocomplete="off" placeholder="feishu">
+            </label>
+            <label>Tool
+              <input id="filter-tool" name="tool" autocomplete="off" placeholder="read">
+            </label>
+            <label>Limit
+              <select id="filter-limit" name="limit">
+                <option value="40">40</option>
+                <option value="80" selected>80</option>
+                <option value="160">160</option>
+                <option value="300">300</option>
+              </select>
+            </label>
+          </div>
+          <div class="filter-actions">
+            <div class="level-row" role="group" aria-label="Level filter">
+              <button class="level-button" type="button" data-level="" aria-pressed="true">All</button>
+              <button class="level-button" type="button" data-level="info" aria-pressed="false">Info</button>
+              <button class="level-button" type="button" data-level="warning" aria-pressed="false">Warning</button>
+              <button class="level-button" type="button" data-level="error" aria-pressed="false">Error</button>
+              <button class="level-button" type="button" data-level="critical" aria-pressed="false">Critical</button>
+            </div>
+            <div class="level-row">
+              <button class="action secondary" id="clear-filters" type="button">Clear</button>
+              <button class="action" type="submit">Apply</button>
+            </div>
+          </div>
+        </form>
+
+        <section class="metric-band" aria-label="Metrics">
+          <div class="metric-panel">
+            <div class="metric-title">
+              <span>Budget</span>
+              <span id="budget-mode">unknown</span>
+            </div>
+            <div class="budget-value">
+              <span id="budget-current">-</span>
+              <span id="budget-capacity">/ -</span>
+            </div>
+            <div class="meter" aria-hidden="true"><span id="budget-meter"></span></div>
+            <div class="subtle" id="budget-meta"></div>
+          </div>
+          <div class="metric-panel">
+            <div class="metric-title">
+              <span>Gauges</span>
+              <span id="gauge-count">0</span>
+            </div>
+            <div id="gauges" class="gauge-grid"></div>
+          </div>
+        </section>
+
+        <section class="timeline-shell">
+          <div class="timeline-head">
+            <h3 class="timeline-title">Recent observations</h3>
+            <span id="observation-count" class="subtle">0 events</span>
+          </div>
+          <div id="timeline" class="timeline"></div>
+        </section>
+      </div>
+    </section>
+
+    <section id="evolution-view" class="stage" aria-label="Self Evolution" hidden>
+      <div class="stage-bar">
+        <div>
+          <h2 class="stage-title">Self Evolution</h2>
+          <p id="evolution-state" class="subtle">syncing</p>
+        </div>
+        <div class="stage-actions">
+          <button class="panel-toggle sidebar-toggle" type="button" aria-controls="workbench-sidebar" aria-expanded="false">Menu</button>
+          <button class="panel-toggle inspector-toggle" type="button" aria-controls="workbench-inspector" aria-expanded="false">Detail</button>
+          <button class="refresh" id="refresh-evolution" type="button">Refresh</button>
+        </div>
+      </div>
+
+      <div class="evolution-workspace">
+        <section class="metric-band" aria-label="Evolution energy and queue">
+          <div class="metric-panel">
+            <div class="metric-title">
+              <span>Energy</span>
+              <span id="evolution-budget-mode">unknown</span>
+            </div>
+            <div class="budget-value">
+              <span id="evolution-budget-current">-</span>
+              <span id="evolution-budget-capacity">/ -</span>
+            </div>
+            <div class="meter" aria-hidden="true"><span id="evolution-budget-meter"></span></div>
+            <div class="subtle" id="evolution-budget-meta"></div>
+          </div>
+          <div class="metric-panel">
+            <div class="metric-title">
+              <span>Candidates</span>
+              <span id="evolution-candidate-count">0</span>
+            </div>
+            <div class="gauge-grid">
+              <div class="gauge">
+                <div class="name">Pending</div>
+                <div class="value" id="evolution-pending-count">0</div>
+                <div class="subtle">awaiting owner action</div>
+              </div>
+              <div class="gauge">
+                <div class="name">Applied</div>
+                <div class="value" id="evolution-applied-count">0</div>
+                <div class="subtle">completed lifecycle</div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="candidate-shell">
+          <div class="timeline-head">
+            <h3 class="timeline-title">Evolution candidates</h3>
+            <span id="evolution-selection-state" class="subtle">No selection</span>
+          </div>
+          <div id="evolution-candidates" class="candidate-list"></div>
+        </section>
+      </div>
+    </section>
+
+    <section id="sessions-view" class="stage" aria-label="Sessions" hidden>
+      <div class="stage-bar">
+        <div>
+          <h2 class="stage-title">Sessions</h2>
+          <p id="sessions-state" class="subtle">syncing</p>
+        </div>
+        <div class="stage-actions">
+          <button class="panel-toggle sidebar-toggle" type="button" aria-controls="workbench-sidebar" aria-expanded="false">Menu</button>
+          <button class="panel-toggle inspector-toggle" type="button" aria-controls="workbench-inspector" aria-expanded="false">Detail</button>
+          <button class="refresh" id="refresh-sessions" type="button">Refresh</button>
+        </div>
+      </div>
+
+      <div class="sessions-workspace">
+        <section class="metric-band" aria-label="Session summary">
+          <div class="metric-panel">
+            <div class="metric-title">
+              <span>Active</span>
+              <span id="sessions-total">0 total</span>
+            </div>
+            <div class="budget-value">
+              <span id="sessions-running">0</span>
+              <span>running</span>
+            </div>
+            <div class="subtle" id="sessions-idle">0 idle</div>
+          </div>
+          <div class="metric-panel">
+            <div class="metric-title">
+              <span>Overrides</span>
+              <span id="sessions-overrides">0</span>
+            </div>
+            <div class="gauge-grid">
+              <div class="gauge">
+                <div class="name">Selected</div>
+                <div class="value" id="sessions-selected-key">none</div>
+              </div>
+              <div class="gauge">
+                <div class="name">Model</div>
+                <div class="value" id="sessions-selected-model">unknown</div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="session-board">
+          <div class="timeline-head">
+            <h3 class="timeline-title">Session inventory</h3>
+            <span id="session-count" class="subtle">0 sessions</span>
+          </div>
+          <div id="session-list" class="session-list"></div>
+        </section>
+      </div>
+    </section>
+
+    <section id="config-view" class="stage" aria-label="Configuration" hidden>
+      <div class="stage-bar">
+        <div>
+          <h2 class="stage-title">Configuration</h2>
+          <p id="config-state" class="subtle">syncing</p>
+        </div>
+        <div class="stage-actions">
+          <button class="panel-toggle sidebar-toggle" type="button" aria-controls="workbench-sidebar" aria-expanded="false">Menu</button>
+          <button class="panel-toggle inspector-toggle" type="button" aria-controls="workbench-inspector" aria-expanded="false">Detail</button>
+          <button class="refresh" id="refresh-config" type="button">Refresh</button>
+        </div>
+      </div>
+
+      <div class="config-workspace">
+        <div class="config-tabs" role="tablist" aria-label="Configuration sections">
+          <button class="config-tab" type="button" data-config-section="providers" aria-selected="true">Providers</button>
+          <button class="config-tab" type="button" data-config-section="models" aria-selected="false">Models</button>
+          <button class="config-tab" type="button" data-config-section="channels" aria-selected="false">Channels</button>
+        </div>
+
+        <section class="config-board">
+          <div class="config-list-shell">
+            <div class="config-list-head">
+              <h3 id="config-list-title" class="config-list-title">Providers</h3>
+              <button class="action secondary" id="config-new" type="button">New</button>
+            </div>
+            <div id="config-list" class="config-list"></div>
+          </div>
+
+          <div class="config-editor-shell">
+            <form id="config-editor" class="config-editor"></form>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <section id="app-view" class="stage" aria-label="Selected app" hidden>
+      <div class="stage-bar">
+        <div>
+          <h2 id="stage-title" class="stage-title">Workbench</h2>
+        </div>
+        <div class="stage-actions">
+          <button class="panel-toggle sidebar-toggle" type="button" aria-controls="workbench-sidebar" aria-expanded="false">Menu</button>
+          <button class="panel-toggle inspector-toggle" type="button" aria-controls="workbench-inspector" aria-expanded="false">Detail</button>
+          <button class="refresh" id="reload-app" type="button">Reload</button>
+          <div id="stage-entry" class="stage-entry"></div>
+        </div>
+      </div>
+      <div id="frame-wrap" class="frame-wrap">
+        <div class="empty">No app selected</div>
+      </div>
+    </section>
+
+    <aside class="inspector" id="workbench-inspector">
+      <div id="observe-inspector" class="inspector-mode">
+        <section class="section">
+          <h2>Observation Detail</h2>
+          <div id="observation-detail" class="detail-block"></div>
+        </section>
+      </div>
+
+      <div id="evolution-inspector" class="inspector-mode" hidden>
+        <section class="section">
+          <h2>Candidate Detail</h2>
+          <div id="evolution-detail" class="detail-block"></div>
+        </section>
+        <section class="section">
+          <h2>Actions</h2>
+          <div id="evolution-actions" class="action-stack"></div>
+        </section>
+        <section class="section">
+          <h2>Evidence Chain</h2>
+          <div id="evolution-evidence" class="evidence-list"></div>
+        </section>
+      </div>
+
+      <div id="sessions-inspector" class="inspector-mode" hidden>
+        <section class="section">
+          <h2>Session Detail</h2>
+          <div id="session-detail" class="detail-block"></div>
+        </section>
+        <section class="section">
+          <h2>Actions</h2>
+          <div id="session-actions" class="action-stack"></div>
+        </section>
+        <section class="section">
+          <h2>Recent Messages</h2>
+          <div id="session-messages" class="events"></div>
+        </section>
+        <section class="section">
+          <h2>Session Observations</h2>
+          <div id="session-observations" class="events"></div>
+        </section>
+      </div>
+
+      <div id="config-inspector" class="inspector-mode" hidden>
+        <section class="section">
+          <h2>Selection</h2>
+          <div id="config-detail" class="detail-block"></div>
+        </section>
+        <section class="section">
+          <h2>Runtime Impact</h2>
+          <div id="config-impact" class="detail-block"></div>
+        </section>
+      </div>
+
+      <div id="app-inspector" class="inspector-mode" hidden>
+        <section class="section">
+          <h2>Manifest</h2>
+          <div id="manifest" class="kv"></div>
+        </section>
+        <section class="section">
+          <h2>Permissions</h2>
+          <div id="permissions" class="permissions"></div>
+        </section>
+        <section class="section">
+          <h2>Observe</h2>
+          <div id="events" class="events"></div>
+        </section>
+        <section class="section">
+          <h2>Diagnostics</h2>
+          <div id="diagnostics"></div>
+        </section>
+      </div>
+    </aside>
+  </main>
+
+  <script>
+    const state = {
+      apps: [],
+      diagnostics: [],
+      selectedId: null,
+      selectedObservationId: null,
+      permissions: null,
+      observations: [],
+      summary: null,
+      evolution: {
+        energy: {},
+        gauges: {},
+        candidates: [],
+        selectedCandidateId: null,
+        candidate: null
+      },
+      sessions: {
+        items: [],
+        summary: {},
+        selectedKey: null,
+        detail: null
+      },
+      config: {
+        data: null,
+        section: "providers",
+        selectedKey: null,
+        creating: false,
+        reloadStatus: null
+      },
+      view: "observe",
+      appFrameVersion: 0,
+      filters: {
+        tag_prefix: "",
+        run_id: "",
+        session_key: "",
+        channel: "",
+        tool: "",
+        level: "",
+        limit: "80"
+      },
+      bridgeFrame: null,
+      bridgeFrameAppId: null
+    };
+
+    const $ = (id) => document.getElementById(id);
+    const compactLayout = window.matchMedia("(max-width: 1500px)");
+
+    function compactMode() {
+      return compactLayout.matches;
+    }
+
+    function updatePanelButtons() {
+      const sidebarOpen = document.body.classList.contains("sidebar-open");
+      const inspectorOpen = document.body.classList.contains("inspector-open");
+
+      for (const button of document.querySelectorAll(".sidebar-toggle")) {
+        button.setAttribute("aria-expanded", sidebarOpen ? "true" : "false");
+        button.textContent = sidebarOpen ? "Close menu" : "Menu";
+      }
+
+      for (const button of document.querySelectorAll(".inspector-toggle")) {
+        button.setAttribute("aria-expanded", inspectorOpen ? "true" : "false");
+        button.textContent = inspectorOpen ? "Close detail" : "Detail";
+      }
+    }
+
+    function closePanels() {
+      document.body.classList.remove("sidebar-open", "inspector-open");
+      updatePanelButtons();
+    }
+
+    function togglePanel(panel) {
+      if (!compactMode()) return;
+      const className = panel === "sidebar" ? "sidebar-open" : "inspector-open";
+      const otherClass = panel === "sidebar" ? "inspector-open" : "sidebar-open";
+      const willOpen = !document.body.classList.contains(className);
+      document.body.classList.remove(otherClass);
+      document.body.classList.toggle(className, willOpen);
+      updatePanelButtons();
+    }
+
+    function openInspectorPanel() {
+      if (!compactMode()) return;
+      document.body.classList.remove("sidebar-open");
+      document.body.classList.add("inspector-open");
+      updatePanelButtons();
+    }
+
+    async function api(path, options = {}) {
+      const response = await fetch(path, {
+        headers: { "content-type": "application/json" },
+        cache: "no-store",
+        ...options
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || response.statusText);
+      return payload;
+    }
+
+    async function loadApps() {
+      $("connection").textContent = "syncing";
+      const payload = await api("/api/workbench/apps");
+      state.apps = payload.apps || [];
+      state.diagnostics = payload.diagnostics || [];
+      renderApps();
+      renderDiagnostics();
+      $("connection").textContent = "local";
+    }
+
+    function renderApps() {
+      const root = $("apps");
+      root.innerHTML = "";
+
+      const label = document.createElement("div");
+      label.className = "nav-label";
+      label.textContent = "Apps";
+      root.appendChild(label);
+
+      if (!state.apps.length) {
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = "No apps";
+        root.appendChild(empty);
+        return;
+      }
+
+      for (const app of state.apps) {
+        const button = document.createElement("button");
+        button.className = "app-button";
+        button.type = "button";
+        button.setAttribute("aria-selected", state.view === "app" && app.id === state.selectedId ? "true" : "false");
+        button.innerHTML = `
+          <span class="app-title"></span>
+          <span class="app-id"></span>
+        `;
+        button.querySelector(".app-title").textContent = app.title || app.id;
+        button.querySelector(".app-id").textContent = app.id;
+        button.addEventListener("click", () => selectApp(app.id));
+        root.appendChild(button);
+      }
+    }
+
+    function switchView(view) {
+      state.view = view;
+      closePanels();
+      $("observe-view").hidden = view !== "observe";
+      $("evolution-view").hidden = view !== "evolution";
+      $("sessions-view").hidden = view !== "sessions";
+      $("config-view").hidden = view !== "config";
+      $("app-view").hidden = view !== "app";
+      $("observe-inspector").hidden = view !== "observe";
+      $("evolution-inspector").hidden = view !== "evolution";
+      $("sessions-inspector").hidden = view !== "sessions";
+      $("config-inspector").hidden = view !== "config";
+      $("app-inspector").hidden = view !== "app";
+      $("observe-nav").setAttribute("aria-selected", view === "observe" ? "true" : "false");
+      $("evolution-nav").setAttribute("aria-selected", view === "evolution" ? "true" : "false");
+      $("sessions-nav").setAttribute("aria-selected", view === "sessions" ? "true" : "false");
+      $("config-nav").setAttribute("aria-selected", view === "config" ? "true" : "false");
+      renderApps();
+    }
+
+    async function selectApp(appId) {
+      const app = state.apps.find((candidate) => candidate.id === appId);
+      if (!app) return;
+
+      state.selectedId = appId;
+      switchView("app");
+      $("stage-title").textContent = app.title || app.id;
+      $("stage-entry").textContent = app.entry || "";
+      renderManifest(app);
+      renderFrame(app);
+      await loadPermissions(app.id);
+      await loadObserve();
+    }
+
+    function renderManifest(app) {
+      $("manifest").innerHTML = "";
+      const rows = [
+        ["ID", app.id],
+        ["Version", app.version || ""],
+        ["Entry", app.entry || ""]
+      ];
+
+      for (const [key, value] of rows) {
+        const row = document.createElement("div");
+        row.innerHTML = `<span></span><span></span>`;
+        row.children[0].textContent = key;
+        row.children[1].textContent = value;
+        $("manifest").appendChild(row);
+      }
+    }
+
+    function renderFrame(app) {
+      const wrap = $("frame-wrap");
+      wrap.innerHTML = "";
+      const frame = document.createElement("iframe");
+      frame.title = app.title || app.id;
+      frame.sandbox = "allow-scripts";
+      state.appFrameVersion += 1;
+      frame.src = `/app-frame/${encodeURIComponent(app.id)}?v=${state.appFrameVersion}`;
+      wrap.appendChild(frame);
+      state.bridgeFrame = frame;
+      state.bridgeFrameAppId = app.id;
+    }
+
+    function reloadCurrentApp() {
+      const app = state.apps.find((candidate) => candidate.id === state.selectedId);
+      if (!app || state.view !== "app") return;
+      renderFrame(app);
+    }
+
+    function currentBridgeFrame() {
+      const frame = $("frame-wrap").querySelector("iframe");
+      if (!frame || frame !== state.bridgeFrame) return null;
+      return frame;
+    }
+
+    function bridgeResponse(callId, ok, value) {
+      const response = {
+        nex: "workbench.bridge.response",
+        version: 1,
+        call_id: callId || "",
+        ok
+      };
+
+      if (ok) {
+        response.result = value || {};
+      } else {
+        response.error = boundedBridgeError(value);
+      }
+
+      return response;
+    }
+
+    function boundedBridgeError(error) {
+      let code = "bridge_failed";
+      let message = "bridge call failed";
+
+      if (error instanceof Error) {
+        message = error.message;
+      } else if (error && typeof error === "object") {
+        code = typeof error.code === "string" ? error.code : code;
+        message = typeof error.message === "string" ? error.message : JSON.stringify(error);
+      } else if (error) {
+        message = String(error);
+      }
+
+      if (message.length > 500) message = `${message.slice(0, 500)}...[truncated]`;
+      return { code, message };
+    }
+
+    function validBridgeRequest(data) {
+      return data
+        && data.nex === "workbench.bridge.request"
+        && data.version === 1
+        && typeof data.call_id === "string"
+        && data.call_id.trim() !== ""
+        && typeof data.method === "string"
+        && data.method.trim() !== ""
+        && (!data.params || (typeof data.params === "object" && !Array.isArray(data.params)));
+    }
+
+    async function callBackendBridge(appId, request, signal) {
+      const response = await fetch(`/api/workbench/bridge/${encodeURIComponent(appId)}/call`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        cache: "no-store",
+        signal,
+        body: JSON.stringify({
+          call_id: request.call_id,
+          method: request.method,
+          params: request.params || {}
+        })
+      });
+
+      let payload = null;
+      try {
+        payload = await response.json();
+      } catch (_error) {
+        payload = null;
+      }
+
+      if (payload && typeof payload === "object") {
+        return payload;
+      }
+
+      return {
+        call_id: request.call_id,
+        ok: false,
+        error: response.ok ? "invalid bridge response" : response.statusText
+      };
+    }
+
+    async function handleBridgeMessage(event) {
+      const data = event.data || {};
+      if (!data || data.nex !== "workbench.bridge.request") return;
+
+      const frame = currentBridgeFrame();
+      const appId = state.bridgeFrameAppId;
+      if (!frame || !appId || event.source !== frame.contentWindow) return;
+
+      if (!validBridgeRequest(data)) {
+        event.source.postMessage(bridgeResponse(data.call_id, false, "malformed Nex bridge request"), "*");
+        return;
+      }
+
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 30000);
+
+      try {
+        const payload = await callBackendBridge(appId, data, controller.signal);
+        if (currentBridgeFrame() === frame && state.bridgeFrameAppId === appId) {
+          event.source.postMessage({
+            nex: "workbench.bridge.response",
+            version: 1,
+            call_id: payload.call_id || data.call_id,
+            ok: payload.ok === true,
+            result: payload.result || {},
+            error: payload.ok === true ? undefined : boundedBridgeError(payload.error)
+          }, "*");
+        }
+      } catch (error) {
+        if (currentBridgeFrame() === frame && state.bridgeFrameAppId === appId) {
+          event.source.postMessage(bridgeResponse(data.call_id, false, error), "*");
+        }
+      } finally {
+        window.clearTimeout(timeout);
+      }
+    }
+
+    async function loadPermissions(appId) {
+      const payload = await api(`/api/workbench/permissions/${encodeURIComponent(appId)}`);
+      state.permissions = payload.permissions;
+      renderPermissions();
+    }
+
+    function renderPermissions() {
+      const root = $("permissions");
+      root.innerHTML = "";
+      const view = state.permissions;
+
+      if (!view) {
+        root.textContent = "";
+        return;
+      }
+
+      const granted = new Set(view.granted_permissions || []);
+      const declared = view.declared_permissions || [];
+      const stale = view.stale_granted_permissions || [];
+
+      if (!declared.length && !stale.length) {
+        root.textContent = "None";
+        return;
+      }
+
+      for (const permission of declared) {
+        const allowed = granted.has(permission);
+        const row = document.createElement("div");
+        row.className = "permission";
+        row.innerHTML = `<code></code><button type="button"></button>`;
+        row.querySelector("code").textContent = permission;
+        const button = row.querySelector("button");
+        button.textContent = allowed ? "Revoke" : "Grant";
+        button.dataset.mode = allowed ? "revoke" : "grant";
+        button.addEventListener("click", () => togglePermission(permission, allowed));
+        root.appendChild(row);
+      }
+
+      for (const permission of stale) {
+        const row = document.createElement("div");
+        row.className = "permission";
+        row.innerHTML = `<code></code><button type="button" data-mode="revoke">Revoke</button>`;
+        row.querySelector("code").textContent = `${permission} (stale)`;
+        row.querySelector("button").addEventListener("click", () => togglePermission(permission, true));
+        root.appendChild(row);
+      }
+    }
+
+    async function togglePermission(permission, currentlyGranted) {
+      const action = currentlyGranted ? "revoke" : "grant";
+      const appId = state.selectedId;
+      const payload = await api(`/api/workbench/permissions/${encodeURIComponent(appId)}/${action}`, {
+        method: "POST",
+        body: JSON.stringify({ permission })
+      });
+      state.permissions = payload.permissions;
+      renderPermissions();
+      await loadObserve();
+    }
+
+    function filtersFromForm() {
+      for (const key of ["tag_prefix", "run_id", "session_key", "channel", "tool", "limit"]) {
+        const field = document.querySelector(`[name="${key}"]`);
+        state.filters[key] = field ? field.value.trim() : "";
+      }
+    }
+
+    function filterParams() {
+      const params = new URLSearchParams();
+      for (const [key, value] of Object.entries(state.filters)) {
+        if (value) params.set(key, value);
+      }
+      if (!params.has("limit")) params.set("limit", "80");
+      return params;
+    }
+
+    async function loadObserve() {
+      filtersFromForm();
+      $("observe-state").textContent = "syncing";
+
+      const params = filterParams();
+      const [summary, query] = await Promise.all([
+        api(`/api/observe/summary?limit=${encodeURIComponent(state.filters.limit || "80")}`),
+        api(`/api/observe/query?${params.toString()}`)
+      ]);
+
+      state.summary = summary;
+      state.observations = query.observations || [];
+
+      if (!state.selectedObservationId || !state.observations.some((event) => event.id === state.selectedObservationId)) {
+        state.selectedObservationId = latestObservation()?.id || null;
+      }
+
+      renderMetrics();
+      renderTimeline();
+      renderObservationDetail();
+      renderMiniEvents(summary.recent || []);
+      $("observe-state").textContent = "local facts";
+    }
+
+    async function loadEvolution() {
+      $("evolution-state").textContent = "syncing";
+      const payload = await api("/api/workbench/evolution");
+      state.evolution.energy = payload.energy || {};
+      state.evolution.gauges = payload.gauges || {};
+      state.evolution.candidates = payload.candidates || [];
+
+      if (!state.evolution.selectedCandidateId || !state.evolution.candidates.some((candidate) => candidate.candidate_id === state.evolution.selectedCandidateId)) {
+        state.evolution.selectedCandidateId = state.evolution.candidates[0]?.candidate_id || null;
+      }
+
+      renderEvolutionMetrics();
+      renderEvolutionCandidates();
+
+      if (state.evolution.selectedCandidateId) {
+        await loadEvolutionCandidate(state.evolution.selectedCandidateId);
+      } else {
+        state.evolution.candidate = null;
+        renderEvolutionDetail();
+      }
+
+      $("evolution-state").textContent = "local facts";
+    }
+
+    async function loadEvolutionCandidate(candidateId) {
+      const payload = await api(`/api/workbench/evolution/candidates/${encodeURIComponent(candidateId)}`);
+      state.evolution.selectedCandidateId = candidateId;
+      state.evolution.candidate = payload.candidate;
+      renderEvolutionCandidates();
+      renderEvolutionDetail();
+    }
+
+    async function selectEvolutionCandidate(candidateId) {
+      await loadEvolutionCandidate(candidateId);
+      openInspectorPanel();
+    }
+
+    function renderEvolutionMetrics() {
+      const budget = state.evolution.energy || {};
+      const current = numberOrNull(budget.current);
+      const capacity = numberOrNull(budget.capacity);
+      const percent = capacity && current !== null ? Math.max(0, Math.min(100, Math.round((current / capacity) * 100))) : 0;
+      const candidates = state.evolution.candidates || [];
+
+      $("evolution-budget-mode").textContent = budget.mode || "unknown";
+      $("evolution-budget-current").textContent = current === null ? "-" : String(current);
+      $("evolution-budget-capacity").textContent = capacity ? `/ ${capacity}` : "/ -";
+      $("evolution-budget-meter").style.width = `${percent}%`;
+      $("evolution-budget-meta").textContent = [
+        budget.spent_today !== undefined ? `spent today ${budget.spent_today}` : "",
+        budget.refill_rate !== undefined ? `refill ${budget.refill_rate}/h` : "",
+        budget.last_refilled_at ? `refilled ${formatTime(budget.last_refilled_at)}` : ""
+      ].filter(Boolean).join(" · ");
+
+      $("evolution-candidate-count").textContent = String(candidates.length);
+      $("evolution-pending-count").textContent = String(candidates.filter((candidate) => candidate.status === "pending").length);
+      $("evolution-applied-count").textContent = String(candidates.filter((candidate) => candidate.status === "applied").length);
+    }
+
+    function renderEvolutionCandidates() {
+      const root = $("evolution-candidates");
+      root.innerHTML = "";
+      const candidates = state.evolution.candidates || [];
+
+      if (!candidates.length) {
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = "No evolution candidates";
+        root.appendChild(empty);
+        $("evolution-selection-state").textContent = "No selection";
+        return;
+      }
+
+      $("evolution-selection-state").textContent = `${candidates.length} candidates`;
+
+      for (const candidate of candidates) {
+        const node = document.createElement("button");
+        node.type = "button";
+        node.className = "candidate";
+        node.dataset.risk = candidate.risk || "low";
+        node.setAttribute("aria-selected", candidate.candidate_id === state.evolution.selectedCandidateId ? "true" : "false");
+        node.innerHTML = `
+          <div class="candidate-main">
+            <span class="summary"></span>
+            <span class="meta-line"></span>
+          </div>
+          <div class="chips"></div>
+        `;
+        node.querySelector(".summary").textContent = candidate.summary || candidate.candidate_id;
+        node.querySelector(".meta-line").textContent = candidate.created_at || candidate.proposed_at || "";
+        renderCandidateChips(node.querySelector(".chips"), candidate);
+        node.addEventListener("click", () => selectEvolutionCandidate(candidate.candidate_id));
+        root.appendChild(node);
+      }
+    }
+
+    function renderCandidateChips(root, candidate) {
+      root.innerHTML = "";
+      const chips = [
+        ["status", candidate.status],
+        ["risk", candidate.risk],
+        ["kind", candidate.kind],
+        ["evidence", (candidate.evidence_ids || []).length]
+      ];
+
+      for (const [key, value] of chips) {
+        if (value === undefined || value === null || value === "") continue;
+        const chip = document.createElement("span");
+        chip.className = "chip";
+        chip.textContent = `${key}:${value}`;
+        root.appendChild(chip);
+      }
+    }
+
+    function renderEvolutionDetail() {
+      const candidate = state.evolution.candidate;
+      renderEvolutionCandidateDetail(candidate);
+      renderEvolutionActions(candidate);
+      renderEvolutionEvidence(candidate);
+    }
+
+    function renderEvolutionCandidateDetail(candidate) {
+      const root = $("evolution-detail");
+      root.innerHTML = "";
+
+      if (!candidate) {
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = "Select a candidate";
+        root.appendChild(empty);
+        return;
+      }
+
+      const head = document.createElement("div");
+      head.className = "detail-head";
+      head.innerHTML = `
+        <div class="detail-tag"></div>
+        <div class="detail-meta"></div>
+      `;
+      head.querySelector(".detail-tag").textContent = candidate.summary || candidate.candidate_id;
+      renderCandidateChips(head.querySelector(".detail-meta"), candidate);
+      root.appendChild(head);
+
+      const rows = document.createElement("div");
+      rows.className = "kv";
+      for (const [key, value] of [
+        ["ID", candidate.candidate_id],
+        ["Created", candidate.created_at || candidate.proposed_at],
+        ["Risk", candidate.risk],
+        ["Status", candidate.status],
+        ["Latest error", candidate.latest_error || ""],
+        ["Evidence IDs", (candidate.evidence_ids || []).join(", ")]
+      ]) {
+        const row = document.createElement("div");
+        row.innerHTML = `<span></span><span></span>`;
+        row.children[0].textContent = key;
+        row.children[1].textContent = value || "";
+        rows.appendChild(row);
+      }
+      root.appendChild(rows);
+
+      appendJsonBlock(root, "Lifecycle", candidate.lifecycle || []);
+    }
+
+    function renderEvolutionActions(candidate) {
+      const root = $("evolution-actions");
+      root.innerHTML = "";
+
+      if (!candidate) {
+        root.textContent = "";
+        return;
+      }
+
+      if (candidate.status !== "pending") {
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = `No actions for ${candidate.status}`;
+        root.appendChild(empty);
+        return;
+      }
+
+      const row = document.createElement("div");
+      row.className = "action-row";
+      const actions = [
+        ["approve", "Approve", "secondary"],
+        ["discard", "Discard", "danger"],
+        ["apply", "Apply", ""]
+      ];
+
+      for (const [action, label, style] of actions) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = ["action", style].filter(Boolean).join(" ");
+        button.textContent = label;
+        button.addEventListener("click", () => performEvolutionAction(action, candidate));
+        row.appendChild(button);
+      }
+
+      root.appendChild(row);
+      const hint = document.createElement("div");
+      hint.className = "subtle";
+      hint.textContent = "Every action requires confirmation and writes ControlPlane observations.";
+      root.appendChild(hint);
+    }
+
+    function renderEvolutionEvidence(candidate) {
+      const root = $("evolution-evidence");
+      root.innerHTML = "";
+
+      if (!candidate) {
+        return;
+      }
+
+      const evidence = candidate.evidence || [];
+      const missing = candidate.missing_evidence_ids || [];
+
+      if (!evidence.length && !missing.length) {
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = "No evidence loaded";
+        root.appendChild(empty);
+        return;
+      }
+
+      for (const item of evidence) {
+        const node = document.createElement("div");
+        node.className = "evidence-item";
+        node.innerHTML = `<span class="tag"></span><span class="time"></span><span class="subtle"></span>`;
+        node.querySelector(".tag").textContent = item.tag || item.id || "";
+        node.querySelector(".time").textContent = item.timestamp || "";
+        node.querySelector(".subtle").textContent = item.id || "";
+        root.appendChild(node);
+      }
+
+      for (const id of missing) {
+        const node = document.createElement("div");
+        node.className = "diag";
+        node.textContent = `Missing evidence observation: ${id}`;
+        root.appendChild(node);
+      }
+    }
+
+    async function performEvolutionAction(action, candidate) {
+      const label = action === "discard" ? "discard" : action;
+      const impact = action === "apply"
+        ? "This can write memory, skills, soul, or code through the owner-approved lane."
+        : "This records an owner decision in ControlPlane.";
+      const confirmed = window.confirm(`${label} candidate ${candidate.candidate_id}?\n\n${impact}`);
+      if (!confirmed) return;
+
+      try {
+        $("evolution-state").textContent = `${action} in progress`;
+        await api(`/api/workbench/evolution/candidates/${encodeURIComponent(candidate.candidate_id)}/${encodeURIComponent(action)}`, {
+          method: "POST",
+          body: JSON.stringify({
+            confirm: true,
+            decision_reason: `Workbench ${action}`
+          })
+        });
+        await loadEvolution();
+      } catch (error) {
+        $("evolution-state").textContent = "action failed";
+        alert(error.message);
+      }
+    }
+
+    async function loadSessions() {
+      $("sessions-state").textContent = "syncing";
+      const payload = await api("/api/workbench/sessions");
+      state.sessions.items = payload.sessions || [];
+      state.sessions.summary = payload.summary || {};
+
+      if (!state.sessions.selectedKey || !state.sessions.items.some((session) => session.key === state.sessions.selectedKey)) {
+        state.sessions.selectedKey = state.sessions.items[0]?.key || null;
+      }
+
+      renderSessionMetrics();
+      renderSessionList();
+
+      if (state.sessions.selectedKey) {
+        await loadSessionDetail(state.sessions.selectedKey);
+      } else {
+        state.sessions.detail = null;
+        renderSessionDetail();
+      }
+
+      $("sessions-state").textContent = "local state";
+    }
+
+    async function loadSessionDetail(sessionKey) {
+      const payload = await api(`/api/workbench/sessions/${encodeURIComponent(sessionKey)}`);
+      state.sessions.selectedKey = sessionKey;
+      state.sessions.detail = payload.session;
+      renderSessionMetrics();
+      renderSessionList();
+      renderSessionDetail();
+    }
+
+    async function selectSessionDetail(sessionKey) {
+      await loadSessionDetail(sessionKey);
+      openInspectorPanel();
+    }
+
+    function renderSessionMetrics() {
+      const summary = state.sessions.summary || {};
+      const detail = state.sessions.detail;
+      $("sessions-total").textContent = `${summary.total || 0} total`;
+      $("sessions-running").textContent = String(summary.running || 0);
+      $("sessions-idle").textContent = `${summary.idle || 0} idle`;
+      $("sessions-overrides").textContent = String(summary.with_model_override || 0);
+      $("sessions-selected-key").textContent = detail?.key || state.sessions.selectedKey || "none";
+      $("sessions-selected-model").textContent = detail?.model?.current_key || "unknown";
+    }
+
+    function renderSessionList() {
+      const root = $("session-list");
+      const sessions = state.sessions.items || [];
+      root.innerHTML = "";
+      $("session-count").textContent = `${sessions.length} sessions`;
+
+      if (!sessions.length) {
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = "No sessions";
+        root.appendChild(empty);
+        return;
+      }
+
+      for (const session of sessions) {
+        const row = document.createElement("button");
+        row.type = "button";
+        row.className = "session-row";
+        row.dataset.status = session.status || "idle";
+        row.setAttribute("aria-selected", session.key === state.sessions.selectedKey ? "true" : "false");
+        row.innerHTML = `
+          <div class="session-main">
+            <span class="session-key"></span>
+            <span class="session-status"></span>
+          </div>
+          <div class="chips"></div>
+          <div class="session-preview"></div>
+        `;
+        row.querySelector(".session-key").textContent = session.key || "";
+        row.querySelector(".session-status").textContent = session.run?.phase || session.status || "idle";
+        renderSessionChips(row.querySelector(".chips"), session);
+        row.querySelector(".session-preview").textContent = session.last_message || session.run?.latest_assistant_partial_tail || "";
+        row.addEventListener("click", () => selectSessionDetail(session.key));
+        root.appendChild(row);
+      }
+    }
+
+    function renderSessionChips(root, session) {
+      root.innerHTML = "";
+      const chips = [
+        ["status", session.status],
+        ["channel", session.channel],
+        ["model", session.model?.current_key],
+        ["messages", session.total_messages],
+        ["queue", session.run?.queued_count],
+        ["alerts", session.recent_warning_count]
+      ];
+
+      for (const [key, value] of chips) {
+        if (value === undefined || value === null || value === "") continue;
+        const chip = document.createElement("span");
+        chip.className = "chip";
+        chip.textContent = `${key}:${value}`;
+        root.appendChild(chip);
+      }
+    }
+
+    function renderSessionDetail() {
+      const detail = state.sessions.detail;
+      renderSessionSummary(detail);
+      renderSessionActions(detail);
+      renderSessionMessages(detail);
+      renderSessionObservations(detail);
+    }
+
+    function renderSessionSummary(detail) {
+      const root = $("session-detail");
+      root.innerHTML = "";
+
+      if (!detail) {
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = "Select a session";
+        root.appendChild(empty);
+        return;
+      }
+
+      const head = document.createElement("div");
+      head.className = "detail-head";
+      head.innerHTML = `<div class="detail-tag"></div><div class="detail-meta"></div>`;
+      head.querySelector(".detail-tag").textContent = detail.key || "";
+      renderSessionChips(head.querySelector(".detail-meta"), detail);
+      root.appendChild(head);
+
+      const rows = document.createElement("div");
+      rows.className = "kv";
+      for (const [key, value] of [
+        ["Updated", formatTime(detail.updated_at)],
+        ["Chat", detail.chat_id || ""],
+        ["Current model", detail.model?.current_key || "unavailable"],
+        ["Model source", detail.model?.source || ""],
+        ["Unconsolidated", detail.unconsolidated_messages ?? 0],
+        ["Run", detail.run?.run_id || "idle"]
+      ]) {
+        const row = document.createElement("div");
+        row.innerHTML = `<span></span><span></span>`;
+        row.children[0].textContent = key;
+        row.children[1].textContent = value;
+        rows.appendChild(row);
+      }
+      root.appendChild(rows);
+
+      if (detail.run) {
+        appendJsonBlock(root, "Run Tail", {
+          assistant: detail.run.latest_assistant_partial_tail || "",
+          tool: detail.run.latest_tool_output_tail || ""
+        });
+      }
+    }
+
+    function renderSessionActions(detail) {
+      const root = $("session-actions");
+      root.innerHTML = "";
+
+      if (!detail) return;
+
+      const stop = document.createElement("button");
+      stop.type = "button";
+      stop.className = detail.status === "running" ? "action danger" : "action secondary";
+      stop.textContent = "Stop";
+      stop.disabled = detail.status !== "running";
+      stop.addEventListener("click", () => stopSession(detail.key));
+      root.appendChild(stop);
+
+      const modelRow = document.createElement("div");
+      modelRow.className = "form-grid";
+      modelRow.innerHTML = `
+        <label class="field-wide">Model
+          <select id="session-model-select"></select>
+        </label>
+      `;
+      const select = modelRow.querySelector("select");
+      for (const model of detail.available_models || []) {
+        const option = document.createElement("option");
+        option.value = model.key;
+        option.textContent = `[${model.index}] ${model.key} · ${model.provider_key}`;
+        option.selected = model.current === true;
+        select.appendChild(option);
+      }
+      root.appendChild(modelRow);
+
+      const row = document.createElement("div");
+      row.className = "button-row";
+      const apply = document.createElement("button");
+      apply.type = "button";
+      apply.className = "action";
+      apply.textContent = "Apply model";
+      apply.disabled = !select.options.length;
+      apply.addEventListener("click", () => setSessionModel(detail.key, select.value));
+      const reset = document.createElement("button");
+      reset.type = "button";
+      reset.className = "action secondary";
+      reset.textContent = "Reset";
+      reset.addEventListener("click", () => setSessionModel(detail.key, "reset"));
+      row.appendChild(apply);
+      row.appendChild(reset);
+      root.appendChild(row);
+
+      const note = document.createElement("div");
+      note.className = "subtle";
+      note.textContent = "Running work keeps the model it already started with.";
+      root.appendChild(note);
+    }
+
+    function renderSessionMessages(detail) {
+      const root = $("session-messages");
+      root.innerHTML = "";
+
+      for (const message of (detail?.messages || []).slice().reverse()) {
+        const node = document.createElement("div");
+        node.className = "mini-event";
+        node.innerHTML = `<span class="tag"></span><span class="time"></span><span class="subtle"></span>`;
+        node.querySelector(".tag").textContent = message.role || "";
+        node.querySelector(".time").textContent = message.timestamp || "";
+        node.querySelector(".subtle").textContent = message.content || "";
+        root.appendChild(node);
+      }
+
+      if (!root.children.length) {
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = "No messages";
+        root.appendChild(empty);
+      }
+    }
+
+    function renderSessionObservations(detail) {
+      const root = $("session-observations");
+      root.innerHTML = "";
+
+      for (const event of (detail?.recent_observations || []).slice().reverse()) {
+        const node = document.createElement("div");
+        node.className = "mini-event";
+        node.dataset.level = event.level || "info";
+        node.innerHTML = `<span class="tag"></span><span class="time"></span>`;
+        node.querySelector(".tag").textContent = event.tag || "";
+        node.querySelector(".time").textContent = event.timestamp || "";
+        root.appendChild(node);
+      }
+
+      if (!root.children.length) {
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = "No observations";
+        root.appendChild(empty);
+      }
+    }
+
+    async function stopSession(sessionKey) {
+      const confirmed = window.confirm(`Stop ${sessionKey}?`);
+      if (!confirmed) return;
+
+      try {
+        $("sessions-state").textContent = "stopping";
+        await api(`/api/workbench/sessions/${encodeURIComponent(sessionKey)}/stop`, {
+          method: "POST",
+          body: JSON.stringify({ reason: "workbench_stop" })
+        });
+        await loadSessions();
+      } catch (error) {
+        $("sessions-state").textContent = "stop failed";
+        alert(error.message);
+      }
+    }
+
+    async function setSessionModel(sessionKey, model) {
+      try {
+        $("sessions-state").textContent = "saving model";
+        const payload = await api(`/api/workbench/sessions/${encodeURIComponent(sessionKey)}/model`, {
+          method: "POST",
+          body: JSON.stringify({ model })
+        });
+        state.sessions.detail = payload.session;
+        await loadSessions();
+      } catch (error) {
+        $("sessions-state").textContent = "model update failed";
+        alert(error.message);
+      }
+    }
+
+    async function loadConfig() {
+      $("config-state").textContent = "syncing";
+      const payload = await api("/api/workbench/config");
+      applyConfigPayload(payload);
+      ensureConfigSelection();
+      renderConfig();
+      $("config-state").textContent = "local config";
+    }
+
+    function applyConfigPayload(payload) {
+      state.config.data = payload.config || payload;
+      state.config.reloadStatus = payload.runtime_reload || null;
+    }
+
+    function ensureConfigSelection() {
+      const items = configItems();
+      if (state.config.creating) return;
+
+      if (!state.config.selectedKey || !items.some((item) => configItemKey(item) === state.config.selectedKey)) {
+        state.config.selectedKey = items[0] ? configItemKey(items[0]) : null;
+      }
+    }
+
+    function configItems() {
+      const config = state.config.data || {};
+      return config[state.config.section] || [];
+    }
+
+    function configItemKey(item) {
+      return item?.key || item?.id || "";
+    }
+
+    function currentConfigItem() {
+      if (state.config.creating) return null;
+      return configItems().find((item) => configItemKey(item) === state.config.selectedKey) || null;
+    }
+
+    function renderConfig() {
+      renderConfigTabs();
+      renderConfigList();
+      renderConfigEditor();
+      renderConfigDetail();
+    }
+
+    function renderConfigTabs() {
+      for (const button of document.querySelectorAll(".config-tab")) {
+        button.setAttribute("aria-selected", button.dataset.configSection === state.config.section ? "true" : "false");
+      }
+    }
+
+    function renderConfigList() {
+      const root = $("config-list");
+      root.innerHTML = "";
+      const section = state.config.section;
+      const items = configItems();
+      $("config-list-title").textContent = sectionTitle(section);
+
+      if (!items.length) {
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = `No ${sectionTitle(section).toLowerCase()}`;
+        root.appendChild(empty);
+        return;
+      }
+
+      for (const item of items) {
+        const key = configItemKey(item);
+        const node = document.createElement("button");
+        node.type = "button";
+        node.className = "config-item";
+        node.setAttribute("aria-selected", !state.config.creating && key === state.config.selectedKey ? "true" : "false");
+        node.innerHTML = `
+          <div class="config-item-main">
+            <span class="config-item-key"></span>
+            <span class="config-item-subline"></span>
+          </div>
+          <div class="chips"></div>
+        `;
+        node.querySelector(".config-item-key").textContent = key;
+        node.querySelector(".config-item-subline").textContent = configItemSubline(section, item);
+        renderConfigChips(node.querySelector(".chips"), section, item);
+        node.addEventListener("click", () => {
+          state.config.creating = false;
+          state.config.selectedKey = key;
+          renderConfig();
+          openInspectorPanel();
+        });
+        root.appendChild(node);
+      }
+    }
+
+    function renderConfigChips(root, section, item) {
+      const chips = section === "providers"
+        ? [["type", item.type], ["key", compactSecretLabel(item.api_key)]]
+        : section === "models"
+          ? [["provider", item.provider], ["id", item.id]]
+          : [["type", item.type], ["enabled", item.enabled ? "yes" : "no"], ["stream", item.streaming ? "on" : "off"]];
+
+      for (const [key, value] of chips) {
+        if (value === undefined || value === null || value === "") continue;
+        const chip = document.createElement("span");
+        chip.className = "chip";
+        chip.textContent = `${key}:${value}`;
+        root.appendChild(chip);
+      }
+    }
+
+    function renderConfigEditor() {
+      const section = state.config.section;
+      const item = currentConfigItem();
+      if (section === "providers") renderProviderEditor(item);
+      if (section === "models") renderModelEditor(item);
+      if (section === "channels") renderChannelEditor(item);
+    }
+
+    function renderProviderEditor(item) {
+      const form = $("config-editor");
+      const creating = state.config.creating || !item;
+      form.innerHTML = `
+        <div class="form-grid">
+          <label>Provider key
+            <input id="config-key" autocomplete="off">
+          </label>
+          <label>Type
+            <select id="provider-type"></select>
+          </label>
+          <div id="provider-type-guide" class="config-type-guide field-wide"></div>
+          <label class="field-wide">Base URL
+            <input id="provider-base-url" autocomplete="off" placeholder="https://api.example.com/v1">
+          </label>
+          <div id="provider-secret-preview" class="secret-preview field-wide"></div>
+          <label>API key action
+            <select id="provider-secret-mode"></select>
+          </label>
+          <label>Env var
+            <input id="provider-secret-env" autocomplete="off" placeholder="OPENAI_API_KEY">
+          </label>
+          <label class="field-wide">New secret
+            <input id="provider-secret-value" type="password" autocomplete="new-password">
+          </label>
+        </div>
+        <div class="button-row">
+          <button class="action secondary" id="config-delete" type="button">Delete</button>
+          <button class="action" type="submit">Save provider</button>
+        </div>
+      `;
+
+      $("config-key").value = item?.key || "";
+      $("config-key").disabled = !creating;
+      fillSelect($("provider-type"), state.config.data?.provider_types || [], item?.type || "openai-compatible");
+      $("provider-base-url").value = item?.base_url || "";
+      fillSecretMode("provider-secret-mode", item?.api_key, creating);
+      $("provider-secret-env").value = item?.api_key?.env || "";
+      renderProviderTypeGuide();
+      renderSecretPreview("provider-secret-preview", "Current API key", item?.api_key);
+      $("provider-type").addEventListener("change", renderProviderTypeGuide);
+      $("config-delete").hidden = creating;
+      $("config-delete").addEventListener("click", () => deleteConfigEntity("providers", item.key));
+      form.onsubmit = (event) => saveProvider(event);
+    }
+
+    function renderModelEditor(item) {
+      const form = $("config-editor");
+      const creating = state.config.creating || !item;
+      form.innerHTML = `
+        <div class="form-grid">
+          <label>Model key
+            <input id="config-key" autocomplete="off">
+          </label>
+          <label>Provider
+            <select id="model-provider"></select>
+          </label>
+          <label class="field-wide">Provider model ID
+            <input id="model-id" autocomplete="off">
+          </label>
+          <label>Context window
+            <input id="model-context-window" inputmode="numeric" autocomplete="off">
+          </label>
+          <label>Auto compact limit
+            <input id="model-auto-compact" inputmode="numeric" autocomplete="off">
+          </label>
+          <label class="field-wide">Context strategy
+            <select id="model-context-strategy"></select>
+            <span id="model-context-help" class="field-help"></span>
+          </label>
+        </div>
+        <div class="button-row">
+          <button class="action secondary" id="config-delete" type="button">Delete</button>
+          <button class="action" type="submit">Save model</button>
+        </div>
+        <section class="config-roles">
+          <div class="timeline-title">Model roles</div>
+          <div id="model-role-grid" class="form-grid"></div>
+          <div class="button-row">
+            <button class="action secondary" id="save-model-roles" type="button">Save roles</button>
+          </div>
+        </section>
+      `;
+
+      $("config-key").value = item?.key || "";
+      $("config-key").disabled = !creating;
+      fillSelect($("model-provider"), (state.config.data?.providers || []).map((provider) => provider.key), item?.provider || "");
+      $("model-id").value = item?.id || item?.key || "";
+      $("model-context-window").value = item?.context_window || "";
+      $("model-auto-compact").value = item?.auto_compact_token_limit || "";
+      fillSelect(
+        $("model-context-strategy"),
+        ["", ...(state.config.data?.context_strategies || [])],
+        item?.context_strategy || "",
+        contextStrategyLabels()
+      );
+      updateContextStrategyHelp();
+      $("model-context-strategy").addEventListener("change", updateContextStrategyHelp);
+      $("config-delete").hidden = creating;
+      $("config-delete").addEventListener("click", () => deleteConfigEntity("models", item.key));
+      $("save-model-roles").addEventListener("click", saveModelRoles);
+      form.onsubmit = (event) => saveModel(event);
+      renderModelRoleControls();
+    }
+
+    function renderChannelEditor(item) {
+      const form = $("config-editor");
+      const creating = state.config.creating || !item;
+      form.innerHTML = `
+        <div class="form-grid">
+          <label>Channel ID
+            <input id="config-key" autocomplete="off">
+          </label>
+          <label>Type
+            <select id="channel-type"></select>
+          </label>
+          <div id="channel-type-guide" class="config-type-guide field-wide"></div>
+          <label class="checkbox-row"><input id="channel-enabled" type="checkbox">Enabled</label>
+          <label class="checkbox-row"><input id="channel-streaming" type="checkbox">Streaming</label>
+          <label class="field-wide">Allow from
+            <textarea id="channel-allow-from" placeholder="one id per line"></textarea>
+          </label>
+        </div>
+        <div id="feishu-fields" class="form-grid">
+          <label class="field-wide">Feishu app ID
+            <input id="feishu-app-id" autocomplete="off">
+          </label>
+          <div id="feishu-secret-preview" class="secret-preview field-wide"></div>
+          <label>App secret action
+            <select id="feishu-secret-mode"></select>
+          </label>
+          <label>Env var
+            <input id="feishu-secret-env" autocomplete="off" placeholder="FEISHU_APP_SECRET">
+          </label>
+          <label class="field-wide">New secret
+            <input id="feishu-secret-value" type="password" autocomplete="new-password">
+          </label>
+        </div>
+        <div id="discord-fields" class="form-grid">
+          <div id="discord-token-preview" class="secret-preview field-wide"></div>
+          <label>Discord token action
+            <select id="discord-token-mode"></select>
+          </label>
+          <label>Env var
+            <input id="discord-token-env" autocomplete="off" placeholder="DISCORD_BOT_TOKEN">
+          </label>
+          <label class="field-wide">New token
+            <input id="discord-token-value" type="password" autocomplete="new-password">
+          </label>
+          <label>Table mode
+            <select id="discord-table-mode"></select>
+          </label>
+          <label>Guild ID
+            <input id="discord-guild-id" autocomplete="off">
+          </label>
+        </div>
+        <div class="button-row">
+          <button class="action secondary" id="config-delete" type="button">Delete</button>
+          <button class="action" type="submit">Save channel</button>
+        </div>
+      `;
+
+      $("config-key").value = item?.id || "";
+      $("config-key").disabled = !creating;
+      fillSelect($("channel-type"), state.config.data?.channel_types || ["feishu", "discord"], item?.type || "feishu");
+      $("channel-enabled").checked = item?.enabled === true;
+      $("channel-streaming").checked = item?.streaming !== false;
+      $("channel-allow-from").value = (item?.allow_from || []).join("\n");
+      $("feishu-app-id").value = item?.app_id || "";
+      fillSecretMode("feishu-secret-mode", item?.app_secret, creating);
+      $("feishu-secret-env").value = item?.app_secret?.env || "";
+      fillSecretMode("discord-token-mode", item?.token, creating);
+      $("discord-token-env").value = item?.token?.env || "";
+      renderChannelTypeGuide();
+      renderSecretPreview("feishu-secret-preview", "Current app secret", item?.app_secret);
+      renderSecretPreview("discord-token-preview", "Current bot token", item?.token);
+      fillSelect($("discord-table-mode"), state.config.data?.discord_table_modes || ["ascii", "raw", "embed"], item?.show_table_as || "ascii");
+      $("discord-guild-id").value = item?.guild_id || "";
+      $("channel-type").addEventListener("change", () => {
+        updateChannelTypeFields();
+        renderChannelTypeGuide();
+      });
+      updateChannelTypeFields();
+      $("config-delete").hidden = creating;
+      $("config-delete").addEventListener("click", () => deleteConfigEntity("channels", item.id));
+      form.onsubmit = (event) => saveChannel(event);
+    }
+
+    function renderModelRoleControls() {
+      const root = $("model-role-grid");
+      const roles = state.config.data?.model_roles || {};
+      const modelKeys = (state.config.data?.models || []).map((model) => model.key);
+      root.innerHTML = "";
+
+      for (const role of ["default_model", "cheap_model", "memory_model", "advisor_model"]) {
+        const label = document.createElement("label");
+        label.textContent = role.replace("_model", "");
+        const select = document.createElement("select");
+        select.id = `role-${role}`;
+        const values = role === "default_model" ? modelKeys : ["", ...modelKeys];
+        fillSelect(select, values, roles[role] || "");
+        label.appendChild(select);
+        root.appendChild(label);
+      }
+    }
+
+    function updateChannelTypeFields() {
+      const type = $("channel-type").value;
+      $("feishu-fields").hidden = type !== "feishu";
+      $("discord-fields").hidden = type !== "discord";
+    }
+
+    async function saveProvider(event) {
+      event.preventDefault();
+      const key = $("config-key").value.trim();
+      const payload = await api(`/api/workbench/config/providers/${encodeURIComponent(key)}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          type: $("provider-type").value,
+          base_url: $("provider-base-url").value.trim(),
+          api_key_mode: $("provider-secret-mode").value,
+          api_key_env: $("provider-secret-env").value.trim(),
+          api_key_value: $("provider-secret-value").value
+        })
+      });
+      afterConfigSave(payload, key);
+    }
+
+    async function saveModel(event) {
+      event.preventDefault();
+      const key = $("config-key").value.trim();
+      const payload = await api(`/api/workbench/config/models/${encodeURIComponent(key)}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          provider: $("model-provider").value,
+          id: $("model-id").value.trim(),
+          context_window: $("model-context-window").value.trim(),
+          auto_compact_token_limit: $("model-auto-compact").value.trim(),
+          context_strategy: $("model-context-strategy").value.trim()
+        })
+      });
+      afterConfigSave(payload, key);
+    }
+
+    async function saveModelRoles() {
+      const body = {};
+      for (const role of ["default_model", "cheap_model", "memory_model", "advisor_model"]) {
+        body[role] = $(`role-${role}`).value;
+      }
+      const payload = await api("/api/workbench/config/model-roles", {
+        method: "PATCH",
+        body: JSON.stringify(body)
+      });
+      afterConfigSave(payload, state.config.selectedKey);
+    }
+
+    async function saveChannel(event) {
+      event.preventDefault();
+      const key = $("config-key").value.trim();
+      const payload = await api(`/api/workbench/config/channels/${encodeURIComponent(key)}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          type: $("channel-type").value,
+          enabled: $("channel-enabled").checked,
+          streaming: $("channel-streaming").checked,
+          allow_from: $("channel-allow-from").value,
+          app_id: $("feishu-app-id").value.trim(),
+          app_secret_mode: $("feishu-secret-mode").value,
+          app_secret_env: $("feishu-secret-env").value.trim(),
+          app_secret_value: $("feishu-secret-value").value,
+          token_mode: $("discord-token-mode").value,
+          token_env: $("discord-token-env").value.trim(),
+          token_value: $("discord-token-value").value,
+          show_table_as: $("discord-table-mode").value,
+          guild_id: $("discord-guild-id").value.trim()
+        })
+      });
+      afterConfigSave(payload, key);
+    }
+
+    async function deleteConfigEntity(section, key) {
+      if (!key) return;
+      const confirmed = window.confirm(`Delete ${key}?`);
+      if (!confirmed) return;
+      const payload = await api(`/api/workbench/config/${section}/${encodeURIComponent(key)}`, { method: "DELETE" });
+      applyConfigPayload(payload);
+      state.config.creating = false;
+      state.config.selectedKey = null;
+      ensureConfigSelection();
+      renderConfig();
+      $("config-state").textContent = "saved";
+    }
+
+    function afterConfigSave(payload, key) {
+      applyConfigPayload(payload);
+      state.config.creating = false;
+      state.config.selectedKey = key;
+      ensureConfigSelection();
+      renderConfig();
+      $("config-state").textContent = "saved";
+    }
+
+    function fillSelect(select, values, selected, labels = {}) {
+      select.innerHTML = "";
+      const normalized = [];
+      for (const value of values || []) {
+        if (!normalized.includes(value)) normalized.push(value);
+      }
+      if (selected && !normalized.includes(selected)) normalized.push(selected);
+
+      for (const value of normalized) {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = labels[value] || value || "none";
+        if (value === selected) option.selected = true;
+        select.appendChild(option);
+      }
+    }
+
+    function fillSecretMode(id, secret, creating) {
+      const modes = creating ? ["env", "literal", "none"] : ["keep", "env", "literal", "none"];
+      const selected = creating ? "env" : "keep";
+      fillSelect($(id), modes, selected, {
+        keep: "keep current",
+        env: "use env var",
+        literal: "set new secret",
+        none: "clear"
+      });
+    }
+
+    function renderProviderTypeGuide() {
+      renderTypeGuide("provider-type-guide", state.config.data?.provider_type_guides, $("provider-type").value);
+    }
+
+    function renderChannelTypeGuide() {
+      renderTypeGuide("channel-type-guide", state.config.data?.channel_type_guides, $("channel-type").value);
+    }
+
+    function renderTypeGuide(id, guides, value) {
+      const root = $(id);
+      const guide = guides?.[value];
+      root.innerHTML = "";
+      root.hidden = !guide;
+      if (!guide) return;
+
+      const title = document.createElement("strong");
+      title.textContent = guide.label || value;
+      const summary = document.createElement("span");
+      summary.textContent = guide.summary || "";
+      root.appendChild(title);
+      root.appendChild(summary);
+
+      const details = [guide.best_for ? `Best for: ${guide.best_for}` : "", guide.requires?.length ? `Needs: ${guide.requires.join(", ")}` : ""]
+        .filter(Boolean)
+        .join(" · ");
+
+      if (details) {
+        const detail = document.createElement("span");
+        detail.textContent = details;
+        root.appendChild(detail);
+      }
+    }
+
+    function renderSecretPreview(id, label, secret) {
+      const root = $(id);
+      root.innerHTML = "";
+      const title = document.createElement("strong");
+      title.textContent = label;
+      const value = document.createElement("span");
+      value.textContent = secretLabel(secret);
+      root.appendChild(title);
+      root.appendChild(value);
+    }
+
+    function contextStrategyLabels() {
+      const guides = state.config.data?.context_strategy_guides || {};
+      const labels = { "": "default" };
+      for (const [key, guide] of Object.entries(guides)) {
+        labels[key] = key ? `${guide.label || key} (${key})` : (guide.label || "default");
+      }
+      return labels;
+    }
+
+    function updateContextStrategyHelp() {
+      const selected = $("model-context-strategy").value;
+      const guide = state.config.data?.context_strategy_guides?.[selected];
+      $("model-context-help").textContent = guide?.summary || "";
+    }
+
+    function renderConfigDetail() {
+      const root = $("config-detail");
+      const impact = $("config-impact");
+      root.innerHTML = "";
+      impact.innerHTML = "";
+      const item = currentConfigItem();
+
+      if (state.config.creating) {
+        root.innerHTML = `<div class="empty">New ${sectionTitle(state.config.section).slice(0, -1)}</div>`;
+        return;
+      }
+
+      if (!item) {
+        root.innerHTML = `<div class="empty">No selection</div>`;
+        return;
+      }
+
+      const rows = document.createElement("div");
+      rows.className = "kv";
+      for (const [key, value] of configDetailRows(state.config.section, item)) {
+        const row = document.createElement("div");
+        row.innerHTML = `<span></span><span></span>`;
+        row.children[0].textContent = key;
+        row.children[1].textContent = value || "";
+        rows.appendChild(row);
+      }
+      root.appendChild(rows);
+      appendJsonBlock(impact, "References", configImpact(state.config.section, item));
+      if (state.config.reloadStatus) {
+        appendJsonBlock(impact, "Last Runtime Reload", state.config.reloadStatus);
+      }
+    }
+
+    function configDetailRows(section, item) {
+      if (section === "providers") {
+        return [
+          ["Key", item.key],
+          ["Type", item.type],
+          ["Base URL", item.base_url],
+          ["API key", secretLabel(item.api_key)]
+        ];
+      }
+      if (section === "models") {
+        return [
+          ["Key", item.key],
+          ["Provider", item.provider],
+          ["ID", item.id],
+          ["Context", item.context_window],
+          ["Auto compact", item.auto_compact_token_limit],
+          ["Strategy", item.context_strategy]
+        ];
+      }
+      return [
+        ["ID", item.id],
+        ["Type", item.type],
+        ["Enabled", item.enabled ? "yes" : "no"],
+        ["Streaming", item.streaming ? "on" : "off"],
+        ["Allow from", (item.allow_from || []).join(", ")],
+        ["Secret", item.type === "discord" ? secretLabel(item.token) : secretLabel(item.app_secret)]
+      ];
+    }
+
+    function configImpact(section, item) {
+      const config = state.config.data || {};
+      if (section === "providers") {
+        return {
+          models: (config.models || []).filter((model) => model.provider === item.key).map((model) => model.key)
+        };
+      }
+      if (section === "models") {
+        const roles = config.model_roles || {};
+        return {
+          roles: Object.entries(roles).filter(([, value]) => value === item.key).map(([role]) => role)
+        };
+      }
+      return {
+        runtime: {
+          enabled: item.enabled,
+          streaming: item.streaming,
+          type: item.type
+        }
+      };
+    }
+
+    function sectionTitle(section) {
+      if (section === "providers") return "Providers";
+      if (section === "models") return "Models";
+      return "Channels";
+    }
+
+    function configItemSubline(section, item) {
+      if (section === "providers") return item.base_url || item.type || "";
+      if (section === "models") return item.id || "";
+      return item.type || "";
+    }
+
+    function secretLabel(secret) {
+      if (!secret || !secret.configured) return "none";
+      const display = secret.display_value || "******";
+      if (secret.mode === "env") return `${display} · env:${secret.env || "unset"}`;
+      return display;
+    }
+
+    function compactSecretLabel(secret) {
+      if (!secret || !secret.configured) return "none";
+      return secret.display_value || "******";
+    }
+
+    function latestObservation() {
+      return state.observations[state.observations.length - 1];
+    }
+
+    function renderMetrics() {
+      const budget = state.summary?.budget || {};
+      const current = numberOrNull(budget.current);
+      const capacity = numberOrNull(budget.capacity);
+      const percent = capacity && current !== null ? Math.max(0, Math.min(100, Math.round((current / capacity) * 100))) : 0;
+
+      $("budget-mode").textContent = budget.mode || "unknown";
+      $("budget-current").textContent = current === null ? "-" : String(current);
+      $("budget-capacity").textContent = capacity ? `/ ${capacity}` : "/ -";
+      $("budget-meter").style.width = `${percent}%`;
+      $("budget-meta").textContent = [
+        budget.spent_today !== undefined ? `spent today ${budget.spent_today}` : "",
+        budget.refill_rate !== undefined ? `refill ${budget.refill_rate}/h` : ""
+      ].filter(Boolean).join(" · ");
+
+      const gauges = state.summary?.gauges || {};
+      const entries = Object.entries(gauges).sort(([a], [b]) => a.localeCompare(b));
+      $("gauge-count").textContent = String(entries.length);
+      const root = $("gauges");
+      root.innerHTML = "";
+
+      if (!entries.length) {
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = "No gauges";
+        root.appendChild(empty);
+        return;
+      }
+
+      for (const [name, gauge] of entries.slice(0, 6)) {
+        const node = document.createElement("div");
+        node.className = "gauge";
+        node.innerHTML = `<div class="name"></div><div class="value"></div><div class="subtle"></div>`;
+        node.querySelector(".name").textContent = name;
+        node.querySelector(".value").textContent = compactValue(gauge.value);
+        node.querySelector(".subtle").textContent = gauge.updated_at || "";
+        root.appendChild(node);
+      }
+    }
+
+    function renderTimeline() {
+      const root = $("timeline");
+      root.innerHTML = "";
+      const events = state.observations.slice().reverse();
+      $("observation-count").textContent = `${events.length} events`;
+
+      if (!events.length) {
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = "No observations";
+        root.appendChild(empty);
+        return;
+      }
+
+      for (const event of events) {
+        const node = document.createElement("button");
+        node.type = "button";
+        node.className = "event";
+        node.dataset.level = event.level || "info";
+        node.setAttribute("aria-selected", event.id === state.selectedObservationId ? "true" : "false");
+        node.innerHTML = `
+          <div class="event-main">
+            <span class="tag"></span>
+            <span class="time"></span>
+          </div>
+          <div class="chips"></div>
+        `;
+        node.querySelector(".tag").textContent = event.tag || "";
+        node.querySelector(".time").textContent = formatTime(event.timestamp);
+        renderContextChips(node.querySelector(".chips"), event);
+        node.addEventListener("click", () => {
+          state.selectedObservationId = event.id;
+          renderTimeline();
+          renderObservationDetail();
+          openInspectorPanel();
+        });
+        root.appendChild(node);
+      }
+    }
+
+    function renderContextChips(root, event) {
+      root.innerHTML = "";
+      const context = event.context || {};
+      const attrs = event.attrs || {};
+      const chips = [
+        ["level", event.level],
+        ["kind", event.kind],
+        ["run", context.run_id],
+        ["session", context.session_key],
+        ["channel", context.channel],
+        ["tool", attrs.tool_name || context.tool_call_id]
+      ];
+
+      for (const [key, value] of chips) {
+        if (!value) continue;
+        const chip = document.createElement("span");
+        chip.className = "chip";
+        chip.textContent = `${key}:${value}`;
+        root.appendChild(chip);
+      }
+    }
+
+    function renderObservationDetail() {
+      const root = $("observation-detail");
+      root.innerHTML = "";
+      const event = state.observations.find((candidate) => candidate.id === state.selectedObservationId);
+
+      if (!event) {
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = "Select an observation";
+        root.appendChild(empty);
+        return;
+      }
+
+      const head = document.createElement("div");
+      head.className = "detail-head";
+      head.innerHTML = `
+        <div class="detail-tag"></div>
+        <div class="detail-meta"></div>
+      `;
+      head.querySelector(".detail-tag").textContent = event.tag || "";
+      renderDetailChips(head.querySelector(".detail-meta"), event);
+      root.appendChild(head);
+
+      appendJsonBlock(root, "Context", event.context || {});
+      appendJsonBlock(root, "Attrs", event.attrs || {});
+      appendJsonBlock(root, "Source", event.source || {});
+      appendJsonBlock(root, "Raw", event);
+    }
+
+    function renderDetailChips(root, event) {
+      const items = [
+        event.timestamp,
+        event.level,
+        event.kind,
+        event.id
+      ].filter(Boolean);
+
+      for (const item of items) {
+        const chip = document.createElement("span");
+        chip.className = "chip";
+        chip.textContent = item;
+        root.appendChild(chip);
+      }
+    }
+
+    function appendJsonBlock(root, title, value) {
+      const block = document.createElement("div");
+      block.className = "detail-block";
+      block.innerHTML = `<h3></h3><pre></pre>`;
+      block.querySelector("h3").textContent = title;
+      block.querySelector("pre").textContent = JSON.stringify(value, null, 2);
+      root.appendChild(block);
+    }
+
+    function renderMiniEvents(events) {
+      const root = $("events");
+      root.innerHTML = "";
+
+      for (const event of events.slice().reverse().slice(0, 10)) {
+        const node = document.createElement("div");
+        node.className = "mini-event";
+        node.dataset.level = event.level || "info";
+        node.innerHTML = `<span class="tag"></span><span class="time"></span>`;
+        node.querySelector(".tag").textContent = event.tag || "";
+        node.querySelector(".time").textContent = event.timestamp || "";
+        root.appendChild(node);
+      }
+    }
+
+    function renderDiagnostics() {
+      const root = $("diagnostics");
+      root.innerHTML = "";
+
+      if (!state.diagnostics.length) {
+        root.textContent = "Clear";
+        return;
+      }
+
+      for (const diagnostic of state.diagnostics) {
+        const node = document.createElement("div");
+        node.className = "diag";
+        node.textContent = `${diagnostic.app_id || "workbench"}: ${diagnostic.error}`;
+        root.appendChild(node);
+      }
+    }
+
+    function setLevel(level) {
+      state.filters.level = level;
+      for (const button of document.querySelectorAll(".level-button")) {
+        button.setAttribute("aria-pressed", button.dataset.level === level ? "true" : "false");
+      }
+    }
+
+    function clearFilters() {
+      for (const key of ["tag_prefix", "run_id", "session_key", "channel", "tool"]) {
+        const field = document.querySelector(`[name="${key}"]`);
+        if (field) field.value = "";
+        state.filters[key] = "";
+      }
+      $("filter-limit").value = "80";
+      state.filters.limit = "80";
+      setLevel("");
+      loadObserve();
+    }
+
+    function numberOrNull(value) {
+      return Number.isFinite(Number(value)) ? Number(value) : null;
+    }
+
+    function compactValue(value) {
+      const text = typeof value === "string" ? value : JSON.stringify(value);
+      if (!text) return "";
+      return text.length > 140 ? `${text.slice(0, 140)}...[truncated]` : text;
+    }
+
+    function formatTime(timestamp) {
+      if (!timestamp) return "";
+      const date = new Date(timestamp);
+      if (Number.isNaN(date.getTime())) return timestamp;
+      return date.toLocaleString();
+    }
+
+    $("observe-nav").addEventListener("click", () => {
+      switchView("observe");
+      loadObserve();
+    });
+
+    $("evolution-nav").addEventListener("click", () => {
+      switchView("evolution");
+      loadEvolution();
+    });
+
+    $("sessions-nav").addEventListener("click", () => {
+      switchView("sessions");
+      loadSessions();
+    });
+
+    $("config-nav").addEventListener("click", () => {
+      switchView("config");
+      loadConfig();
+    });
+
+    for (const button of document.querySelectorAll(".sidebar-toggle")) {
+      button.addEventListener("click", () => togglePanel("sidebar"));
+    }
+
+    for (const button of document.querySelectorAll(".inspector-toggle")) {
+      button.addEventListener("click", () => togglePanel("inspector"));
+    }
+
+    $("panel-scrim").addEventListener("click", closePanels);
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") closePanels();
+    });
+
+    if (compactLayout.addEventListener) {
+      compactLayout.addEventListener("change", (event) => {
+        if (!event.matches) closePanels();
+      });
+    } else if (compactLayout.addListener) {
+      compactLayout.addListener((event) => {
+        if (!event.matches) closePanels();
+      });
+    }
+
+    $("refresh-observe").addEventListener("click", loadObserve);
+    $("refresh-evolution").addEventListener("click", loadEvolution);
+    $("refresh-sessions").addEventListener("click", loadSessions);
+    $("refresh-config").addEventListener("click", loadConfig);
+    $("reload-app").addEventListener("click", reloadCurrentApp);
+    window.addEventListener("message", handleBridgeMessage);
+    $("config-new").addEventListener("click", () => {
+      state.config.creating = true;
+      state.config.selectedKey = null;
+      renderConfig();
+    });
+    $("clear-filters").addEventListener("click", clearFilters);
+    $("observe-filters").addEventListener("submit", (event) => {
+      event.preventDefault();
+      loadObserve();
+    });
+
+    for (const button of document.querySelectorAll(".config-tab")) {
+      button.addEventListener("click", () => {
+        state.config.section = button.dataset.configSection;
+        state.config.creating = false;
+        state.config.selectedKey = null;
+        ensureConfigSelection();
+        renderConfig();
+      });
+    }
+
+    for (const button of document.querySelectorAll(".level-button")) {
+      button.addEventListener("click", () => {
+        setLevel(button.dataset.level || "");
+        loadObserve();
+      });
+    }
+
+    updatePanelButtons();
+
+    loadApps()
+      .then(loadObserve)
+      .catch((error) => {
+        $("connection").textContent = "error";
+        $("observation-detail").innerHTML = `<div class="diag"></div>`;
+        $("observation-detail").querySelector(".diag").textContent = error.message;
+      });
+  </script>
+</body>
+</html>

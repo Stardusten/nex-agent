@@ -2,7 +2,7 @@
 
 ## Active Workstream
 
-Phase 1 runtime reload foundation is implemented. Phase 3 streaming delivery and Phase 3A architecture convergence are in place. Phase 4 is now closed as the text-IR foundation, Phase 4A is superseded, Phase 5 IM inbound architecture and media projection is implemented, and Phase 7 Feishu streaming converter simplification is in place. Phase 8 session run control and busy follow-up is landed, and Phase 9 follow-up LLM turn and interrupt request is now landed on top of it. Phase 6 Feishu outbound official format/media send remains landed.
+Phase 1 runtime reload foundation is implemented. Phase 3 streaming delivery and Phase 3A architecture convergence are in place. Phase 4 is now closed as the text-IR foundation, Phase 4A is superseded, Phase 5 IM inbound architecture and media projection is implemented, and Phase 7 Feishu streaming converter simplification is in place. Phase 8 session run control and busy follow-up is landed, and Phase 9 follow-up LLM turn and interrupt request is now landed on top of it. Phase 6 Feishu outbound official format/media send remains landed. Phase 18 Workbench App Runtime is now opened as the local-first evolvable console/workbench track.
 
 ## Why This Is Active
 
@@ -165,6 +165,83 @@ File access roots are now a TOOL-layer runtime config contract:
 - path validation only has explicit-context APIs: `allowed_roots(ctx)`, `validate_path(path, ctx)`, and `validate_write_path(path, ctx)`
 - `NEX_ALLOWED_ROOTS` remains a process-level full override
 
+Phase 18 is now opened for the Workbench App Runtime:
+
+- the settled product direction is a local-first app host, not a fixed Admin dashboard
+- Workbench apps live under `workspace/workbench/apps/<id>/nex.app.json`
+- each app is intended to run as a sandboxed iframe with host-mediated Nex SDK bridge access
+- app development handoff guidance now lives in `docs/dev/designs/2026-04-28-workbench-app-authoring-guide.md`
+- Stage 1 implementation is in place:
+  - `Workspace` now creates `workbench/`
+  - `Nex.Agent.Workbench.AppManifest` normalizes and validates app manifests
+  - `Nex.Agent.Workbench.Store` reads/writes/lists manifests and returns bounded diagnostics for invalid apps
+- Stage 2 implementation is in place:
+  - `Runtime.Snapshot` now carries `workbench.apps`, `workbench.diagnostics`, and `workbench.hash`
+  - `Runtime.reload/1` projects the app catalog through `Workbench.Store`
+  - invalid app manifests remain diagnostics and do not fail runtime reload
+  - `Admin.overview_state/1` now includes a Workbench summary
+- Stage 3 implementation is in place:
+  - `Nex.Agent.Workbench.Permissions` owns `workspace/workbench/permissions.json`
+  - app manifests declare requestable permissions, while `permissions.json` stores owner grants
+  - `grant/revoke/check/list/app` are implemented
+  - permission views separate effective grants from stale grants left behind after manifest changes
+  - denied checks and successful grants write `workbench.permission.denied/granted` ControlPlane observations
+- Stage 4 implementation is in place:
+  - `Config.workbench_runtime/1` normalizes `gateway.workbench`
+  - `Runtime.Snapshot.workbench.runtime` carries enabled/host/port into runtime world view
+  - `Workbench.Server` reads port from Runtime snapshot, not from config files
+  - server is supervised by the application and only binds `127.0.0.1`
+  - minimal HTTP JSON endpoints expose apps, app detail, permission grant/revoke, and observe summary
+  - `Nex.Agent.HTTP` remains the outbound client/proxy abstraction; Workbench server is an inbound loopback listener and does not reuse the client module
+  - supervised Workbench server startup is disabled by default in `MIX_ENV=test`; tests start explicit ephemeral listeners
+  - the minimal HTTP listener now caps request headers/body and returns bounded errors
+- Stage 5 static prototype is in place:
+  - `GET /` and `GET /workbench` serve a no-build Workbench shell from `priv/workbench/shell.html`
+  - the shell has a left app launcher, central sandboxed iframe preview, and right manifest/permissions/observe/diagnostics inspector
+  - `GET /app-frame/:id` serves a first sandbox frame that renders manifest details
+  - permission grant/revoke can be exercised from the shell and reflected in ControlPlane observe summary
+  - below 1500px the shell prioritizes the main workspace and exposes the left navigation and right inspector as `Menu` / `Detail` drawers
+- Stage 5 observe surface is now useful as a first observability workbench:
+  - `GET /api/observe/query` returns ControlPlane observations through a fixed filter allowlist
+  - filters cover `tag_prefix`, `run_id`, `session_key`, `channel`, `chat_id`, `tool`, `tool_call_id`, `tool_name`, `level`, `kind`, `trace_id`, `query`, `since`, and `limit`
+  - the `observe` tool accepts the same runtime dimension filters, including `tag_prefix`, channel/chat, and tool filters
+  - the static shell default view is an Observability timeline with warning/error/critical highlighting, single-observation detail, and simple budget/gauge panels
+  - `ControlPlane.Store.query/2` scans newest observation files and newest lines first, stops once `limit` is satisfied, and keeps the public return order chronological; recent Workbench queries no longer decode the full JSONL store
+- Stage 5 self-evolution observability MVP is in place:
+  - `Nex.Agent.Workbench.EvolutionApp` projects energy/budget, gauges, candidate list, candidate detail, and evidence summaries from ControlPlane/Evolution
+  - `GET /api/workbench/evolution` and candidate detail/action endpoints expose this surface to the local shell
+  - `approve`/`discard`/`apply` reuse the existing `evolution_candidate` owner-approved execution lane
+  - all candidate actions require explicit confirmation and write `workbench.bridge.call.*` plus existing `evolution.candidate.*` lifecycle observations
+  - the static shell includes a `Self Evolution` system view with energy, candidates, evidence chain, and confirmed approve/discard/apply controls
+- Stage 5 configuration surface is in place:
+  - `Runtime.Snapshot.config_path` carries the current runtime config path for Workbench write-back
+  - `Nex.Agent.Workbench.ConfigPanel` exposes structured provider/model/model-role/channel editing without a generic JSON editor
+  - `GET/PUT/DELETE/PATCH /api/workbench/config/**` operate through `Config.read_map/1` and `Config.save_map/2`, preserving raw config shape and secret env references
+  - config API responses redact secret values to `env` / `configured` / `none`
+  - secret views now expose only a fixed `display_value: "******"` placeholder for configured secrets, never the raw secret
+  - provider/channel types and model context strategies are exposed as enums with backend-provided UX guidance; `context_strategy` is selected from known values
+  - successful updates write `workbench.config.updated` with runtime reload status
+  - config updates validate the next runtime config before writing; enabled channels require required secrets
+  - runtime reload failures roll the raw config file back and write `workbench.config.update_failed`
+  - the static shell includes a `Configuration` system view with entity lists, structured forms, and runtime impact inspector
+- Stage 5 session management surface is in place:
+  - `Nex.Agent.Workbench.SessionApp` projects sessions from `SessionManager`/workspace history plus active owner runs from `RunControl`
+  - session means a NexAgent conversation/work unit keyed by `channel:chat_id`; channel connection and Discord thread cache are not sessions
+  - `GET /api/workbench/sessions` and detail endpoints expose status, run phase/tool/tails, model source, recent messages, and session-scoped observations
+  - the sessions overview avoids ControlPlane observation scans so historical session inventory stays responsive; detail view loads session-scoped observations lazily
+  - `POST /api/workbench/sessions/:session_key/stop` reuses the existing InboundWorker stop lane when available and falls back to `RunControl.cancel_owner/3`
+  - `POST /api/workbench/sessions/:session_key/model` reuses session model overrides and invalidates idle InboundWorker agent cache so the next turn uses the selected model
+  - the static shell includes a `Sessions` system view with inventory, stop control, model switch/reset, recent messages, and observations
+- Phase 18B static iframe app runtime is in place:
+  - app manifests no longer require `runtime`; `entry` defaults to `index.html`, and legacy `runtime` fields are ignored rather than displayed as meaningful app settings
+  - `GET /app-frame/:id` serves the app entry HTML with injected `window.Nex` SDK bootstrap; missing/invalid entries render bounded iframe error pages
+  - `GET /app-assets/:id/<relative_path>` serves only files under that app directory, rejects `..`, absolute paths, directories, `nex.app.json`, app dir escapes, and files above 2MB
+  - the shell has a manual app `Reload` button and reloads iframes with cache-busting URLs on app switch/reload
+  - `POST /api/workbench/bridge/:app_id/call` is implemented through `Nex.Agent.Workbench.Bridge` with fixed methods `permissions.current`, `observe.summary`, and `observe.query`
+  - bridge calls are app-bound by the host shell, require both manifest declaration and owner grant through `Permissions.check/3`, and write started/finished/failed/denied ControlPlane observations
+  - app artifact authoring remains `find -> read -> apply_patch -> Reload`; no `workbench_app`/write-file tool, Vite/build/HMR, or domain app schema is part of 18B
+- next step is Phase 18 manual validation: seed a static app in a temporary workspace, enable `gateway.workbench`, and verify iframe reload/SDK bridge under the real loopback server
+
 Phase 17 is now implemented as the first memory-system polish step:
 
 - keep the existing file-backed workspace memory model
@@ -193,6 +270,8 @@ Docs/dev workflow is split into four lanes:
 ## Current Plan Pointer
 
 - [Designs Index](../designs/index.md)
+- [2026-04-28 Workbench App Authoring Guide](../designs/2026-04-28-workbench-app-authoring-guide.md)
+- [2026-04-28 Workbench App Runtime Design](../designs/2026-04-28-workbench-app-runtime.md)
 - [Phase 1 Runtime Reload Foundation](../task-plan/phase1-runtime-reload-foundation.md)
 - [Phase 3 Streaming Delivery Contract](../task-plan/phase3-streaming-delivery-contract.md)
 - [Phase 3A Streaming Architecture Convergence](../task-plan/phase3a-streaming-architecture-convergence.md)
@@ -220,6 +299,8 @@ Docs/dev workflow is split into four lanes:
 - [Phase 15 Tool Backend Selection (Aborted)](../task-plan/phase15-provider-native-tool-capability-resolution.md)
 - [Phase 16 Local Advisor Tool](../task-plan/phase16-local-advisor-tool.md)
 - [Phase 17 Memory Refresh Cost And Visibility](../task-plan/phase17-memory-refresh-cost-and-visibility.md)
+- [Phase 18 Workbench App Runtime](../task-plan/phase18-workbench-app-runtime.md)
+- [Phase 18B Workbench Static Iframe Apps](../task-plan/phase18b-workbench-sdk-bridge-and-app-authoring.md)
 - [2026-04-16 IM Inbound Media Architecture](../findings/2026-04-16-im-inbound-media-architecture.md)
 - [2026-04-16 IM Streaming Capabilities And Delivery Contract](../findings/2026-04-16-im-streaming-capabilities.md)
 - [2026-04-16 Streaming Architecture Convergence](../findings/2026-04-16-streaming-architecture-convergence.md)
@@ -233,11 +314,12 @@ Docs/dev workflow is split into four lanes:
 
 ## Immediate Next Steps
 
-1. 用真实 `~/.nex/agent/config.json` 手动改成新 config shape 后重启 gateway，验证多个 Feishu/Discord instance 可以同时注册、收消息、发消息。
-2. 真实 gateway/manual 场景检查 runtime reload 后 channel add/remove/change 是否只影响对应 instance。
-3. 用真实 gateway/manual 场景检查 busy 普通消息 follow-up、`/btw`、`/status`、`/stop`、可选 interrupt tool，以及 follow-up 使用 `observe summary` 的实际交互时序。
-4. Phase 7 留存问题仍需后续处理：Finch 连接池泄漏、飞书 `close_streaming_mode` 404、LLM 空返回兜底。
-5. 用真实 gateway/manual 场景检查 Phase 17 memory notice：普通 owner run 后台 refresh 应在最终回复之后发送 `🧠 Memory - <summary>`；cron、follow-up、subagent 不应发送。
+1. Phase 18 Workbench：用一个临时 workspace 手动 seed `workbench/apps/<id>/nex.app.json` + `index.html`，启用 `gateway.workbench` 后打开 `http://127.0.0.1:50051/workbench` 验证真实 gateway 下的 shell/reload/permission/observe/SDK bridge 回路。
+2. 用真实 `~/.nex/agent/config.json` 手动改成新 config shape 后重启 gateway，验证多个 Feishu/Discord instance 可以同时注册、收消息、发消息。
+3. 真实 gateway/manual 场景检查 runtime reload 后 channel add/remove/change 是否只影响对应 instance。
+4. 用真实 gateway/manual 场景检查 busy 普通消息 follow-up、`/btw`、`/status`、`/stop`、可选 interrupt tool，以及 follow-up 使用 `observe summary` 的实际交互时序。
+5. Phase 7 留存问题仍需后续处理：Finch 连接池泄漏、飞书 `close_streaming_mode` 404、LLM 空返回兜底。
+6. 用真实 gateway/manual 场景检查 Phase 17 memory notice：普通 owner run 后台 refresh 应在最终回复之后发送 `🧠 Memory - <summary>`；cron、follow-up、subagent 不应发送。
 
 ## Reviewer Verification
 

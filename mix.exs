@@ -20,6 +20,7 @@ defmodule NexAgent.MixProject do
   def application do
     [
       extra_applications: [:logger, :inets, :ssl, :crypto],
+      env: [supervise_workbench_server?: Mix.env() != :test],
       mod: {Nex.Agent.Application, []}
     ]
   end

@@ -85,6 +85,7 @@ defmodule Nex.Agent.Evolution.Candidates do
       "trigger" => value_from(proposed, "trigger"),
       "profile" => value_from(proposed, "profile"),
       "budget_mode" => value_from(proposed, "budget_mode"),
+      "created_at" => value_from(proposed, "created_at") || (proposed && proposed.timestamp),
       "proposed_at" => proposed && proposed.timestamp,
       "decided_at" => decided_at(lifecycle),
       "applied_at" => applied_at(lifecycle),

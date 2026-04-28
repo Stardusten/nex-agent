@@ -3,6 +3,7 @@ defmodule Nex.Agent.RuntimeTest do
 
   alias Nex.Agent.{Config, Runtime, Skills}
   alias Nex.Agent.Runtime.Snapshot
+  alias Nex.Agent.Workbench.Store, as: WorkbenchStore
 
   setup do
     workspace =
@@ -47,13 +48,16 @@ defmodule Nex.Agent.RuntimeTest do
     )
 
     previous_workspace = Application.get_env(:nex_agent, :workspace_path)
+    previous_config_path = Application.get_env(:nex_agent, :config_path)
     Application.put_env(:nex_agent, :workspace_path, workspace)
+    Application.put_env(:nex_agent, :config_path, Path.join(workspace, "config.json"))
     Skills.load()
 
     Runtime.reload(workspace: workspace, changed_paths: [])
 
     on_exit(fn ->
       restore_env(:workspace_path, previous_workspace)
+      restore_env(:config_path, previous_config_path)
       File.rm_rf!(workspace)
     end)
 
@@ -88,6 +92,62 @@ defmodule Nex.Agent.RuntimeTest do
     assert Enum.any?(snapshot.hooks.entries, &(Map.get(&1, "id") == "runtime-test"))
     assert snapshot.hooks.diagnostics == []
     assert is_binary(snapshot.hooks.hash)
+
+    assert snapshot.workbench.runtime == %{
+             "enabled" => false,
+             "host" => "127.0.0.1",
+             "port" => 50_051
+           }
+
+    assert snapshot.workbench.apps == []
+    assert snapshot.workbench.diagnostics == []
+    assert is_binary(snapshot.workbench.hash)
+  end
+
+  test "snapshot loads workbench app catalog and diagnostics without failing reload", %{
+    workspace: workspace
+  } do
+    assert {:ok, _} =
+             WorkbenchStore.save(
+               %{
+                 "id" => "stock-dashboard",
+                 "title" => "Stocks",
+                 "entry" => "src/App.tsx",
+                 "permissions" => ["tools:call:stock_quote", "observe:read"]
+               },
+               workspace: workspace
+             )
+
+    invalid_dir = Path.join([workspace, "workbench", "apps", "broken-app"])
+    File.mkdir_p!(invalid_dir)
+    File.write!(Path.join(invalid_dir, "nex.app.json"), "{bad json")
+
+    assert {:ok, %Snapshot{} = snapshot} = Runtime.reload(workspace: workspace)
+
+    assert [
+             %{
+               "id" => "stock-dashboard",
+               "title" => "Stocks",
+               "entry" => "src/App.tsx",
+               "permissions" => ["tools:call:stock_quote", "observe:read"]
+             }
+           ] = snapshot.workbench.apps
+
+    assert [%{"app_id" => "broken-app", "error" => "invalid JSON:" <> _}] =
+             snapshot.workbench.diagnostics
+
+    old_hash = snapshot.workbench.hash
+
+    assert {:ok, _} =
+             WorkbenchStore.save(
+               %{"id" => "stock-dashboard", "title" => "Portfolio", "entry" => "src/App.tsx"},
+               workspace: workspace
+             )
+
+    assert {:ok, %Snapshot{} = updated} = Runtime.reload(workspace: workspace)
+
+    assert [%{"title" => "Portfolio"}] = updated.workbench.apps
+    assert updated.workbench.hash != old_hash
   end
 
   test "snapshot channels are keyed by channel instance id", %{workspace: workspace} do

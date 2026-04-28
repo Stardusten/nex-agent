@@ -112,6 +112,29 @@ defmodule Nex.Agent.InboundWorker do
     )
   end
 
+  @spec stop_session(String.t(), String.t(), term(), keyword()) ::
+          {:ok,
+           %{
+             cancelled?: boolean(),
+             run_id: String.t() | nil,
+             count: non_neg_integer(),
+             dropped_queued: non_neg_integer()
+           }}
+  def stop_session(workspace, session_key, reason \\ :user_stop, opts \\ []) do
+    GenServer.call(
+      Keyword.get(opts, :server, __MODULE__),
+      {:stop_session, Path.expand(workspace), session_key, reason, opts}
+    )
+  end
+
+  @spec invalidate_agent_session(String.t(), String.t(), keyword()) :: :ok
+  def invalidate_agent_session(workspace, session_key, opts \\ []) do
+    GenServer.call(
+      Keyword.get(opts, :server, __MODULE__),
+      {:invalidate_agent_session, Path.expand(workspace), session_key}
+    )
+  end
+
   @impl true
   def init(opts) do
     state = %__MODULE__{
@@ -159,6 +182,37 @@ defmodule Nex.Agent.InboundWorker do
       )
 
     {:reply, reply, state}
+  end
+
+  def handle_call({:stop_session, workspace, session_key, reason, opts}, _from, state) do
+    workspace = Keyword.get(opts, :workspace, workspace)
+    key = runtime_key(workspace, session_key)
+
+    {{:ok, result}, state} =
+      request_interrupt_impl(
+        state,
+        key,
+        session_key,
+        workspace,
+        reason,
+        Keyword.get(opts, :requester_pid)
+      )
+
+    dropped = queued_count(state, key)
+    state = %{state | pending_queue: Map.delete(state.pending_queue, key)}
+    state = update_queue_count(state, key, 0)
+
+    if dropped > 0 do
+      {channel, chat_id} = parse_session_key(session_key)
+      observe_queue_changed(workspace, session_key, channel, chat_id, "drop", 0, dropped)
+    end
+
+    {:reply, {:ok, Map.put(result, :dropped_queued, dropped)}, state}
+  end
+
+  def handle_call({:invalidate_agent_session, workspace, session_key}, _from, state) do
+    key = runtime_key(workspace, session_key)
+    {:reply, :ok, %{state | agents: Map.delete(state.agents, key)}}
   end
 
   @impl true

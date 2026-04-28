@@ -77,10 +77,52 @@ defmodule Nex.Agent.Config do
 
   @spec save(t(), keyword()) :: :ok | {:error, term()}
   def save(%__MODULE__{} = config, opts \\ []) when is_list(opts) do
-    path = config_path(opts)
-    File.mkdir_p!(Path.dirname(path))
+    save_map(to_map(config), opts)
+  end
 
-    data = %{
+  @spec read_map(keyword()) :: {:ok, map()} | {:error, term()}
+  def read_map(opts \\ []) when is_list(opts) do
+    path = config_path(opts)
+
+    if File.exists?(path) do
+      with {:ok, body} <- File.read(path),
+           {:ok, %{} = data} <- Jason.decode(body) do
+        {:ok, data}
+      else
+        {:ok, _other} ->
+          {:error, :config_must_be_json_object}
+
+        {:error, %Jason.DecodeError{} = error} ->
+          {:error, {:invalid_json, Exception.message(error)}}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    else
+      {:ok, default_map()}
+    end
+  end
+
+  @spec save_map(map(), keyword()) :: :ok | {:error, term()}
+  def save_map(data, opts \\ []) when is_map(data) and is_list(opts) do
+    path = config_path(opts)
+    tmp_path = "#{path}.tmp-#{System.unique_integer([:positive])}"
+
+    with :ok <- File.mkdir_p(Path.dirname(path)),
+         {:ok, encoded} <- Jason.encode(data, pretty: true),
+         :ok <- File.write(tmp_path, encoded),
+         :ok <- File.rename(tmp_path, path) do
+      :ok
+    else
+      {:error, _reason} = error ->
+        _ = File.rm(tmp_path)
+        error
+    end
+  end
+
+  @spec to_map(t()) :: map()
+  def to_map(%__MODULE__{} = config) do
+    %{
       "max_iterations" => config.max_iterations,
       "workspace" => config.workspace,
       "channel" => config.channel,
@@ -90,8 +132,6 @@ defmodule Nex.Agent.Config do
       "subagents" => config.subagents,
       "tools" => config.tools
     }
-
-    File.write(path, Jason.encode!(data, pretty: true))
   end
 
   @spec default() :: t()
@@ -138,6 +178,9 @@ defmodule Nex.Agent.Config do
       tools: %{}
     }
   end
+
+  @spec default_map() :: map()
+  def default_map, do: default() |> to_map()
 
   @spec from_map(map()) :: t()
   def from_map(data) when is_map(data) do
@@ -284,6 +327,13 @@ defmodule Nex.Agent.Config do
     end
   end
 
+  @spec workbench_runtime(t()) :: map()
+  def workbench_runtime(%__MODULE__{} = config) do
+    (config.gateway || %{})
+    |> Map.get("workbench", default_workbench())
+    |> normalize_workbench()
+  end
+
   @spec get_max_iterations(t()) :: pos_integer()
   def get_max_iterations(%__MODULE__{} = config) do
     case config.max_iterations do
@@ -357,6 +407,13 @@ defmodule Nex.Agent.Config do
 
   def set(%__MODULE__{} = config, :gateway_port, value) when is_integer(value) and value > 0 do
     %{config | gateway: Map.put(config.gateway || %{}, "port", value)}
+  end
+
+  def set(%__MODULE__{} = config, :workbench_port, value) when is_integer(value) and value > 0 do
+    gateway = config.gateway || %{}
+    workbench = gateway |> Map.get("workbench", default_workbench()) |> normalize_workbench()
+
+    %{config | gateway: Map.put(gateway, "workbench", Map.put(workbench, "port", value))}
   end
 
   def set(%__MODULE__{} = config, :max_iterations, value) when is_integer(value) and value > 0 do
@@ -628,9 +685,22 @@ defmodule Nex.Agent.Config do
     gateway
     |> stringify_map_keys()
     |> Map.put_new("port", 18_790)
+    |> Map.update("workbench", default_workbench(), &normalize_workbench/1)
   end
 
   defp normalize_gateway(_gateway), do: default_gateway()
+
+  defp normalize_workbench(%{} = workbench) do
+    workbench = stringify_map_keys(workbench)
+
+    %{
+      "enabled" => Map.get(workbench, "enabled", false) == true,
+      "host" => normalize_workbench_host(Map.get(workbench, "host")),
+      "port" => normalize_port(Map.get(workbench, "port"), 50_051)
+    }
+  end
+
+  defp normalize_workbench(_workbench), do: default_workbench()
 
   defp normalize_provider_root(%{} = provider) do
     providers =
@@ -884,7 +954,30 @@ defmodule Nex.Agent.Config do
 
   defp normalize_optional_string(_value), do: nil
 
-  defp default_gateway, do: %{"port" => 18_790}
+  defp default_gateway, do: %{"port" => 18_790, "workbench" => default_workbench()}
+
+  defp default_workbench do
+    %{"enabled" => false, "host" => "127.0.0.1", "port" => 50_051}
+  end
+
+  defp normalize_workbench_host(value) do
+    case normalize_optional_string(value) do
+      "127.0.0.1" -> "127.0.0.1"
+      _ -> "127.0.0.1"
+    end
+  end
+
+  defp normalize_port(value, _default) when is_integer(value) and value > 0 and value <= 65_535,
+    do: value
+
+  defp normalize_port(value, default) when is_binary(value) do
+    case Integer.parse(String.trim(value)) do
+      {parsed, ""} when parsed > 0 and parsed <= 65_535 -> parsed
+      _ -> default
+    end
+  end
+
+  defp normalize_port(_value, default), do: default
 
   defp default_streaming(%{"type" => "feishu"}), do: true
   defp default_streaming(%{"type" => "discord"}), do: false

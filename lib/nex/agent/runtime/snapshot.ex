@@ -7,6 +7,7 @@ defmodule Nex.Agent.Runtime.Snapshot do
 
   @type t :: %__MODULE__{
           version: pos_integer(),
+          config_path: String.t() | nil,
           config: Config.t(),
           workspace: String.t(),
           channels: %{optional(String.t()) => map()},
@@ -42,10 +43,17 @@ defmodule Nex.Agent.Runtime.Snapshot do
             version: pos_integer(),
             hash: String.t()
           },
+          workbench: %{
+            runtime: map(),
+            apps: [map()],
+            diagnostics: [map()],
+            hash: String.t()
+          },
           changed_paths: [String.t()]
         }
 
   defstruct version: nil,
+            config_path: nil,
             config: nil,
             workspace: nil,
             channels: %{},
@@ -79,6 +87,12 @@ defmodule Nex.Agent.Runtime.Snapshot do
               diagnostics: [],
               path: nil,
               version: 1,
+              hash: ""
+            },
+            workbench: %{
+              runtime: %{},
+              apps: [],
+              diagnostics: [],
               hash: ""
             },
             changed_paths: []

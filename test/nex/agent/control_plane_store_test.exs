@@ -137,6 +137,68 @@ defmodule Nex.Agent.ControlPlaneStoreTest do
     assert [] = Store.query(%{"tag" => "missing"}, workspace: workspace)
   end
 
+  test "query limit returns latest observations in chronological order", %{workspace: workspace} do
+    Enum.each(
+      [
+        {"oldest", "2026-04-24T10:00:00Z"},
+        {"middle", "2026-04-25T10:00:00Z"},
+        {"newer", "2026-04-26T10:00:00Z"},
+        {"latest", "2026-04-26T11:00:00Z"}
+      ],
+      fn {id, timestamp} ->
+        assert {:ok, _} =
+                 Store.append(
+                   %{
+                     "id" => id,
+                     "timestamp" => timestamp,
+                     "tag" => "store.query.test",
+                     "source" => %{"module" => "M", "file" => "f", "line" => 1},
+                     "attrs" => %{"id" => id}
+                   },
+                   workspace: workspace
+                 )
+      end
+    )
+
+    assert ["newer", "latest"] =
+             Store.query(%{"tag" => "store.query.test", "limit" => 2}, workspace: workspace)
+             |> Enum.map(& &1["id"])
+  end
+
+  test "query since keeps boundary semantics across observation files", %{workspace: workspace} do
+    Enum.each(
+      [
+        {"before", "2026-04-24T23:59:59Z"},
+        {"boundary", "2026-04-25T00:00:00Z"},
+        {"after", "2026-04-26T00:00:00Z"}
+      ],
+      fn {id, timestamp} ->
+        assert {:ok, _} =
+                 Store.append(
+                   %{
+                     "id" => id,
+                     "timestamp" => timestamp,
+                     "tag" => "store.query.since",
+                     "source" => %{"module" => "M", "file" => "f", "line" => 1},
+                     "attrs" => %{"id" => id}
+                   },
+                   workspace: workspace
+                 )
+      end
+    )
+
+    assert ["boundary", "after"] =
+             Store.query(
+               %{
+                 "tag" => "store.query.since",
+                 "since" => "2026-04-25T00:00:00Z",
+                 "limit" => 10
+               },
+               workspace: workspace
+             )
+             |> Enum.map(& &1["id"])
+  end
+
   test "query derives run trace summaries and details from observations", %{workspace: workspace} do
     {:ok, _} =
       Store.append(

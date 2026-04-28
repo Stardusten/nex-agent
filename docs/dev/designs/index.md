@@ -19,3 +19,5 @@ Do not use this directory for:
 When a design settles, promote the stable decision into `docs/dev/findings/`. When it becomes implementation work, create or update a concise `docs/dev/task-plan/` file that contains only execution stages, frozen contracts, acceptance checks, and validation commands.
 
 - [2026-04-25 Advisor Mode Design Notes](./2026-04-25-advisor-mode-design-notes.md)
+- [2026-04-28 Workbench App Authoring Guide](./2026-04-28-workbench-app-authoring-guide.md)
+- [2026-04-28 Workbench App Runtime Design](./2026-04-28-workbench-app-runtime.md)

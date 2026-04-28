@@ -11,6 +11,8 @@ defmodule Nex.Agent.Runtime do
   alias Nex.Agent.Runtime.Snapshot
   alias Nex.Agent.Subagent.Profiles, as: SubagentProfiles
   alias Nex.Agent.Tool.Registry, as: ToolRegistry
+  alias Nex.Agent.Workbench.AppManifest
+  alias Nex.Agent.Workbench.Store, as: WorkbenchStore
 
   defstruct [
     :snapshot,
@@ -206,9 +208,12 @@ defmodule Nex.Agent.Runtime do
         hash: hash(always_instructions)
       }
 
+      workbench_data = workbench_data(config, workspace)
+
       {:ok,
        %Snapshot{
          version: version,
+         config_path: Config.config_path(opts),
          config: config,
          workspace: workspace,
          channels: Config.channels_runtime(config),
@@ -218,6 +223,7 @@ defmodule Nex.Agent.Runtime do
          subagents: subagents_data,
          skills: skills_data,
          hooks: hooks_data,
+         workbench: workbench_data,
          changed_paths: changed_paths(opts)
        }}
     end
@@ -294,6 +300,21 @@ defmodule Nex.Agent.Runtime do
 
   defp command_builder(opts),
     do: Keyword.get(opts, :command_builder, &CommandCatalog.runtime_definitions/0)
+
+  defp workbench_data(config, workspace) do
+    %{"apps" => apps, "diagnostics" => diagnostics} =
+      WorkbenchStore.load_all(workspace: workspace)
+
+    app_maps = Enum.map(apps, &AppManifest.to_map/1)
+    runtime = Config.workbench_runtime(config)
+
+    %{
+      runtime: runtime,
+      apps: app_maps,
+      diagnostics: diagnostics,
+      hash: hash({runtime, app_maps, diagnostics})
+    }
+  end
 
   defp changed_paths(opts) do
     opts

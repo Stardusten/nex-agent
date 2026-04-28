@@ -85,6 +85,49 @@ defmodule Nex.Agent.ObserveToolTest do
     assert incident_id == log["id"]
   end
 
+  test "query accepts tag prefix and runtime dimension filters", %{workspace: workspace} do
+    {:ok, log} =
+      Nex.Agent.ControlPlane.Log.warning(
+        "runner.tool.call.failed",
+        %{"tool_name" => "read"},
+        workspace: workspace,
+        run_id: "run-filtered",
+        session_key: "session-filtered",
+        channel: "feishu",
+        tool_call_id: "tool-call-filtered",
+        trace_id: "trace-filtered"
+      )
+
+    {:ok, _other} =
+      Nex.Agent.ControlPlane.Log.warning(
+        "runner.tool.call.failed",
+        %{"tool_name" => "write"},
+        workspace: workspace,
+        run_id: "run-other",
+        session_key: "session-filtered",
+        channel: "discord",
+        tool_call_id: "tool-call-other",
+        trace_id: "trace-other"
+      )
+
+    assert {:ok, %{"observations" => [%{"id" => id}]}} =
+             Observe.execute(
+               %{
+                 "action" => "query",
+                 "tag_prefix" => "runner.tool.",
+                 "run_id" => "run-filtered",
+                 "session_key" => "session-filtered",
+                 "channel" => "feishu",
+                 "tool" => "read",
+                 "trace_id" => "trace-filtered",
+                 "level" => "warning"
+               },
+               %{"workspace" => workspace}
+             )
+
+    assert id == log["id"]
+  end
+
   test "rejects path arguments", %{workspace: workspace} do
     assert {:error, "observe does not accept file paths"} =
              Observe.execute(%{"action" => "tail", "path" => "/tmp/nope"}, %{

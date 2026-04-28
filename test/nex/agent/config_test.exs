@@ -21,6 +21,12 @@ defmodule Nex.Agent.ConfigTest do
     assert Config.configured_workspace(config) == "/tmp/nex-agent-workspace"
     assert Config.gateway_port(config) == 18_790
 
+    assert Config.workbench_runtime(config) == %{
+             "enabled" => false,
+             "host" => "127.0.0.1",
+             "port" => 50_051
+           }
+
     assert %{
              model_key: "hy3-preview",
              model_id: "hy3-preview",
@@ -207,12 +213,38 @@ defmodule Nex.Agent.ConfigTest do
 
     assert loaded.workspace == "/tmp/nex-agent-workspace"
     assert loaded.gateway["port"] == 18_790
+    assert get_in(loaded.gateway, ["workbench", "port"]) == 50_051
     assert Map.has_key?(loaded.channel, "feishu_kai")
     assert loaded.model["default_model"] == "hy3-preview"
 
     assert get_in(loaded.provider, ["providers", "hy3-tencent", "api_key"]) == %{
              "env" => "HY3_API_KEY"
            }
+  end
+
+  test "workbench runtime is normalized under gateway config" do
+    config =
+      Config.from_map(%{
+        full_config()
+        | "gateway" => %{
+            "port" => 18_790,
+            "workbench" => %{
+              "enabled" => true,
+              "host" => "0.0.0.0",
+              "port" => "50052"
+            }
+          }
+      })
+
+    assert Config.workbench_runtime(config) == %{
+             "enabled" => true,
+             "host" => "127.0.0.1",
+             "port" => 50_052
+           }
+
+    updated = Config.set(config, :workbench_port, 50_053)
+
+    assert Config.workbench_runtime(updated)["port"] == 50_053
   end
 
   test "openai-codex provider resolves access token from codex auth file" do
