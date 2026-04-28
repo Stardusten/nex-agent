@@ -454,7 +454,7 @@ defmodule Nex.Agent.Onboarding do
     - Scheduling and background work: `cron`, `spawn_task`, `task`
     - Knowledge capture: `knowledge_capture`
     - Coding executor orchestration: `executor_dispatch`, `executor_status`
-    - Evolution layers: `soul_update`, `user_update`, `memory_consolidate`, `memory_status`, `memory_rebuild`, `memory_write`, `skill_discover`, `skill_get`, `skill_capture`, `skill_import`, `skill_sync`
+    - Evolution layers: `soul_update`, `user_update`, `memory_consolidate`, `memory_status`, `memory_rebuild`, `memory_write`, `skill_get`, `skill_capture`
     - Tool management: `tool_list`, `tool_create`, `tool_delete`
     - Code evolution: `reflect`, `self_update`
 
@@ -463,7 +463,7 @@ defmodule Nex.Agent.Onboarding do
     - Use `memory_status` for "check memory refresh status" / "检查记忆状态"
     - Use `memory_rebuild` for "full rebuild" / "重建记忆"
 
-    Prefer runtime skill packages for reusable instruction workflows.
+    Prefer Markdown skills for reusable instruction workflows.
     Prefer tools/evolution for code-level capabilities.
     Preferred CODE workflow: `find -> read/reflect -> apply_patch -> self_update deploy`.
     Deploy quick-check policy:
@@ -576,7 +576,7 @@ defmodule Nex.Agent.Onboarding do
       - `memory_status`: check memory refresh status only / 检查记忆状态
       - `memory_rebuild`: full rebuild from session history / 重建记忆
       - `memory_write`: persist durable facts to MEMORY.md
-    - SKILL layer: `skill_discover`, `skill_get`, `skill_capture`, `skill_import`, `skill_sync`
+    - SKILL layer: `skill_get`, `skill_capture`
     - TOOL layer: `tool_list`, `tool_create`, `tool_delete`
     - CODE layer: `reflect`, `self_update`
 
@@ -602,11 +602,10 @@ defmodule Nex.Agent.Onboarding do
     ## Workspace Extension Model
 
     - Workspace tools are Elixir modules under `workspace/tools/<name>/`.
-    - Skills are runtime packages under `workspace/skills/<name>/`.
-    - Use `skill_discover` as the default way to discover skills.
-    - Use `skill_get` to inspect a selected runtime package with progressive disclosure.
-    - Use `skill_capture` to save a reusable local knowledge package.
-    - Use `skill_import` and `skill_sync` for trusted package skills managed by the runtime.
+    - Skills are Markdown directories under `workspace/skills/<name>/`.
+    - Available skill cards are injected into the runtime prompt as `id` + `description`.
+    - Use `skill_get` with the listed skill id to load the full `SKILL.md` body on demand.
+    - Use `skill_capture` to save a reusable local Markdown skill.
     - Use tools for executable capabilities; use skills for reusable guidance.
     - Feishu chat messaging still uses `message`; Lark Docs/Sheets/Base/Calendar/Tasks/Drive/search should go through `bash` + `lark-cli` when available.
     """

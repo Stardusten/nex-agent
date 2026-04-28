@@ -33,11 +33,8 @@ defmodule Nex.Agent.Tool.Registry do
     Nex.Agent.Tool.MemoryWrite,
     Nex.Agent.Tool.Hook,
     Nex.Agent.Tool.UserUpdate,
-    Nex.Agent.Tool.SkillDiscover,
     Nex.Agent.Tool.SkillGet,
     Nex.Agent.Tool.SkillCapture,
-    Nex.Agent.Tool.SkillImport,
-    Nex.Agent.Tool.SkillSync,
     Nex.Agent.Tool.ToolCreate,
     Nex.Agent.Tool.ToolList,
     Nex.Agent.Tool.ToolDelete,
@@ -49,8 +46,6 @@ defmodule Nex.Agent.Tool.Registry do
     Nex.Agent.Tool.Cron
   ]
   @disabled_project_tools [
-    Nex.Agent.Tool.SkillList,
-    Nex.Agent.Tool.SkillRead,
     Nex.Agent.Tool.SkillCreate
   ]
 
@@ -656,7 +651,6 @@ defmodule Nex.Agent.Tool.Registry do
     memory_status
     read
     reflect
-    skill_discover
     skill_get
     web_fetch
     web_search

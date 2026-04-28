@@ -11,7 +11,7 @@ defmodule Nex.Agent.RuntimeTest do
 
     File.mkdir_p!(Path.join(workspace, "memory"))
     File.mkdir_p!(Path.join(workspace, "hooks"))
-    File.mkdir_p!(Path.join(workspace, "skills/always-guide"))
+    File.mkdir_p!(Path.join(workspace, "skills/catalog-guide"))
     File.write!(Path.join(workspace, "AGENTS.md"), "# AGENTS\nRuntime AGENTS layer.\n")
     File.write!(Path.join(workspace, "IDENTITY.md"), "# Identity\nRuntime identity layer.\n")
     File.write!(Path.join(workspace, "SOUL.md"), "# SOUL\nRuntime SOUL layer.\n")
@@ -35,15 +35,15 @@ defmodule Nex.Agent.RuntimeTest do
     )
 
     File.write!(
-      Path.join(workspace, "skills/always-guide/SKILL.md"),
+      Path.join(workspace, "skills/catalog-guide/SKILL.md"),
       """
       ---
-      name: always-guide
-      description: Always loaded test guide.
+      name: catalog-guide
+      description: Runtime catalog test guide.
       always: true
       ---
 
-      Runtime always skill instruction.
+      Runtime skill body should stay on demand.
       """
     )
 
@@ -87,7 +87,14 @@ defmodule Nex.Agent.RuntimeTest do
     assert Map.has_key?(snapshot.subagents.profiles, "general")
     assert Enum.any?(snapshot.subagents.definitions, &(&1["name"] == "code_reviewer"))
     assert is_binary(snapshot.subagents.hash)
-    assert snapshot.skills.always_instructions =~ "Runtime always skill instruction."
+    assert Enum.any?(snapshot.skills.cards, &(&1["id"] == "builtin:workbench-app-authoring"))
+    assert Enum.any?(snapshot.skills.cards, &(&1["id"] == "workspace:catalog-guide"))
+    assert snapshot.skills.catalog_prompt =~ ~s(<skill id="builtin:workbench-app-authoring">)
+    assert snapshot.skills.catalog_prompt =~ ~s(<skill id="workspace:catalog-guide">)
+    assert snapshot.skills.catalog_prompt =~ "<description>"
+    refute snapshot.prompt.system_prompt =~ "Runtime skill body should stay on demand."
+    refute snapshot.skills.catalog_prompt =~ "path="
+    assert snapshot.skills.diagnostics == []
     assert is_binary(snapshot.skills.hash)
     assert Enum.any?(snapshot.hooks.entries, &(Map.get(&1, "id") == "runtime-test"))
     assert snapshot.hooks.diagnostics == []
@@ -189,7 +196,8 @@ defmodule Nex.Agent.RuntimeTest do
                         model_id: "hy3-preview",
                         provider_key: "hy3-tencent",
                         provider_type: "openai-compatible",
-                        provider: :openai,
+                        provider: :openai_compatible,
+                        base_url: "https://hy3.example.com/v1",
                         api_key: "sk-runtime-test"
                       }}
     end
@@ -324,7 +332,8 @@ defmodule Nex.Agent.RuntimeTest do
     assert {:ok, pid} = Runtime.start_link(name: name, workspace: workspace)
 
     snapshot = :sys.get_state(pid).snapshot
-    assert snapshot.skills.always_instructions =~ "Runtime always skill instruction."
+    assert Enum.any?(snapshot.skills.cards, &(&1["id"] == "builtin:workbench-app-authoring"))
+    assert Enum.any?(snapshot.skills.cards, &(&1["id"] == "workspace:catalog-guide"))
     assert Enum.any?(snapshot.tools.definitions_all, &(&1["name"] == "read"))
 
     GenServer.stop(pid)

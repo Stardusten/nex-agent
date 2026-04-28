@@ -48,7 +48,7 @@ defmodule Nex.Agent.ContextBuilder do
 
     {parts, bootstrap_diagnostics} = load_bootstrap_files_with_diagnostics(parts, workspace)
     {parts, memory_diagnostics} = add_memory_with_diagnostics(parts, workspace)
-    parts = add_always_skills(parts, workspace, opts)
+    parts = add_skill_catalog(parts, workspace, opts)
 
     diagnostics = bootstrap_diagnostics ++ memory_diagnostics
 
@@ -119,7 +119,8 @@ defmodule Nex.Agent.ContextBuilder do
     - Evolution proposes candidates first. Owner-approved execution goes through the single `evolution_candidate` lane.
     - Use `evolution_candidate list` / `show` to inspect derived candidate lifecycle.
     - Use `evolution_candidate approve` / `reject` only as the owner run. Non-code candidates reuse existing deterministic write tools; code candidates must still go through `apply_patch` and `self_update deploy`.
-    - Skills are discoverable runtime packages, not preloaded instructions. Use `skill_discover` to search, `skill_get` to inspect a package with progressive disclosure, and `skill_capture` to save a reusable local knowledge package.
+    - Skill cards are listed in this prompt as lightweight availability metadata. When a card matches the task, call `skill_get` with its `id` to load the full skill before following it.
+    - Use `skill_capture` to save a reusable local Markdown skill when a workflow should become durable SKILL-layer knowledge.
     - Use `ask_advisor` when you need an internal second opinion on a plan, a stuck state, or a risky choice. Advisor output is internal guidance for this run and is not automatically user-visible.
 
     Reply directly with text for normal conversations.
@@ -245,11 +246,21 @@ defmodule Nex.Agent.ContextBuilder do
     {parts, diagnostics}
   end
 
-  defp add_always_skills(parts, workspace, opts) do
+  defp add_skill_catalog(parts, workspace, opts) do
     if Keyword.get(opts, :skip_skills, false) do
       parts
     else
-      content = Skills.always_instructions(workspace: workspace)
+      content =
+        case Keyword.get(opts, :skill_catalog_prompt) do
+          content when is_binary(content) ->
+            content
+
+          _ ->
+            Skills.catalog_prompt(
+              workspace: workspace,
+              project_root: Keyword.get(opts, :project_root) || Keyword.get(opts, :cwd)
+            )
+        end
 
       if String.trim(content) == "" do
         parts

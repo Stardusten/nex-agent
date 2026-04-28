@@ -45,7 +45,7 @@ defmodule Nex.Agent.Tool.AskAdvisorTest do
     full_prompt = prompt_text(full_messages)
 
     assert full_opts[:model] == "advisor-model-id"
-    assert full_opts[:provider] == :openai
+    assert full_opts[:provider] == :openai_compatible
     assert full_opts[:api_key] == "sk-advisor"
     assert full_opts[:base_url] == "https://advisor.example.com/v1"
     assert full_opts[:provider_options][:temperature] == 0.2
@@ -150,7 +150,7 @@ defmodule Nex.Agent.Tool.AskAdvisorTest do
         hash: "test"
       },
       subagents: %{profiles: profiles(), definitions: [], hash: "test"},
-      skills: %{always_instructions: "", hash: "test"},
+      skills: %{cards: [], catalog_prompt: "", diagnostics: [], hash: "test"},
       changed_paths: []
     }
 

@@ -8,7 +8,7 @@ defmodule Nex.Agent.Config do
   @default_config_path Path.join(System.get_env("HOME", "~"), ".nex/agent/config.json")
 
   @provider_type_atoms %{
-    "openai-compatible" => :openai,
+    "openai-compatible" => :openai_compatible,
     "openai" => :openai,
     "anthropic" => :anthropic,
     "openai-codex" => :openai_codex,
@@ -385,21 +385,6 @@ defmodule Nex.Agent.Config do
   @spec request_trace(t()) :: map()
   def request_trace(%__MODULE__{}), do: %{"enabled" => false}
 
-  @spec skill_runtime(t()) :: map()
-  def skill_runtime(%__MODULE__{}) do
-    %{
-      "enabled" => false,
-      "trace_dir" => "skill_runtime/runs",
-      "index_dir" => "skill_runtime/index",
-      "cache_dir" => "skill_runtime/cache",
-      "snapshots_dir" => "skill_runtime/snapshots",
-      "max_selected_skills" => 2,
-      "prefilter_limit" => 20,
-      "post_run_analysis" => true,
-      "github_indexes" => []
-    }
-  end
-
   @spec set(t(), atom(), term()) :: t()
   def set(%__MODULE__{} = config, :default_workspace, value) when is_binary(value) do
     %{config | workspace: Path.expand(value)}
@@ -493,6 +478,9 @@ defmodule Nex.Agent.Config do
     do: resolve_secret(Map.get(provider_config, "api_key")) || System.get_env("ANTHROPIC_API_KEY")
 
   defp provider_api_key(:openai, provider_config),
+    do: resolve_secret(Map.get(provider_config, "api_key")) || System.get_env("OPENAI_API_KEY")
+
+  defp provider_api_key(:openai_compatible, provider_config),
     do: resolve_secret(Map.get(provider_config, "api_key")) || System.get_env("OPENAI_API_KEY")
 
   defp provider_api_key(:ollama, _provider_config), do: nil

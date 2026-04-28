@@ -3,9 +3,8 @@ defmodule Nex.Agent.Subagent.Profiles do
   Loads subagent profiles from built-ins, runtime config, and workspace files.
   """
 
-  alias Nex.Agent.{Config, Workspace}
+  alias Nex.Agent.{Config, Skills.Frontmatter, Workspace}
   alias Nex.Agent.Subagent.Profile
-  alias Nex.SkillRuntime.Frontmatter
 
   @agents_dir "subagents"
 

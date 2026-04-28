@@ -46,9 +46,11 @@ defmodule Nex.Agent.Skills.Loader do
   @spec list_all() :: list(map())
   def list_all, do: load_all(filter_unavailable: false)
 
-  defp project_skills_dir(opts) do
+  @spec project_skills_dir(keyword()) :: String.t()
+  def project_skills_dir(opts) do
     opts
-    |> Keyword.get(:project_root, File.cwd!())
+    |> Keyword.get(:project_root)
+    |> Kernel.||(File.cwd!())
     |> Path.expand()
     |> Path.join(".nex/skills")
   end

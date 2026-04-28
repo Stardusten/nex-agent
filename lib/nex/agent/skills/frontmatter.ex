@@ -1,4 +1,4 @@
-defmodule Nex.SkillRuntime.Frontmatter do
+defmodule Nex.Agent.Skills.Frontmatter do
   @moduledoc false
 
   @spec parse_document(String.t()) :: {map(), String.t()}

@@ -28,6 +28,9 @@ defmodule Nex.Agent.LLM.Providers.Ollama do
   @impl true
   def api_key_config(_profile, _options), do: {@placeholder_api_key, true}
 
+  @impl true
+  def provider_options(_profile, options), do: Keyword.get(options, :provider_options, [])
+
   defp normalize_base_url(nil), do: @base_url
 
   defp normalize_base_url(base_url) when is_binary(base_url) do

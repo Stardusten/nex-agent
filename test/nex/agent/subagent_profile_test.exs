@@ -83,7 +83,7 @@ defmodule Nex.Agent.SubagentProfileTest do
 
     assert_receive {:llm_call, messages, opts}, 2_000
 
-    assert opts[:provider] == :openai
+    assert opts[:provider] == :openai_compatible
     assert opts[:model] == "review-model-id"
     assert opts[:api_key] == "sk-review"
     assert opts[:base_url] == "https://review.example.com/v1"
@@ -212,7 +212,7 @@ defmodule Nex.Agent.SubagentProfileTest do
         hash: "test"
       },
       subagents: %{profiles: profiles, definitions: [], hash: "test"},
-      skills: %{always_instructions: "", hash: "test"},
+      skills: %{cards: [], catalog_prompt: "", diagnostics: [], hash: "test"},
       changed_paths: []
     }
   end

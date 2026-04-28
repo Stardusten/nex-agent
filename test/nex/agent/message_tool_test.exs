@@ -58,7 +58,6 @@ defmodule Nex.Agent.MessageToolTest do
                "memory_status",
                "observe",
                "read",
-               "skill_discover",
                "skill_get",
                "tool_list",
                "web_fetch",

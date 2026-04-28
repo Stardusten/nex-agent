@@ -27,6 +27,14 @@ defmodule Nex.Agent.LLM.Providers.OpenRouter do
   def default_base_url, do: @base_url
 
   @impl true
-  def provider_options(_profile, _options),
-    do: [app_referer: @app_referer, app_title: @app_title]
+  def provider_options(_profile, options) do
+    options
+    |> Keyword.get(:provider_options, [])
+    |> put_default_option(:app_referer, @app_referer)
+    |> put_default_option(:app_title, @app_title)
+  end
+
+  defp put_default_option(options, key, value) do
+    if Keyword.has_key?(options, key), do: options, else: options ++ [{key, value}]
+  end
 end

@@ -3,12 +3,12 @@ defmodule Nex.Agent.Tool.SkillGet do
 
   @behaviour Nex.Agent.Tool.Behaviour
 
-  alias Nex.SkillRuntime
+  alias Nex.Agent.Skills
 
   def name, do: "skill_get"
 
   def description,
-    do: "Load a runtime skill package by skill_id or source_id with progressive disclosure."
+    do: "Load a builtin, workspace, or project skill by id with progressive disclosure."
 
   def category, do: :evolution
 
@@ -19,42 +19,35 @@ defmodule Nex.Agent.Tool.SkillGet do
       parameters: %{
         type: "object",
         properties: %{
-          skill_id: %{type: "string", description: "Local runtime skill_id to load"},
-          source_id: %{type: "string", description: "Trusted catalog source_id to load or import"}
-        }
+          id: %{
+            type: "string",
+            description:
+              "Skill id from the Available Skills catalog, for example builtin:workbench-app-authoring"
+          }
+        },
+        required: ["id"]
       }
     }
   end
 
-  def execute(args, ctx) do
-    with :ok <- ensure_runtime_enabled(ctx),
-         {:ok, identifier} <- get_identifier(args),
-         {:ok, payload} <- SkillRuntime.get(identifier, runtime_opts(ctx)) do
+  def execute(%{"id" => id}, ctx) when is_binary(id) do
+    with {:ok, card} <- Skills.resolve_catalog_skill(id, runtime_opts(ctx)),
+         {:ok, payload} <- Skills.read_catalog_skill(card) do
       {:ok, payload}
     end
   end
 
-  defp get_identifier(%{"skill_id" => skill_id}) when is_binary(skill_id) and skill_id != "",
-    do: {:ok, skill_id}
-
-  defp get_identifier(%{"source_id" => source_id}) when is_binary(source_id) and source_id != "",
-    do: {:ok, source_id}
-
-  defp get_identifier(_args), do: {:error, "skill_id or source_id is required"}
-
-  defp ensure_runtime_enabled(ctx) do
-    if SkillRuntime.enabled?(runtime_opts(ctx)) do
-      :ok
-    else
-      {:error, "SkillRuntime is disabled in config"}
-    end
-  end
+  def execute(%{id: id}, ctx) when is_binary(id), do: execute(%{"id" => id}, ctx)
+  def execute(_args, _ctx), do: {:error, "id is required"}
 
   defp runtime_opts(ctx) do
+    snapshot = Map.get(ctx, :runtime_snapshot)
+    catalog_cards = if snapshot, do: get_in(snapshot.skills, [:cards]), else: nil
+
     [
       workspace: Map.get(ctx, :workspace),
       project_root: Map.get(ctx, :cwd, File.cwd!()),
-      skill_runtime: Map.get(ctx, :skill_runtime, %{})
+      catalog_cards: catalog_cards
     ]
   end
 end

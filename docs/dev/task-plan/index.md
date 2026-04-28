@@ -31,3 +31,4 @@ Task plans are execution documents. Keep product/architecture exploration in `..
 - [Phase 17 Memory Refresh Cost And Visibility](./phase17-memory-refresh-cost-and-visibility.md)
 - [Phase 18 Workbench App Runtime](./phase18-workbench-app-runtime.md)
 - [Phase 18B Workbench Static Iframe Apps](./phase18b-workbench-sdk-bridge-and-app-authoring.md)
+- [Phase 18C Skill Progressive Disclosure Catalog](./phase18c-skill-progressive-disclosure-catalog.md)

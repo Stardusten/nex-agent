@@ -262,7 +262,13 @@ defmodule Nex.Agent do
   defp default_model(provider), do: ProviderProfile.default_model(provider)
 
   defp default_api_key(provider)
-       when provider in [:anthropic, :openai, :openai_codex, :openai_codex_custom],
+       when provider in [
+              :anthropic,
+              :openai,
+              :openai_compatible,
+              :openai_codex,
+              :openai_codex_custom
+            ],
        do: ProviderProfile.default_api_key(provider)
 
   defp default_api_key(:ollama), do: nil
@@ -270,6 +276,7 @@ defmodule Nex.Agent do
 
   defp env_var_name(:anthropic), do: "ANTHROPIC_API_KEY"
   defp env_var_name(:openai), do: "OPENAI_API_KEY"
+  defp env_var_name(:openai_compatible), do: "OPENAI_API_KEY"
   defp env_var_name(:openai_codex), do: "OPENAI_CODEX_ACCESS_TOKEN or ~/.codex/auth.json"
   defp env_var_name(:openai_codex_custom), do: "~/.codex/auth.json + ~/.codex/config.toml"
   defp env_var_name(_), do: "API_KEY"

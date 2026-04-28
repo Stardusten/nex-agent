@@ -451,7 +451,7 @@ defmodule Nex.Agent.ContextBuilderTest do
     assert List.last(messages)["content"] =~ "Chat ID: 1"
   end
 
-  test "system prompt keeps skills discoverable but does not preload their content", %{
+  test "system prompt includes compact skill cards but does not preload their content", %{
     workspace: workspace
   } do
     skill_dir = Path.join(workspace, "skills/debug-playbook")
@@ -471,16 +471,21 @@ defmodule Nex.Agent.ContextBuilderTest do
 
     prompt = ContextBuilder.build_system_prompt(workspace: workspace)
 
-    assert prompt =~ "skill_discover"
+    assert prompt =~ "## Available Skills"
+    assert prompt =~ ~s(<skill id="workspace:debug-playbook">)
+    assert prompt =~ "<description>Debug production issues carefully.</description>"
     assert prompt =~ "skill_get"
+    assert prompt =~ "builtin:workbench-app-authoring"
     assert prompt =~ "skill_capture"
     assert prompt =~ "lark-cli"
     assert prompt =~ "not built-in tools anymore"
-    refute prompt =~ "debug-playbook"
+    refute prompt =~ Path.join(skill_dir, "SKILL.md")
+    refute prompt =~ ~s(source="workspace")
+    refute prompt =~ "<name>debug-playbook</name>"
     refute prompt =~ "Never show stack traces to the user."
   end
 
-  test "always skills remain loaded for compatibility while normal skills stay on-demand", %{
+  test "always frontmatter no longer preloads skill bodies", %{
     workspace: workspace
   } do
     always_dir = Path.join(workspace, "skills/always-guide")
@@ -515,9 +520,12 @@ defmodule Nex.Agent.ContextBuilderTest do
 
     prompt = ContextBuilder.build_system_prompt(workspace: workspace)
 
-    assert prompt =~ "Always-On Skill (Compatibility): always-guide"
-    assert prompt =~ "Always verify migrations before rollout."
-    refute prompt =~ "normal-guide"
+    assert prompt =~ ~s(<skill id="workspace:always-guide">)
+    assert prompt =~ ~s(<skill id="workspace:normal-guide">)
+    assert prompt =~ "<description>Keep this instruction loaded.</description>"
+    assert prompt =~ "<description>Read this only when requested.</description>"
+    refute prompt =~ "Always-On Skill"
+    refute prompt =~ "Always verify migrations before rollout."
     refute prompt =~ "This should stay out of the prompt by default."
   end
 

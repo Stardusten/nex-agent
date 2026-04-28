@@ -17,8 +17,7 @@ defmodule Nex.Agent.Skills do
 
   use Agent
 
-  alias Nex.Agent.{Skills.Loader, Workspace}
-  alias Nex.SkillRuntime.{Frontmatter, Package, Registry}
+  alias Nex.Agent.{Skills.Catalog, Skills.Frontmatter, Skills.Loader, Workspace}
 
   @name __MODULE__
   @draft_prefix "[Draft] "
@@ -149,16 +148,30 @@ defmodule Nex.Agent.Skills do
 
   @spec for_llm(keyword()) :: list(map())
   def for_llm(opts \\ []) do
-    list(opts)
-    |> Enum.filter(& &1.user_invocable)
+    opts
+    |> Catalog.cards()
     |> Enum.map(fn skill ->
       %{
-        "name" => skill.name,
-        "description" => skill.description,
-        "path" => skill.path
+        "id" => skill["id"],
+        "description" => skill["description"]
       }
     end)
   end
+
+  @spec catalog(keyword()) :: [map()]
+  def catalog(opts \\ []), do: Catalog.cards(opts)
+
+  @spec runtime_data(keyword()) :: map()
+  def runtime_data(opts \\ []), do: Catalog.runtime_data(opts)
+
+  @spec catalog_prompt(keyword()) :: String.t()
+  def catalog_prompt(opts \\ []), do: Catalog.catalog_prompt(opts)
+
+  @spec resolve_catalog_skill(String.t(), keyword()) :: {:ok, map()} | {:error, String.t()}
+  def resolve_catalog_skill(args, opts \\ []), do: Catalog.resolve(args, opts)
+
+  @spec read_catalog_skill(map()) :: {:ok, map()} | {:error, String.t()}
+  def read_catalog_skill(card), do: Catalog.read(card)
 
   @spec publish_draft(String.t(), keyword()) :: {:ok, map()} | {:error, String.t()}
   def publish_draft(name, opts \\ []) when is_binary(name) do
@@ -184,14 +197,6 @@ defmodule Nex.Agent.Skills do
 
   def strip_draft_prefix(description) when is_binary(description) do
     String.replace_prefix(description, @draft_prefix, "")
-  end
-
-  @spec always_instructions(keyword()) :: String.t()
-  def always_instructions(opts \\ []) do
-    opts
-    |> list()
-    |> Enum.filter(&truthy_skill_field?(&1, :always))
-    |> Enum.map_join("\n\n---\n\n", &format_always_skill/1)
   end
 
   defp execute_markdown_skill(skill, arguments, opts) do
@@ -324,14 +329,7 @@ defmodule Nex.Agent.Skills do
         "SKILL.md"
       ])
 
-    runtime_path =
-      Path.join([
-        skills_dir(opts),
-        "rt__#{Package.slugify(skill_name(skill))}",
-        "SKILL.md"
-      ])
-
-    [local_path, runtime_path, Map.get(skill, :path) || Map.get(skill, "path")]
+    [local_path, Map.get(skill, :path) || Map.get(skill, "path")]
     |> Enum.filter(&is_binary/1)
     |> Enum.uniq()
     |> Enum.filter(&File.exists?/1)
@@ -372,11 +370,8 @@ defmodule Nex.Agent.Skills do
       "name",
       "description",
       "user-invocable",
-      "execution_mode",
       "version",
-      "entry_script",
       "disable-model-invocation",
-      "always",
       "parameters",
       "allowed-tools",
       "references",
@@ -408,7 +403,6 @@ defmodule Nex.Agent.Skills do
 
   defp reload_after_publish(opts) do
     if Keyword.has_key?(opts, :workspace) do
-      Registry.reload(opts)
       :ok
     else
       load()
@@ -429,29 +423,6 @@ defmodule Nex.Agent.Skills do
 
   defp format_file_error(%{message: message}) when is_binary(message), do: message
   defp format_file_error(reason), do: inspect(reason)
-
-  defp truthy_skill_field?(skill, key) do
-    value = Map.get(skill, key) || Map.get(skill, to_string(key))
-    value in [true, "true"]
-  end
-
-  defp format_always_skill(skill) do
-    name = skill_name(skill)
-    description = Map.get(skill, :description) || Map.get(skill, "description") || ""
-    content = Map.get(skill, :content) || Map.get(skill, "content") || ""
-
-    """
-    ## Always-On Skill (Compatibility): #{name}
-
-    This skill is marked `always: true` in the workspace, so it remains loaded for backward compatibility.
-    Prefer on-demand discovery for new skills.
-
-    Description: #{description}
-
-    #{String.trim(content)}
-    """
-    |> String.trim()
-  end
 
   defp validate_skill_name(name) when is_binary(name) do
     trimmed = String.trim(name)

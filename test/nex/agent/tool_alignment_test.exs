@@ -30,14 +30,11 @@ defmodule Nex.Agent.ToolAlignmentTest do
     AskAdvisor,
     EvolutionCandidate,
     Registry,
-    SkillDiscover,
     SkillGet,
     SpawnTask,
     SoulUpdate,
     ToolList
   }
-
-  alias Nex.SkillRuntime
 
   setup do
     workspace =
@@ -146,7 +143,6 @@ defmodule Nex.Agent.ToolAlignmentTest do
 
     names = Enum.map(tools, & &1["name"])
 
-    assert "skill_discover" in names
     assert "skill_get" in names
     assert "skill_capture" in names
     refute "skill_list" in names
@@ -167,7 +163,6 @@ defmodule Nex.Agent.ToolAlignmentTest do
     assert "apply_patch" in names
     assert "executor_dispatch" in names
     assert "executor_status" in names
-    assert "skill_discover" in names
     assert "skill_get" in names
     assert "reflect" in names
     refute "evolution_candidate" in names
@@ -359,7 +354,7 @@ defmodule Nex.Agent.ToolAlignmentTest do
       config: codex_config,
       prompt: %{system_prompt: "", diagnostics: [], hash: "test"},
       commands: %{definitions: [], hash: "test"},
-      skills: %{always_instructions: "", hash: "test"},
+      skills: %{cards: [], catalog_prompt: "", diagnostics: [], hash: "test"},
       changed_paths: [],
       channels: %{},
       tools: %{
@@ -474,63 +469,135 @@ defmodule Nex.Agent.ToolAlignmentTest do
     refute Map.has_key?(persisted_user, "raw_prompt")
   end
 
-  test "runtime skill tools follow the current turn workspace", %{
+  test "skill tools follow the current turn workspace", %{
     workspace: workspace
   } do
     other_workspace =
       Path.join(System.tmp_dir!(), "nex-agent-skill-tool-#{System.unique_integer([:positive])}")
 
-    assert {:ok, _package} =
-             SkillRuntime.capture(
+    assert {:ok, _} =
+             Skills.create(
                %{
-                 "name" => "global-only",
-                 "description" => "Only available in the app workspace.",
-                 "content" => "This package only lives in the app workspace."
+                 name: "global-only",
+                 description: "Only available in the app workspace.",
+                 content: "This skill only lives in the app workspace."
                },
-               workspace: workspace,
-               project_root: workspace,
-               skill_runtime: %{"enabled" => true}
+               workspace: workspace
              )
 
-    assert {:ok, package} =
-             SkillRuntime.capture(
+    assert {:ok, _} =
+             Skills.create(
                %{
-                 "name" => "ops.v2",
-                 "description" => "Only available in the turn workspace.",
-                 "content" => "Use the v2 operations checklist."
+                 name: "ops-v2",
+                 description: "Only available in the turn workspace.",
+                 content: "Use the v2 operations checklist."
                },
-               workspace: other_workspace,
-               project_root: other_workspace,
-               skill_runtime: %{"enabled" => true}
+               workspace: other_workspace
              )
 
     on_exit(fn -> File.rm_rf!(other_workspace) end)
 
-    assert {:ok, result} =
-             SkillDiscover.execute(
-               %{"query" => "operations checklist", "scope" => "local"},
-               %{
-                 workspace: other_workspace,
-                 cwd: other_workspace,
-                 skill_runtime: %{"enabled" => true}
-               }
-             )
-
-    hits = result["hits"]
-    assert Enum.any?(hits, &(&1["name"] == "ops.v2"))
-    refute Enum.any?(hits, &(&1["name"] == "global-only"))
+    cards = Skills.catalog(workspace: other_workspace)
+    assert Enum.any?(cards, &(&1["id"] == "workspace:ops-v2"))
+    refute Enum.any?(cards, &(&1["id"] == "workspace:global-only"))
 
     assert {:ok, loaded} =
              SkillGet.execute(
-               %{"skill_id" => package.skill_id},
-               %{
-                 workspace: other_workspace,
-                 cwd: other_workspace,
-                 skill_runtime: %{"enabled" => true}
-               }
+               %{"id" => "workspace:ops-v2"},
+               %{workspace: other_workspace, cwd: other_workspace}
              )
 
-    assert loaded["progressive_disclosure"]["content"] =~ "Use the v2 operations checklist."
+    assert loaded["id"] == "workspace:ops-v2"
+    assert loaded["source"] == "workspace"
+    assert loaded["content"] =~ "Use the v2 operations checklist."
+  end
+
+  test "skill_get reads builtin and workspace skills by id only", %{
+    workspace: workspace
+  } do
+    workspace_skill_dir = Path.join(workspace, "skills/local-workflow")
+    File.mkdir_p!(workspace_skill_dir)
+
+    File.write!(
+      Path.join(workspace_skill_dir, "SKILL.md"),
+      """
+      ---
+      name: local-workflow
+      description: Use for local workflow loading.
+      ---
+
+      Local workflow body.
+      """
+    )
+
+    assert {:ok, builtin} =
+             SkillGet.execute(
+               %{"id" => "builtin:workbench-app-authoring"},
+               %{workspace: workspace, cwd: workspace}
+             )
+
+    assert builtin["content"] =~ "Workbench App Authoring"
+
+    assert {:ok, local} =
+             SkillGet.execute(
+               %{"id" => "workspace:local-workflow"},
+               %{workspace: workspace, cwd: workspace}
+             )
+
+    assert local["content"] =~ "Local workflow body."
+
+    assert {:error, "id is required"} = SkillGet.execute(%{"name" => "local-workflow"}, %{})
+    legacy_alias_args = Map.new([{"skill" <> "_id", "local-workflow"}])
+    assert {:error, "id is required"} = SkillGet.execute(legacy_alias_args, %{})
+  end
+
+  test "skill catalog stays in final runner messages after history trimming", %{
+    workspace: workspace
+  } do
+    skill_dir = Path.join(workspace, "skills/trim-check")
+    File.mkdir_p!(skill_dir)
+
+    File.write!(
+      Path.join(skill_dir, "SKILL.md"),
+      """
+      ---
+      name: trim-check
+      description: Use to verify skill catalog survives history trimming.
+      ---
+
+      Trim check body.
+      """
+    )
+
+    session =
+      Enum.reduce(1..8, Session.new("trim-check"), fn idx, session ->
+        session
+        |> Session.add_message("user", "old user #{idx}")
+        |> Session.add_message("assistant", "old assistant #{idx}")
+      end)
+
+    parent = self()
+
+    llm_client = fn messages, _opts ->
+      send(parent, {:messages, messages})
+      {:ok, %{content: "ok", finish_reason: nil, tool_calls: []}}
+    end
+
+    assert {:ok, "ok", _session} =
+             Runner.run(session, "new request",
+               llm_stream_client: stream_client_from_response(llm_client),
+               workspace: workspace,
+               cwd: workspace,
+               history_limit: 1,
+               skip_consolidation: true
+             )
+
+    assert_receive {:messages, messages}
+
+    system = hd(messages)
+    assert system["role"] == "system"
+    assert system["content"] =~ ~s(<skill id="workspace:trim-check">)
+    assert system["content"] =~ "Use to verify skill catalog survives history trimming."
   end
 
   test "agent prompt passes session key into runner tool context", %{workspace: workspace} do

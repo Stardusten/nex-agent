@@ -111,6 +111,7 @@ Phase 12 now establishes the LLM provider adapter boundary:
 - known provider behavior now lives under `Nex.Agent.LLM.Providers.*` adapters registered by `ProviderRegistry`
 - thin adapters only implement behavior that differs from the default adapter fallback
 - provider 默认模型选择归 adapter/facade 所有，`ReqLLM` 不维护 provider-specific default model 分支
+- `openai` and `openai-compatible` are separate registered adapter routes; `openai-compatible` maps to the OpenAI wire protocol through `:openai_compatible` and owns request-option promotion such as `reasoning_effort`
 - `openai-codex` OAuth is the first concrete forcing function:
   - ChatGPT Codex backend owns a provider-specific Responses payload policy
   - that policy lives under the OpenAI Codex provider adapter namespace
@@ -240,7 +241,14 @@ Phase 18 is now opened for the Workbench App Runtime:
   - `POST /api/workbench/bridge/:app_id/call` is implemented through `Nex.Agent.Workbench.Bridge` with fixed methods `permissions.current`, `observe.summary`, and `observe.query`
   - bridge calls are app-bound by the host shell, require both manifest declaration and owner grant through `Permissions.check/3`, and write started/finished/failed/denied ControlPlane observations
   - app artifact authoring remains `find -> read -> apply_patch -> Reload`; no `workbench_app`/write-file tool, Vite/build/HMR, or domain app schema is part of 18B
-- next step is Phase 18 manual validation: seed a static app in a temporary workspace, enable `gateway.workbench`, and verify iframe reload/SDK bridge under the real loopback server
+- Phase 18C is now implemented as the skill progressive-disclosure correction:
+  - external docs/source review confirms the expected model is steady skill cards plus on-demand `SKILL.md` body loading
+  - runtime snapshot now carries skill `cards`, `catalog_prompt`, `diagnostics`, and `hash`
+  - every runtime prompt build injects the same catalog prompt so steady cards are reintroduced on each LLM request rather than relying on session history
+  - prompt-visible skill cards contain only `id` and trigger-oriented `description`; skill bodies and path/source/name/root metadata stay out of the steady prompt
+  - `skill_get` now resolves builtin/workspace/project skills by `id` only; `name`/`source` activation and the old `skill_id` alias are rejected
+  - builtin `workbench-app-authoring` is available as `builtin:workbench-app-authoring`, loads body on demand, and keeps Workbench app authoring on `find` / `read` / `apply_patch`
+  - old SkillRuntime modules, package tests/fixtures, discovery/import/sync/list/read tools, prepare-run injection, and ephemeral skill tools are deleted
 
 Phase 17 is now implemented as the first memory-system polish step:
 
@@ -301,6 +309,7 @@ Docs/dev workflow is split into four lanes:
 - [Phase 17 Memory Refresh Cost And Visibility](../task-plan/phase17-memory-refresh-cost-and-visibility.md)
 - [Phase 18 Workbench App Runtime](../task-plan/phase18-workbench-app-runtime.md)
 - [Phase 18B Workbench Static Iframe Apps](../task-plan/phase18b-workbench-sdk-bridge-and-app-authoring.md)
+- [Phase 18C Skill Progressive Disclosure Catalog](../task-plan/phase18c-skill-progressive-disclosure-catalog.md)
 - [2026-04-16 IM Inbound Media Architecture](../findings/2026-04-16-im-inbound-media-architecture.md)
 - [2026-04-16 IM Streaming Capabilities And Delivery Contract](../findings/2026-04-16-im-streaming-capabilities.md)
 - [2026-04-16 Streaming Architecture Convergence](../findings/2026-04-16-streaming-architecture-convergence.md)
@@ -311,6 +320,7 @@ Docs/dev workflow is split into four lanes:
 - [2026-04-25 Local Tool Backend Selection](../findings/2026-04-25-local-tool-backend-selection.md)
 - [2026-04-25 Memory System Cost, Visibility, And Triggering](../findings/2026-04-25-memory-system-cost-visibility-and-triggering.md)
 - [2026-04-27 File Access Allowed Roots](../findings/2026-04-27-file-access-allowed-roots.md)
+- [2026-04-28 Skill Progressive Disclosure Catalog](../findings/2026-04-28-skill-progressive-disclosure-catalog.md)
 
 ## Immediate Next Steps
 

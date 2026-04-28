@@ -73,7 +73,7 @@ defmodule Nex.Agent.Runtime do
       tool_definitions_builder:
         Keyword.get(opts, :tool_definitions_builder, &ToolRegistry.definitions/2),
       hooks_builder: Keyword.get(opts, :hooks_builder, &Hooks.load/1),
-      skills_builder: Keyword.get(opts, :skills_builder, &Skills.always_instructions/1)
+      skills_builder: Keyword.get(opts, :skills_builder, &Skills.runtime_data/1)
     }
 
     case build_snapshot(state, opts, 1) do
@@ -143,9 +143,14 @@ defmodule Nex.Agent.Runtime do
          {:ok, workspace} <- resolve_workspace(config, opts),
          {:ok, command_definitions} <- call_builder(command_builder(opts), []),
          subagent_profiles = SubagentProfiles.load(config, workspace: workspace),
+         {:ok, skills_result} <-
+           call_builder(skills_builder(opts, state), [Keyword.put(opts, :workspace, workspace)]),
+         skills_data = normalize_skills_data(skills_result),
          {:ok, prompt, diagnostics} <-
            call_prompt_builder(prompt_builder(opts, state), [
-             Keyword.put(opts, :workspace, workspace)
+             opts
+             |> Keyword.put(:workspace, workspace)
+             |> Keyword.put(:skill_catalog_prompt, skills_data.catalog_prompt)
            ]),
          {:ok, definitions_all} <-
            call_tool_definitions_builder(
@@ -171,8 +176,6 @@ defmodule Nex.Agent.Runtime do
              :cron,
              tool_definition_opts(config, workspace, :cron, subagent_profiles)
            ),
-         {:ok, always_instructions} <-
-           call_builder(skills_builder(opts, state), [Keyword.put(opts, :workspace, workspace)]),
          {:ok, hooks_data} <-
            call_builder(hooks_builder(opts, state), [Keyword.put(opts, :workspace, workspace)]) do
       prompt_data = %{
@@ -201,11 +204,6 @@ defmodule Nex.Agent.Runtime do
         profiles: subagent_profiles,
         definitions: subagent_definitions,
         hash: hash(subagent_profiles)
-      }
-
-      skills_data = %{
-        always_instructions: always_instructions,
-        hash: hash(always_instructions)
       }
 
       workbench_data = workbench_data(config, workspace)
@@ -300,6 +298,30 @@ defmodule Nex.Agent.Runtime do
 
   defp command_builder(opts),
     do: Keyword.get(opts, :command_builder, &CommandCatalog.runtime_definitions/0)
+
+  defp normalize_skills_data(%{} = skills) do
+    cards = Map.get(skills, :cards) || Map.get(skills, "cards") || []
+    catalog_prompt = Map.get(skills, :catalog_prompt) || Map.get(skills, "catalog_prompt") || ""
+    diagnostics = Map.get(skills, :diagnostics) || Map.get(skills, "diagnostics") || []
+
+    %{
+      cards: cards,
+      catalog_prompt: catalog_prompt,
+      diagnostics: diagnostics,
+      hash:
+        Map.get(skills, :hash) || Map.get(skills, "hash") ||
+          hash({cards, catalog_prompt, diagnostics})
+    }
+  end
+
+  defp normalize_skills_data(catalog_prompt) when is_binary(catalog_prompt) do
+    %{
+      cards: [],
+      catalog_prompt: catalog_prompt,
+      diagnostics: [],
+      hash: hash(catalog_prompt)
+    }
+  end
 
   defp workbench_data(config, workspace) do
     %{"apps" => apps, "diagnostics" => diagnostics} =

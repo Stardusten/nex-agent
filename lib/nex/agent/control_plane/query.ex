@@ -311,9 +311,6 @@ defmodule Nex.Agent.ControlPlane.Query do
     |> Enum.uniq()
   end
 
-  defp trace_skill_tool_name?(name) when is_binary(name),
-    do: String.starts_with?(name, "skill_run__")
-
   defp trace_skill_tool_name?(_name), do: false
 
   defp count_by(observations, key) do

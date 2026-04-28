@@ -5,6 +5,8 @@ defmodule Nex.Agent.LLM.ProviderRegistry do
 
   @adapters %{
     anthropic: Providers.Anthropic,
+    openai: Providers.OpenAI,
+    openai_compatible: Providers.OpenAICompatible,
     openrouter: Providers.OpenRouter,
     ollama: Providers.Ollama,
     openai_codex: Providers.OpenAICodex,

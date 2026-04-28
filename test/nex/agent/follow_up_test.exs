@@ -61,7 +61,6 @@ defmodule Nex.Agent.FollowUpTest do
       "memory_status",
       "observe",
       "read",
-      "skill_discover",
       "skill_get",
       "interrupt_session",
       "tool_list",

@@ -4,6 +4,49 @@ defmodule Nex.Agent.LLM.ProviderProfileTest do
   alias Nex.Agent.LLM.ProviderProfile
   alias Nex.Agent.LLM.Providers
 
+  test "openai-compatible owns OpenAI wire profile and model request options" do
+    profile = ProviderProfile.for(:openai_compatible, base_url: "https://hy3.example.com/v1/")
+
+    {_messages, options} =
+      ProviderProfile.prepare_messages_and_options(
+        [%{"role" => "user", "content" => "hello"}],
+        profile,
+        provider_options: [
+          temperature: 0.2,
+          max_tokens: 4096,
+          reasoning_effort: "extra high",
+          service_tier: "priority"
+        ]
+      )
+
+    assert profile.provider == :openai_compatible
+    assert profile.resolved_provider == :openai
+    assert profile.base_url == "https://hy3.example.com/v1"
+    assert profile.adapter == Providers.OpenAICompatible
+
+    assert ProviderProfile.model_spec(profile, "hy3-preview") == %{
+             id: "hy3-preview",
+             provider: :openai,
+             base_url: "https://hy3.example.com/v1"
+           }
+
+    assert options[:temperature] == 0.2
+    assert options[:max_tokens] == 4096
+    assert options[:reasoning_effort] == "xhigh"
+    assert options[:service_tier] == "priority"
+
+    assert ProviderProfile.provider_options(profile, options)[:reasoning_effort] == "xhigh"
+  end
+
+  test "openai owns first-party OpenAI adapter route" do
+    profile = ProviderProfile.for(:openai, [])
+
+    assert profile.provider == :openai
+    assert profile.resolved_provider == :openai
+    assert profile.adapter == Providers.OpenAI
+    assert ProviderProfile.model_spec(profile, "gpt-4o") == "openai:gpt-4o"
+  end
+
   test "openai_codex default profile uses ChatGPT Codex OAuth backend" do
     profile = ProviderProfile.for(:openai_codex, [])
 
@@ -150,9 +193,9 @@ defmodule Nex.Agent.LLM.ProviderProfileTest do
     assert function_target(ProviderProfile.stream_text_fun(custom)) == {ReqLLM, :stream_text, 3}
   end
 
-  test "deepseek-compatible openai base URL uses reasoning roundtrip stream wrapper" do
-    deepseek = ProviderProfile.for(:openai, base_url: "https://api.deepseek.com/v1")
-    hy3 = ProviderProfile.for(:openai, base_url: "https://hy3.example.com/v1")
+  test "deepseek-compatible openai-compatible base URL uses reasoning roundtrip stream wrapper" do
+    deepseek = ProviderProfile.for(:openai_compatible, base_url: "https://api.deepseek.com/v1")
+    hy3 = ProviderProfile.for(:openai_compatible, base_url: "https://hy3.example.com/v1")
 
     assert function_target(ProviderProfile.stream_text_fun(deepseek)) ==
              {Nex.Agent.LLM.Providers.DeepSeekChatStream, :stream_text, 3}

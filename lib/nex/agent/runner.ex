@@ -21,7 +21,6 @@ defmodule Nex.Agent.Runner do
   require ControlPlaneLog
   alias Nex.Agent.Runtime.Snapshot
   alias Nex.Agent.Tool.Registry, as: ToolRegistry
-  alias Nex.SkillRuntime
 
   @default_max_iterations 10
   @max_iterations_hard_limit 50
@@ -93,14 +92,10 @@ defmodule Nex.Agent.Runner do
       |> Keyword.put(:cancel_ref, cancel_ref)
       |> maybe_put_opt(:runtime_snapshot, runtime_snapshot)
       |> maybe_put_opt(:runtime_version, runtime_snapshot && runtime_snapshot.version)
-      |> Keyword.put(:skill_runtime, SkillRuntime.config(opts))
       |> Keyword.put_new(:_evolution_signals, default_evolution_signals())
 
     initial_message_count = length(session.messages)
     {session, runtime_system_messages} = prepare_evolution_turn(session, prompt, opts)
-
-    {session, runtime_system_messages, prepared_run} =
-      prepare_skill_runtime_turn(session, prompt, runtime_system_messages, opts)
 
     channel = Keyword.get(opts, :channel, "feishu")
     chat_id = Keyword.get(opts, :chat_id, "default")
@@ -109,7 +104,7 @@ defmodule Nex.Agent.Runner do
     run_started_at = System.monotonic_time(:millisecond)
     emit_runner_lifecycle(:info, "runner.run.started", runner_run_attrs(opts, %{}), opts)
 
-    trace_request_started(prompt, channel, chat_id, prepared_run, runtime_system_messages, opts)
+    trace_request_started(prompt, channel, chat_id, runtime_system_messages, opts)
 
     case build_initial_messages(
            session,
@@ -134,7 +129,6 @@ defmodule Nex.Agent.Runner do
           initial_message_count,
           history_message_count,
           max_iterations,
-          prepared_run,
           runtime_system_messages,
           run_started_at,
           workspace,
@@ -166,7 +160,6 @@ defmodule Nex.Agent.Runner do
          initial_message_count,
          history_message_count,
          max_iterations,
-         prepared_run,
          runtime_system_messages,
          run_started_at,
          workspace,
@@ -182,13 +175,10 @@ defmodule Nex.Agent.Runner do
         "history_message_count" => history_message_count,
         "message_count" => length(messages),
         "message_stats" => message_stats_log(messages),
-        "runtime_system_message_count" => length(runtime_system_messages),
-        "selected_skill_package_count" => length(prepared_run.selected_packages)
+        "runtime_system_message_count" => length(runtime_system_messages)
       },
       opts
     )
-
-    opts = Keyword.put(opts, :skill_runtime_prepared_run, prepared_run)
 
     case run_loop(session, messages, 0, max_iterations, opts) do
       {:ok, result, final_session} ->
@@ -201,16 +191,6 @@ defmodule Nex.Agent.Runner do
           }),
           opts
         )
-
-        final_session =
-          finalize_skill_runtime_run(
-            final_session,
-            initial_message_count,
-            prompt,
-            result,
-            prepared_run,
-            opts
-          )
 
         trace_request_completed("completed", result, opts)
 
@@ -229,17 +209,6 @@ defmodule Nex.Agent.Runner do
           }),
           opts
         )
-
-        final_session =
-          finalize_skill_runtime_run(
-            final_session,
-            initial_message_count,
-            prompt,
-            reason,
-            prepared_run,
-            opts,
-            status: "failed"
-          )
 
         trace_request_completed("failed", reason, opts)
 
@@ -375,104 +344,6 @@ defmodule Nex.Agent.Runner do
   end
 
   defp maybe_record_runtime_evolution_signal(_signals, _prompt, _workspace), do: :ok
-
-  defp prepare_skill_runtime_turn(session, prompt, runtime_system_messages, opts) do
-    if Keyword.get(opts, :skip_skills, false) do
-      {session, runtime_system_messages, %Nex.SkillRuntime.PreparedRun{}}
-    else
-      case SkillRuntime.prepare_run(prompt, opts) do
-        {:ok, prepared_run} ->
-          metadata =
-            Map.put(session.metadata || %{}, "skill_runtime", %{
-              "selected_packages" =>
-                Enum.map(prepared_run.selected_packages, &package_metadata/1),
-              "ephemeral_tools" => Enum.map(prepared_run.ephemeral_tools, &Map.get(&1, "name"))
-            })
-
-          skill_guard = selected_skill_guard(prepared_run.selected_packages)
-
-          warnings =
-            case prepared_run.availability_warnings do
-              [] -> []
-              list -> ["[Skill Runtime] Warnings: " <> Enum.join(list, "; ")]
-            end
-
-          {%{session | metadata: metadata},
-           runtime_system_messages ++ skill_guard ++ prepared_run.prompt_fragments ++ warnings,
-           prepared_run}
-
-        {:error, reason} ->
-          emit_runner_lifecycle(
-            :warning,
-            "runner.skill_runtime.prepare_failed",
-            %{"reason_type" => "error", "error_summary" => to_string(reason)},
-            opts
-          )
-
-          {session, runtime_system_messages, %Nex.SkillRuntime.PreparedRun{}}
-      end
-    end
-  end
-
-  defp package_metadata(package) do
-    %{
-      "skill_id" => package.skill_id,
-      "name" => package.name,
-      "execution_mode" => package.execution_mode,
-      "tool_name" => package.tool_name
-    }
-  end
-
-  defp selected_skill_guard([]), do: []
-
-  defp selected_skill_guard(packages) do
-    names =
-      packages
-      |> Enum.map(& &1.name)
-      |> Enum.join(", ")
-
-    [
-      "[Skill Runtime] Selected skill packages for this turn are authoritative: #{names}. " <>
-        "Follow their workflow exactly. Do not replace a concrete skill-specified command, " <>
-        "renderer, output path, or delivery step with an ad-hoc bash/python/html workaround. " <>
-        "Only use a fallback after you actually attempted the primary path and observed it fail. " <>
-        "If a selected skill says to deliver an image/file/artifact, send that artifact instead " <>
-        "of a descriptive text summary whenever the primary step succeeded."
-    ]
-  end
-
-  defp finalize_skill_runtime_run(
-         session,
-         initial_message_count,
-         prompt,
-         result,
-         prepared_run,
-         opts,
-         extra \\ []
-       ) do
-    if Keyword.get(opts, :skill_runtime, %{})["enabled"] == true do
-      delta_messages = Enum.drop(session.messages, initial_message_count)
-      tool_messages = Enum.filter(delta_messages, &(Map.get(&1, "role") == "tool"))
-
-      trace = %{
-        run_id: Keyword.get(opts, :run_id) || generate_run_id(),
-        prompt: prompt,
-        selected_packages: Enum.map(prepared_run.selected_packages, &package_metadata/1),
-        tool_messages: tool_messages,
-        result: result,
-        status: Keyword.get(extra, :status, "completed"),
-        inserted_at: DateTime.utc_now() |> DateTime.to_iso8601()
-      }
-
-      _ = SkillRuntime.record_run(trace, opts)
-
-      if Keyword.get(opts, :skill_runtime, %{})["post_run_analysis"] == true do
-        _ = SkillRuntime.evolve(trace, opts)
-      end
-    end
-
-    session
-  end
 
   defp run_loop(session, messages, iteration, max_iterations, opts) do
     iter_start = System.monotonic_time(:millisecond)
@@ -1535,7 +1406,6 @@ defmodule Nex.Agent.Runner do
 
   defp registry_definitions_from_registry(filter, opts) do
     ToolRegistry.definitions(filter, tool_registry_resolution_opts(opts, filter))
-    |> append_ephemeral_tools(filter, opts)
     |> normalize_tool_definitions()
   end
 
@@ -1548,22 +1418,10 @@ defmodule Nex.Agent.Runner do
 
     if is_list(runtime_definitions) do
       runtime_definitions
-      |> append_ephemeral_tools(filter, opts)
       |> normalize_tool_definitions()
     else
       []
     end
-  end
-
-  defp append_ephemeral_tools(definitions, :follow_up, _opts), do: definitions
-
-  defp append_ephemeral_tools(definitions, _filter, opts) do
-    runtime_tools =
-      opts
-      |> Keyword.get(:skill_runtime_prepared_run, %Nex.SkillRuntime.PreparedRun{})
-      |> Map.get(:ephemeral_tools, [])
-
-    definitions ++ runtime_tools
   end
 
   defp normalize_tool_definitions(definitions) do
@@ -1859,14 +1717,6 @@ defmodule Nex.Agent.Runner do
       not tool_allowed?(tool_name, ctx) ->
         "Error: tool #{tool_name} is not available for this run"
 
-      String.starts_with?(tool_name, "skill_run__") ->
-        case SkillRuntime.execute_ephemeral_tool(tool_name, args, ctx) do
-          {:ok, result} when is_binary(result) -> result
-          {:ok, result} when is_map(result) -> Jason.encode!(result, pretty: true)
-          {:ok, result} -> render_text(result)
-          {:error, reason} -> "Error: #{reason}"
-        end
-
       true ->
         if Process.whereis(ToolRegistry) do
           case ToolRegistry.execute(tool_name, args, ctx) do
@@ -1948,8 +1798,6 @@ defmodule Nex.Agent.Runner do
       runtime_snapshot: runtime_snapshot,
       project: Keyword.get(opts, :project),
       metadata: Keyword.get(opts, :metadata, %{}),
-      skill_runtime: Keyword.get(opts, :skill_runtime, %{}),
-      skill_runtime_prepared_run: Keyword.get(opts, :skill_runtime_prepared_run),
       llm_stream_client: Keyword.get(opts, :llm_stream_client),
       req_llm_stream_text_fun: Keyword.get(opts, :req_llm_stream_text_fun),
       llm_call_fun: Keyword.get(opts, :llm_call_fun)
@@ -2319,10 +2167,11 @@ defmodule Nex.Agent.Runner do
           String.contains?(err_msg, "not_implemented") ->
         :anthropic_match_error
 
-      provider == :openai and String.contains?(err_msg, "model engine error") ->
+      provider in [:openai, :openai_compatible] and
+          String.contains?(err_msg, "model engine error") ->
         :openai_model_engine_error
 
-      provider == :openai and String.contains?(err_msg, "20057") ->
+      provider in [:openai, :openai_compatible] and String.contains?(err_msg, "20057") ->
         :openai_model_engine_error
 
       true ->
@@ -2559,7 +2408,6 @@ defmodule Nex.Agent.Runner do
          prompt,
          channel,
          chat_id,
-         prepared_run,
          runtime_system_messages,
          opts
        ) do
@@ -2569,7 +2417,6 @@ defmodule Nex.Agent.Runner do
         "prompt" => prompt,
         "channel" => channel,
         "chat_id" => chat_id,
-        "selected_packages" => Enum.map(prepared_run.selected_packages, &package_metadata/1),
         "runtime_system_messages" => runtime_system_messages
       },
       opts
@@ -2646,12 +2493,6 @@ defmodule Nex.Agent.Runner do
       "prompt_summary" => payload |> Map.get("prompt") |> text_summary(),
       "channel" => Map.get(payload, "channel"),
       "chat_id" => Map.get(payload, "chat_id"),
-      "selected_package_count" => length(Map.get(payload, "selected_packages", []) || []),
-      "selected_package_names" =>
-        payload
-        |> Map.get("selected_packages", [])
-        |> Enum.map(&(Map.get(&1, "name") || Map.get(&1, :name)))
-        |> Enum.reject(&is_nil/1),
       "runtime_system_message_count" =>
         length(Map.get(payload, "runtime_system_messages", []) || [])
     }

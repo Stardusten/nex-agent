@@ -432,7 +432,7 @@ defmodule Nex.Agent.RunnerEvolutionTest do
     refute inspect(event) =~ secret
   end
 
-  test "runner records tool results and reuses run_id for skill runtime summaries", %{
+  test "runner records tool results in request trace", %{
     workspace: workspace
   } do
     {:ok, counter} = Agent.start_link(fn -> 0 end)
@@ -464,7 +464,6 @@ defmodule Nex.Agent.RunnerEvolutionTest do
         llm_stream_client: stream_client_from_response(llm_client),
         workspace: workspace,
         request_trace: %{"enabled" => true},
-        skill_runtime: %{"enabled" => true, "post_run_analysis" => false},
         skip_consolidation: true
       )
 
@@ -477,21 +476,9 @@ defmodule Nex.Agent.RunnerEvolutionTest do
         request_trace: %{"enabled" => true}
       )
 
-    run_id = hd(trace_events)["run_id"]
-
     assert Enum.count(trace_events, &(&1["type"] == "llm_request")) == 2
     assert Enum.count(trace_events, &(&1["type"] == "llm_response")) == 2
     assert Enum.count(trace_events, &(&1["type"] == "tool_result")) == 1
-
-    [runtime_summary_path] = Path.wildcard(Path.join(workspace, "skill_runtime/runs/*.jsonl"))
-
-    runtime_events =
-      runtime_summary_path
-      |> File.read!()
-      |> String.split("\n", trim: true)
-      |> Enum.map(&Jason.decode!/1)
-
-    assert Enum.all?(runtime_events, &(&1["run_id"] == run_id))
   end
 
   test "runner triggers async memory consolidation in the normal chat flow", %{
@@ -572,12 +559,9 @@ defmodule Nex.Agent.RunnerEvolutionTest do
          finish_reason: nil,
          tool_calls: [
            %{id: "a", function: %{name: "list_dir", arguments: %{"path" => "."}}},
-           %{id: "b", function: %{name: "read", arguments: %{"path" => "README.md"}}},
-           %{id: "c", function: %{name: "read", arguments: %{"path" => "mix.exs"}}},
-           %{
-             id: "d",
-             function: %{name: "skill_discover", arguments: %{"query" => "project inspection"}}
-           }
+           %{id: "b", function: %{name: "read", arguments: %{"path" => "AGENTS.md"}}},
+           %{id: "c", function: %{name: "read", arguments: %{"path" => "SOUL.md"}}},
+           %{id: "d", function: %{name: "read", arguments: %{"path" => "TOOLS.md"}}}
          ]
        }}
     end
@@ -587,7 +571,6 @@ defmodule Nex.Agent.RunnerEvolutionTest do
         llm_stream_client: stream_client_from_response(llm_client_first),
         workspace: workspace,
         cwd: workspace,
-        skill_runtime: %{"enabled" => true},
         skip_consolidation: true
       )
 
@@ -624,7 +607,6 @@ defmodule Nex.Agent.RunnerEvolutionTest do
         llm_stream_client: stream_client_from_response(llm_client_second),
         workspace: workspace,
         cwd: workspace,
-        skill_runtime: %{"enabled" => true},
         skip_consolidation: true
       )
 

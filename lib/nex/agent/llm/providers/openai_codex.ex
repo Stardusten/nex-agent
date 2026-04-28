@@ -5,7 +5,6 @@ defmodule Nex.Agent.LLM.Providers.OpenAICodex do
 
   alias Nex.Agent.Auth.Codex
   alias Nex.Agent.LLM.ProviderProfile
-  alias Nex.Agent.LLM.Providers.Default
   alias Nex.Agent.LLM.Providers.Helpers
   alias Nex.Agent.LLM.Providers.OpenAICodex.Stream
 
@@ -72,7 +71,10 @@ defmodule Nex.Agent.LLM.Providers.OpenAICodex do
   @impl true
   def api_key_config(%ProviderProfile{auth_mode: :oauth}, _options), do: {nil, false}
 
-  def api_key_config(profile, options), do: Default.api_key_config(profile, options)
+  def api_key_config(_profile, options) do
+    api_key = Keyword.get(options, :api_key)
+    {api_key, Helpers.present?(api_key)}
+  end
 
   @impl true
   def provider_options(%ProviderProfile{auth_mode: :oauth}, options) do
@@ -96,7 +98,7 @@ defmodule Nex.Agent.LLM.Providers.OpenAICodex do
 
   @impl true
   def stream_text_fun(%ProviderProfile{auth_mode: :oauth}), do: &Stream.stream_text/3
-  def stream_text_fun(profile), do: Default.stream_text_fun(profile)
+  def stream_text_fun(_profile), do: &ReqLLM.stream_text/3
 
   defp effective_base_url(nil), do: Codex.default_base_url()
   defp effective_base_url(base_url) when is_binary(base_url), do: Helpers.trim_base_url(base_url)

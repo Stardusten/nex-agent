@@ -33,7 +33,9 @@ defmodule Nex.Agent.Runtime.Snapshot do
             hash: String.t()
           },
           skills: %{
-            always_instructions: String.t(),
+            cards: [map()],
+            catalog_prompt: String.t(),
+            diagnostics: [map()],
             hash: String.t()
           },
           hooks: %{
@@ -79,7 +81,9 @@ defmodule Nex.Agent.Runtime.Snapshot do
               hash: ""
             },
             skills: %{
-              always_instructions: "",
+              cards: [],
+              catalog_prompt: "",
+              diagnostics: [],
               hash: ""
             },
             hooks: %{

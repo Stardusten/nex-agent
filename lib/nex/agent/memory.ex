@@ -8,7 +8,7 @@ defmodule Nex.Agent.Memory do
 
   alias Nex.Agent.{Config, Evolution, Workspace}
   alias Nex.Agent.ControlPlane.Log
-  alias Nex.Agent.LLM.Providers.Default, as: DefaultProvider
+  alias Nex.Agent.LLM.Providers.OpenAICompatible
   require Log
 
   @empty_memory_context "(empty)"
@@ -812,7 +812,11 @@ defmodule Nex.Agent.Memory do
   end
 
   defp tool_choice_for(:openai, base_url, name) do
-    if DefaultProvider.deepseek_base_url?(base_url), do: nil, else: %{type: "tool", name: name}
+    if OpenAICompatible.deepseek_base_url?(base_url), do: nil, else: %{type: "tool", name: name}
+  end
+
+  defp tool_choice_for(:openai_compatible, base_url, name) do
+    if OpenAICompatible.deepseek_base_url?(base_url), do: nil, else: %{type: "tool", name: name}
   end
 
   defp tool_choice_for(_provider, _base_url, name), do: %{type: "tool", name: name}

@@ -23,7 +23,6 @@ defmodule Nex.Agent.Admin do
   alias Nex.Agent.ControlPlane.{Log, Query}
   alias Nex.Agent.Tool.{CustomTools, Registry}
   alias Nex.Agent.Workbench.Store, as: WorkbenchStore
-  alias Nex.SkillRuntime.Store
   require Log
 
   @event_topic :admin_events
@@ -129,14 +128,8 @@ defmodule Nex.Agent.Admin do
     %{
       workspace: workspace,
       local_skills: Skills.list(runtime_opts) |> Enum.map(&normalize_skill_record/1),
-      runtime_packages:
-        Store.load_skill_records(runtime_opts) |> Enum.map(&normalize_package_record/1),
-      runtime_catalog: Store.load_catalog_records(runtime_opts),
-      lineage: Store.load_lineage_records(runtime_opts) |> Enum.take(-50) |> Enum.reverse(),
-      recent_runs: list_runtime_runs(workspace) |> Enum.take(20),
-      tools: tool_inventory(),
-      skill_runtime_config:
-        Config.load(config_path: Keyword.get(opts, :config_path)) |> Config.skill_runtime()
+      catalog: Skills.catalog(runtime_opts),
+      tools: tool_inventory()
     }
   end
 
@@ -452,9 +445,7 @@ defmodule Nex.Agent.Admin do
 
     %{
       local_count: length(Skills.list(runtime_opts)),
-      runtime_package_count: length(Store.load_skill_records(runtime_opts)),
-      lineage_events: length(Store.load_lineage_records(runtime_opts)),
-      recent_runs: length(list_runtime_runs(workspace(opts))),
+      catalog_count: length(Skills.catalog(runtime_opts)),
       builtin_tools: tools.builtin_count,
       custom_tools: tools.custom_count
     }
@@ -538,8 +529,7 @@ defmodule Nex.Agent.Admin do
         key: "SKILL",
         href: "/skills",
         summary: "可复用的方法、流程与谱系",
-        detail:
-          "#{skills.local_count} 本地 skills · #{skills.runtime_package_count} runtime packages"
+        detail: "#{skills.local_count} local skills · #{skills.catalog_count} prompt cards"
       },
       %{
         key: "TOOL",
@@ -623,11 +613,8 @@ defmodule Nex.Agent.Admin do
         "memory_status" -> ["memory"]
         "memory_rebuild" -> ["memory"]
         "memory_write" -> ["memory"]
-        "skill_discover" -> ["skill"]
         "skill_get" -> ["skill"]
         "skill_capture" -> ["skill"]
-        "skill_import" -> ["skill"]
-        "skill_sync" -> ["skill"]
         "tool_create" -> ["tool"]
         "tool_list" -> ["tool"]
         "tool_delete" -> ["tool"]
@@ -708,15 +695,6 @@ defmodule Nex.Agent.Admin do
         next_wakeup_in: nil
       }
     end
-  end
-
-  defp list_runtime_runs(workspace) do
-    workspace
-    |> Path.join("skill_runtime/runs/*.jsonl")
-    |> Path.wildcard()
-    |> Enum.map(&runtime_run_summary/1)
-    |> Enum.reject(&is_nil/1)
-    |> Enum.sort_by(&(&1.inserted_at || ""), :desc)
   end
 
   defp code_modules do
@@ -819,30 +797,6 @@ defmodule Nex.Agent.Admin do
     end
   end
 
-  defp runtime_run_summary(path) do
-    lines = decode_runtime_run_lines(path)
-
-    started = Enum.find(lines, &(&1["type"] == "run_started")) || %{}
-    completed = Enum.find(lines, &(&1["type"] == "run_completed")) || %{}
-    selected = Enum.find(lines, &(&1["type"] == "skills_selected")) || %{}
-
-    if started == %{} and completed == %{} and selected == %{} do
-      nil
-    else
-      %{
-        run_id:
-          started["run_id"] || completed["run_id"] || selected["run_id"] ||
-            Path.basename(path, ".jsonl"),
-        prompt: truncate_text(started["prompt"], 140),
-        inserted_at:
-          started["inserted_at"] || completed["inserted_at"] || selected["inserted_at"],
-        status: completed["status"] || "completed",
-        result: truncate_text(completed["result"], 200),
-        packages: selected["packages"] || []
-      }
-    end
-  end
-
   defp list_request_traces(opts) do
     opts
     |> Query.recent_run_trace_summaries()
@@ -850,39 +804,6 @@ defmodule Nex.Agent.Admin do
 
   defp request_trace_detail(run_id, opts) do
     Query.run_trace_detail(run_id, opts)
-  end
-
-  defp decode_runtime_run_lines(path) do
-    case File.read(path) do
-      {:ok, content} ->
-        content
-        |> String.split("\n", trim: true)
-        |> Enum.with_index(1)
-        |> Enum.reduce([], fn {line, line_number}, acc ->
-          case Jason.decode(line) do
-            {:ok, decoded} when is_map(decoded) ->
-              [decoded | acc]
-
-            {:ok, decoded} ->
-              Logger.debug(
-                "[Admin] Skipping non-map runtime run entry #{path}:#{line_number}: #{inspect(decoded)}"
-              )
-
-              acc
-
-            {:error, reason} ->
-              Logger.debug(
-                "[Admin] Skipping malformed runtime run entry #{path}:#{line_number}: #{inspect(reason)}"
-              )
-
-              acc
-          end
-        end)
-        |> Enum.reverse()
-
-      {:error, _} ->
-        []
-    end
   end
 
   defp workspace(opts) do
@@ -916,39 +837,6 @@ defmodule Nex.Agent.Admin do
     skill
     |> Map.put(:draft, draft)
     |> Map.put(:display_description, Skills.strip_draft_prefix(description))
-  end
-
-  defp normalize_package_record(package) when is_map(package) do
-    manifest_description =
-      get_in(package, ["manifest", "description"]) || get_in(package, [:manifest, :description]) ||
-        ""
-
-    manifest_content =
-      get_in(package, ["manifest", "content"]) || get_in(package, [:manifest, :content]) || ""
-
-    draft =
-      package["draft"] == true or package[:draft] == true or
-        String.starts_with?(to_string(manifest_description), "[Draft] ") or
-        Regex.match?(
-          ~r/\A\s*<!--\s*status:\s*draft\b.*?-->\s*/s,
-          String.trim_leading(to_string(manifest_content))
-        )
-
-    active =
-      case package["active"] do
-        false -> false
-        "false" -> false
-        _ -> not draft
-      end
-
-    package
-    |> Map.put("draft", draft)
-    |> Map.put("active", active)
-    |> Map.update(
-      "manifest",
-      %{"description" => Skills.strip_draft_prefix(manifest_description)},
-      &Map.put(&1, "description", Skills.strip_draft_prefix(manifest_description))
-    )
   end
 
   defp read_json_array(path) do

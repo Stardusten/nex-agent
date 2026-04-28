@@ -229,7 +229,7 @@ defmodule Nex.Agent.ControlPlaneStoreTest do
           "source" => %{"module" => "M", "file" => "f", "line" => 1},
           "context" => %{"run_id" => "run-trace", "tool_call_id" => "tool-1"},
           "attrs" => %{
-            "tool_name" => "skill_run__widget_ops",
+            "tool_name" => "skill_get",
             "args_summary" => "%{\"task\" => \"restore service\"}",
             "result_status" => "ok",
             "iteration" => 1
@@ -256,16 +256,16 @@ defmodule Nex.Agent.ControlPlaneStoreTest do
     assert summary.status == "completed"
     assert summary.tool_count == 1
     assert summary.llm_rounds == 1
-    assert summary.used_tools == ["skill_run__widget_ops"]
+    assert summary.used_tools == ["skill_get"]
 
     assert detail.run_id == "run-trace"
     assert detail.channel == "feishu"
     assert detail.chat_id == "chat-1"
     assert detail.tool_count == 1
     assert detail.llm_rounds == 1
-    assert detail.used_tools == ["skill_run__widget_ops"]
+    assert detail.used_tools == ["skill_get"]
     assert [activity] = detail.tool_activity
-    assert activity.kind == :skill
+    assert activity.kind == :tool
     assert activity.tool_call_id == "tool-1"
     assert [turn] = detail.llm_turns
     assert turn.finish_reason == "stop"

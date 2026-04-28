@@ -32,7 +32,7 @@ defmodule Nex.Agent.ConfigTest do
              model_id: "hy3-preview",
              provider_key: "hy3-tencent",
              provider_type: "openai-compatible",
-             provider: :openai,
+             provider: :openai_compatible,
              api_key: "sk-hy3-test",
              base_url: "https://hy3.example.com/v1"
            } = Config.default_model_runtime(config)

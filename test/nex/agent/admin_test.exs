@@ -121,52 +121,26 @@ defmodule Nex.Agent.AdminTest do
     assert [%{"app_id" => "broken-app"}] = overview_state.workbench.diagnostics
   end
 
-  test "skills_state and overview_state skip malformed runtime run logs", %{workspace: workspace} do
-    runs_dir = Path.join(workspace, "skill_runtime/runs")
-    File.mkdir_p!(runs_dir)
-
-    File.write!(Path.join(runs_dir, "broken.jsonl"), "{bad json}\n")
-
-    mixed_lines = [
-      Jason.encode!(%{
-        "type" => "run_started",
-        "run_id" => "run-123",
-        "prompt" => "select tools",
-        "inserted_at" => "2026-03-30T12:00:00Z"
-      }),
-      "{bad json}",
-      Jason.encode!(%{
-        "type" => "skills_selected",
-        "run_id" => "run-123",
-        "packages" => ["core.weather"],
-        "inserted_at" => "2026-03-30T12:00:01Z"
-      }),
-      Jason.encode!(%{
-        "type" => "run_completed",
-        "run_id" => "run-123",
-        "status" => "ok",
-        "result" => "done",
-        "inserted_at" => "2026-03-30T12:00:02Z"
-      })
-    ]
-
-    File.write!(Path.join(runs_dir, "mixed.jsonl"), Enum.join(mixed_lines, "\n"))
+  test "skills_state and overview_state expose local skill catalog counts", %{
+    workspace: workspace
+  } do
+    assert {:ok, _} =
+             Skills.create(
+               %{
+                 name: "catalog_probe",
+                 description: "Probe catalog state",
+                 content: "Use this probe for admin catalog tests."
+               },
+               workspace: workspace
+             )
 
     skills_state = Admin.skills_state(workspace: workspace)
     overview_state = Admin.overview_state(workspace: workspace)
 
-    assert length(skills_state.recent_runs) == 1
-
-    assert hd(skills_state.recent_runs) == %{
-             run_id: "run-123",
-             prompt: "select tools",
-             inserted_at: "2026-03-30T12:00:00Z",
-             status: "ok",
-             result: "done",
-             packages: ["core.weather"]
-           }
-
-    assert overview_state.skills.recent_runs == 1
+    assert Enum.any?(skills_state.local_skills, &(&1.name == "catalog_probe"))
+    assert Enum.any?(skills_state.catalog, &(&1["id"] == "workspace:catalog_probe"))
+    assert overview_state.skills.local_count >= 1
+    assert overview_state.skills.catalog_count >= 1
   end
 
   test "runtime_state exposes request trace summaries and selected trace detail", %{
@@ -415,7 +389,7 @@ defmodule Nex.Agent.AdminTest do
     assert state.deploy_warning =~ "Only repo CODE-layer modules"
   end
 
-  test "publish_draft_skill republishes local and runtime copies", %{workspace: workspace} do
+  test "publish_draft_skill republishes local skill copy", %{workspace: workspace} do
     assert {:ok, _} =
              Skills.create(
                %{
@@ -427,52 +401,18 @@ defmodule Nex.Agent.AdminTest do
                workspace: workspace
              )
 
-    runtime_dir = Path.join(workspace, "skills/rt__draft_probe")
-    File.mkdir_p!(runtime_dir)
-
-    File.write!(
-      Path.join(runtime_dir, "SKILL.md"),
-      """
-      ---
-      name: "draft_probe"
-      description: "[Draft] Probe stuck states"
-      user-invocable: false
-      execution_mode: knowledge
-      ---
-
-      <!-- status: draft, source: evolution -->
-
-      # Draft Probe
-      """
-    )
-
-    File.write!(
-      Path.join(runtime_dir, "source.json"),
-      Jason.encode!(%{"source_type" => "legacy_local", "active" => true}, pretty: true)
-    )
-
     assert {:ok, published} = Admin.publish_draft_skill("draft_probe", workspace: workspace)
     refute published.draft
     assert published.display_description == "Probe stuck states"
 
     skill_file = Path.join(workspace, "skills/draft_probe/SKILL.md")
-    runtime_file = Path.join(runtime_dir, "SKILL.md")
 
     refute File.read!(skill_file) =~ "[Draft]"
     refute File.read!(skill_file) =~ "status: draft"
     assert File.read!(skill_file) =~ "user-invocable: true"
 
-    refute File.read!(runtime_file) =~ "[Draft]"
-    refute File.read!(runtime_file) =~ "status: draft"
-    assert File.read!(runtime_file) =~ "user-invocable: true"
-
     state = Admin.skills_state(workspace: workspace)
     assert Enum.any?(state.local_skills, &(&1.name == "draft_probe" and &1.draft == false))
-
-    assert Enum.any?(state.runtime_packages, fn package ->
-             package["name"] == "draft_probe" and package["draft"] == false and
-               package["active"] == true
-           end)
   end
 
   defp put_session_timestamps(session, naive_datetime) do

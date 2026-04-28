@@ -68,6 +68,12 @@ defmodule Nex.Agent.LLM.Providers.OpenAICodexCustom do
     |> Keyword.delete(:access_token)
   end
 
+  @impl true
+  def api_key_config(_profile, options) do
+    api_key = Keyword.get(options, :api_key)
+    {api_key, Helpers.present?(api_key)}
+  end
+
   defp effective_base_url(nil), do: default_base_url()
   defp effective_base_url(base_url) when is_binary(base_url), do: Helpers.trim_base_url(base_url)
 

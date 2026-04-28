@@ -8,6 +8,8 @@ defmodule Nex.Agent.LLM.ProviderRegistryTest do
     assert Enum.sort(ProviderRegistry.known_providers()) ==
              Enum.sort([
                :anthropic,
+               :openai,
+               :openai_compatible,
                :openrouter,
                :ollama,
                :openai_codex,
@@ -17,6 +19,8 @@ defmodule Nex.Agent.LLM.ProviderRegistryTest do
 
   test "adapter_for returns registered adapters and falls back for unknown providers" do
     assert ProviderRegistry.adapter_for(:anthropic) == Providers.Anthropic
+    assert ProviderRegistry.adapter_for(:openai) == Providers.OpenAI
+    assert ProviderRegistry.adapter_for(:openai_compatible) == Providers.OpenAICompatible
     assert ProviderRegistry.adapter_for(:openrouter) == Providers.OpenRouter
     assert ProviderRegistry.adapter_for(:ollama) == Providers.Ollama
     assert ProviderRegistry.adapter_for(:openai_codex) == Providers.OpenAICodex

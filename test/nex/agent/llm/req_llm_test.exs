@@ -55,6 +55,99 @@ defmodule Nex.Agent.LLM.ReqLLMTest do
     assert metadata[:finish_reason] == "stop"
   end
 
+  test "openai-compatible model request options reach chat completions request body" do
+    parent = self()
+
+    stream_text_fun = fn model_spec, messages, opts ->
+      {:ok, model} = ReqLLM.model(model_spec)
+      {:ok, context} = ReqLLM.Context.normalize(messages, opts)
+
+      {:ok, request} =
+        ReqLLM.Providers.OpenAI.ChatAPI.attach_stream(model, context, opts, ReqLLM.Finch)
+
+      body = request.body |> IO.iodata_to_binary() |> Jason.decode!()
+
+      send(parent, {:openai_compatible_body, model_spec, opts, body})
+      {:ok, %{stream: [%{type: :content, text: "ok"}], finish_reason: :stop}}
+    end
+
+    assert :ok =
+             AgentReqLLM.stream(
+               [%{"role" => "user", "content" => "hello from compatible chat"}],
+               [
+                 provider: :openai_compatible,
+                 model: "deepseek-r1",
+                 api_key: "compatible-api-key",
+                 base_url: "https://api.deepseek.com/v1/",
+                 provider_options: [
+                   temperature: 0.3,
+                   reasoning_effort: "extra_high"
+                 ],
+                 req_llm_stream_text_fun: stream_text_fun
+               ],
+               fn _event -> :ok end
+             )
+
+    assert_receive {:openai_compatible_body, model_spec, opts, body}
+
+    assert model_spec == %{
+             id: "deepseek-r1",
+             provider: :openai,
+             base_url: "https://api.deepseek.com/v1"
+           }
+
+    assert opts[:temperature] == 0.3
+    assert opts[:provider_options][:reasoning_effort] == "xhigh"
+    assert body["model"] == "deepseek-r1"
+    assert body["temperature"] == 0.3
+    assert body["reasoning_effort"] == "xhigh"
+  end
+
+  test "openai-compatible reasoning effort reaches responses request body" do
+    parent = self()
+
+    stream_text_fun = fn model_spec, messages, opts ->
+      {:ok, model} = ReqLLM.model(model_spec)
+      {:ok, context} = ReqLLM.Context.normalize(messages, opts)
+
+      {:ok, request} =
+        ReqLLM.Providers.OpenAI.ResponsesAPI.attach_stream(model, context, opts, ReqLLM.Finch)
+
+      body = request.body |> IO.iodata_to_binary() |> Jason.decode!()
+
+      send(parent, {:openai_compatible_responses_body, opts, body})
+      {:ok, %{stream: [%{type: :content, text: "ok"}], finish_reason: :stop}}
+    end
+
+    assert :ok =
+             AgentReqLLM.stream(
+               [%{"role" => "user", "content" => "hello from compatible responses"}],
+               [
+                 provider: :openai_compatible,
+                 model: "gpt-5",
+                 api_key: "compatible-api-key",
+                 base_url: "https://gateway.example.com/v1",
+                 provider_options: [
+                   max_tokens: 4096,
+                   reasoning_effort: "extra high",
+                   service_tier: "priority"
+                 ],
+                 req_llm_stream_text_fun: stream_text_fun
+               ],
+               fn _event -> :ok end
+             )
+
+    assert_receive {:openai_compatible_responses_body, opts, body}
+
+    assert opts[:max_tokens] == 4096
+    assert opts[:reasoning_effort] == "xhigh"
+    assert opts[:provider_options][:reasoning_effort] == "xhigh"
+    assert body["model"] == "gpt-5"
+    assert body["max_output_tokens"] == 4096
+    assert body["reasoning"] == %{"effort" => "xhigh"}
+    assert body["service_tier"] == "priority"
+  end
+
   test "openai-codex requests use oauth access token and codex responses endpoint base url" do
     parent = self()
 
