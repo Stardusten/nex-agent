@@ -3,18 +3,16 @@ defmodule Nex.Agent.Workbench.ConfigPanel do
 
   require Nex.Agent.ControlPlane.Log
 
+  alias Nex.Agent.Channel.Catalog, as: ChannelCatalog
   alias Nex.Agent.Config
   alias Nex.Agent.Runtime
   alias Nex.Agent.Runtime.Snapshot
 
   @provider_types ~w(openai-compatible openai anthropic openai-codex openai-codex-custom openrouter ollama)
-  @channel_types ~w(feishu discord)
-  @discord_table_modes ~w(raw ascii embed)
   @context_strategies ~w(server_side server_side_then_recent provider_native provider_native_then_recent native native_compaction)
   @role_keys ~w(default_model cheap_model memory_model advisor_model)
   @provider_reserved_keys ~w(type api_key base_url)
   @model_reserved_keys ~w(provider id context_window context_tokens max_context_tokens context_limit model_context_window auto_compact_token_limit model_auto_compact_token_limit context_strategy)
-  @secret_fields ~w(api_key app_secret token encrypt_key verification_token)
   @secret_placeholder "******"
   @key_regex ~r/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,119}$/
   @env_regex ~r/^[A-Za-z_][A-Za-z0-9_]*$/
@@ -65,19 +63,6 @@ defmodule Nex.Agent.Workbench.ConfigPanel do
       "summary" => "Local Ollama endpoint exposed through its OpenAI-compatible /v1 API.",
       "best_for" => "Local models and offline experiments.",
       "requires" => ["base_url", "no real api_key"]
-    }
-  }
-
-  @channel_type_guides %{
-    "feishu" => %{
-      "label" => "Feishu",
-      "summary" => "Feishu/Lark bot websocket channel.",
-      "requires" => ["app_id", "app_secret or env var", "allow_from for access control"]
-    },
-    "discord" => %{
-      "label" => "Discord",
-      "summary" => "Discord Gateway bot channel.",
-      "requires" => ["bot token or env var", "optional guild_id", "allow_from for access control"]
     }
   }
 
@@ -273,7 +258,7 @@ defmodule Nex.Agent.Workbench.ConfigPanel do
     with {:ok, path} <- writable_config_path(snapshot),
          {:ok, raw} <- Config.read_map(config_path: path),
          {:ok, next_raw} <- fun.(raw),
-         {:ok, next_config} <- validate_runtime_config(next_raw),
+         {:ok, next_config} <- validate_raw_config(next_raw),
          :ok <- Config.save_map(next_raw, config_path: path) do
       case reload_runtime(snapshot, path) do
         {:ok, reload_status} ->
@@ -284,9 +269,6 @@ defmodule Nex.Agent.Workbench.ConfigPanel do
              "config" => config_view(next_raw, %{snapshot | config: next_config}),
              "runtime_reload" => reload_status
            }}
-
-        {:error, reason} ->
-          rollback_config(snapshot, section, target, path, raw, reason)
       end
     else
       {:error, reason} -> {:error, format_error(reason)}
@@ -302,9 +284,9 @@ defmodule Nex.Agent.Workbench.ConfigPanel do
       "max_iterations" => config.max_iterations,
       "provider_types" => @provider_types,
       "provider_type_guides" => @provider_type_guides,
-      "channel_types" => @channel_types,
-      "channel_type_guides" => @channel_type_guides,
-      "discord_table_modes" => @discord_table_modes,
+      "channel_types" => ChannelCatalog.types(),
+      "channel_type_guides" => channel_type_guides(),
+      "discord_table_modes" => channel_option_values("discord", "show_table_as"),
       "context_strategies" => @context_strategies,
       "context_strategy_guides" => @context_strategy_guides,
       "providers" => provider_views(raw),
@@ -356,26 +338,39 @@ defmodule Nex.Agent.Workbench.ConfigPanel do
     |> channel_entries()
     |> Enum.sort_by(fn {key, _entry} -> key end)
     |> Enum.map(fn {key, entry} ->
-      runtime = Config.channel_runtime(config, key)
-      type = Map.get(entry, "type") || Map.get(runtime, "type")
+      runtime =
+        case Config.channel_runtime(config, key) do
+          {:ok, runtime} -> runtime
+          {:error, _diagnostic} -> %{}
+        end
 
-      %{
+      type = Map.get(entry, "type") || Map.get(runtime, "type")
+      contract = channel_contract(type)
+      desired = channel_desired_entry(type, entry)
+      secret_fields = contract_field(contract, "secret_fields")
+      fields = contract_field(contract, "fields")
+
+      base = %{
         "id" => key,
         "type" => type,
         "enabled" => Map.get(entry, "enabled", false) == true,
-        "streaming" => Map.get(runtime, "streaming", false) == true,
+        "streaming" => Map.get(desired, "streaming", false) == true,
         "app_id" => Map.get(entry, "app_id"),
         "guild_id" => Map.get(entry, "guild_id"),
         "allow_from" => list_value(Map.get(entry, "allow_from")),
-        "show_table_as" => Map.get(runtime, "show_table_as"),
-        "app_secret" => secret_view(Map.get(entry, "app_secret")),
-        "token" => secret_view(Map.get(entry, "token")),
+        "show_table_as" => Map.get(desired, "show_table_as"),
         "settings" =>
           Map.drop(
             entry,
-            @secret_fields ++ ~w(type enabled streaming app_id guild_id allow_from show_table_as)
+            secret_fields ++
+              fields ++ ~w(type enabled streaming app_id guild_id allow_from show_table_as)
           )
       }
+
+      secret_views =
+        Map.new(secret_fields, fn field -> {field, secret_view(Map.get(entry, field))} end)
+
+      Map.merge(base, secret_views)
     end)
   end
 
@@ -396,6 +391,9 @@ defmodule Nex.Agent.Workbench.ConfigPanel do
   end
 
   defp channel_entry(type, existing, attrs) do
+    spec = ChannelCatalog.fetch!(type)
+    contract = spec.config_contract()
+
     base =
       if Map.get(existing, "type") == type do
         existing
@@ -403,8 +401,7 @@ defmodule Nex.Agent.Workbench.ConfigPanel do
         %{}
       end
 
-    with {:ok, base} <- maybe_put_secret(base, attrs, "app_secret"),
-         {:ok, base} <- maybe_put_secret(base, attrs, "token") do
+    with {:ok, base} <- maybe_put_secrets(base, attrs, contract_field(contract, "secret_fields")) do
       entry =
         base
         |> Map.put("type", type)
@@ -414,24 +411,28 @@ defmodule Nex.Agent.Workbench.ConfigPanel do
         )
         |> Map.put(
           "streaming",
-          boolean_value(Map.get(attrs, "streaming"), Map.get(base, "streaming", type == "feishu"))
+          boolean_value(
+            Map.get(attrs, "streaming"),
+            Map.get(base, "streaming", get_in(contract, ["defaults", "streaming"]) == true)
+          )
         )
         |> maybe_put_string_value(attrs, "app_id")
         |> maybe_put_string_value(attrs, "guild_id")
         |> maybe_put_allow_from(attrs)
+        |> apply_channel_options(attrs, base, contract)
+        |> prune_channel_fields(contract)
 
-      entry =
-        if type == "discord" do
-          table_mode =
-            Map.get(attrs, "show_table_as") || Map.get(base, "show_table_as") || "ascii"
-
-          Map.put(entry, "show_table_as", normalize_table_mode(table_mode))
-        else
-          Map.drop(entry, ["show_table_as", "guild_id", "token"])
-        end
-
-      require_enabled_channel_contract(entry)
+      require_enabled_channel_contract(entry, contract)
     end
+  end
+
+  defp maybe_put_secrets(entry, attrs, fields) do
+    Enum.reduce_while(fields, {:ok, entry}, fn field, {:ok, acc} ->
+      case maybe_put_secret(acc, attrs, field) do
+        {:ok, next} -> {:cont, {:ok, next}}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
   end
 
   defp maybe_put_secret(entry, attrs, field) do
@@ -542,17 +543,15 @@ defmodule Nex.Agent.Workbench.ConfigPanel do
   defp provider_type(type), do: {:error, "provider type #{inspect(type)} is not supported"}
 
   defp channel_type(nil), do: {:error, "channel type is required"}
-  defp channel_type(type) when type in @channel_types, do: {:ok, type}
-  defp channel_type(type), do: {:error, "channel type #{inspect(type)} is not supported"}
 
-  defp normalize_table_mode(mode) when mode in @discord_table_modes, do: mode
+  defp channel_type(type) do
+    type = normalize_optional_string(type)
 
-  defp normalize_table_mode(mode) when is_binary(mode) do
-    mode = String.downcase(mode)
-    if mode in @discord_table_modes, do: mode, else: "ascii"
+    case ChannelCatalog.fetch(type) do
+      {:ok, spec} -> {:ok, spec.type()}
+      {:error, _reason} -> {:error, "channel type #{inspect(type)} is not supported"}
+    end
   end
-
-  defp normalize_table_mode(_mode), do: "ascii"
 
   defp normalize_key(key, label) when is_binary(key) do
     key = String.trim(key)
@@ -677,46 +676,54 @@ defmodule Nex.Agent.Workbench.ConfigPanel do
   defp writable_config_path(_snapshot),
     do: {:error, "runtime snapshot does not expose a config path"}
 
-  defp validate_runtime_config(raw) do
+  defp validate_raw_config(raw) do
     config = Config.from_map(raw)
 
-    if Config.valid?(config) do
+    if Config.valid?(%{config | channel: %{}}) and raw_channels_valid?(raw) do
       {:ok, config}
     else
-      {:error, "config update would produce an invalid runtime config"}
+      {:error, "config update would produce an invalid raw config"}
     end
   end
 
-  defp require_enabled_channel_contract(%{"enabled" => true, "type" => "feishu"} = entry) do
-    cond do
-      blank?(Map.get(entry, "app_id")) ->
-        {:error, "enabled feishu channel requires app_id"}
+  defp raw_channels_valid?(raw) do
+    raw
+    |> channel_entries()
+    |> Enum.all?(fn {_id, entry} -> raw_channel_valid?(entry) end)
+  end
 
-      not secret_present?(Map.get(entry, "app_secret")) ->
-        {:error, "enabled feishu channel requires app_secret"}
-
-      true ->
-        {:ok, entry}
+  defp raw_channel_valid?(%{} = entry) do
+    with {:ok, spec} <- ChannelCatalog.fetch(Map.get(entry, "type")) do
+      case require_enabled_channel_contract(entry, spec.config_contract()) do
+        {:ok, _entry} -> true
+        {:error, _reason} -> false
+      end
+    else
+      {:error, _reason} -> false
     end
   end
 
-  defp require_enabled_channel_contract(%{"enabled" => true, "type" => "discord"} = entry) do
-    if secret_present?(Map.get(entry, "token")) do
+  defp raw_channel_valid?(_entry), do: false
+
+  defp require_enabled_channel_contract(%{"enabled" => true, "type" => type} = entry, contract) do
+    missing =
+      contract
+      |> contract_field("required_when_enabled")
+      |> Enum.find(&(not raw_present?(Map.get(entry, &1))))
+
+    if is_nil(missing) do
       {:ok, entry}
     else
-      {:error, "enabled discord channel requires token"}
+      {:error, "enabled #{type} channel requires #{missing}"}
     end
   end
 
-  defp require_enabled_channel_contract(entry), do: {:ok, entry}
+  defp require_enabled_channel_contract(entry, _contract), do: {:ok, entry}
 
-  defp secret_present?(%{"env" => env}) when is_binary(env), do: String.trim(env) != ""
-  defp secret_present?(value) when is_binary(value), do: String.trim(value) != ""
-  defp secret_present?(_value), do: false
-
-  defp blank?(nil), do: true
-  defp blank?(value) when is_binary(value), do: String.trim(value) == ""
-  defp blank?(_value), do: false
+  defp raw_present?(%{"env" => env}) when is_binary(env), do: String.trim(env) != ""
+  defp raw_present?(%{env: env}) when is_binary(env), do: String.trim(env) != ""
+  defp raw_present?(value) when is_binary(value), do: String.trim(value) != ""
+  defp raw_present?(_value), do: false
 
   defp log_config_update(snapshot, section, target, reload_status) do
     _ =
@@ -734,22 +741,6 @@ defmodule Nex.Agent.Workbench.ConfigPanel do
     :ok
   end
 
-  defp log_config_update_failed(snapshot, section, target, reason) do
-    _ =
-      Nex.Agent.ControlPlane.Log.error(
-        "workbench.config.update_failed",
-        %{
-          "section" => section,
-          "target" => to_string(target),
-          "error_summary" => bounded(reason)
-        },
-        workspace: snapshot.workspace,
-        context: %{"channel" => "workbench", "session_key" => "workbench:configuration"}
-      )
-
-    :ok
-  end
-
   defp reload_runtime(snapshot, config_path) do
     case Runtime.reload(
            workspace: snapshot.workspace,
@@ -757,41 +748,85 @@ defmodule Nex.Agent.Workbench.ConfigPanel do
            changed_paths: [config_path]
          ) do
       {:ok, reloaded} ->
-        {:ok, %{"status" => "reloaded", "version" => reloaded.version}}
+        {:ok, %{"status" => "reloaded", "applied" => true, "version" => reloaded.version}}
 
       {:error, :runtime_unavailable} ->
-        {:ok, %{"status" => "unavailable", "reason" => "runtime_unavailable"}}
+        {:ok, %{"status" => "failed", "applied" => false, "reason" => "runtime_unavailable"}}
 
       {:error, reason} ->
-        {:error, format_error(reason)}
+        {:ok, %{"status" => "failed", "applied" => false, "reason" => format_error(reason)}}
     end
   end
 
-  defp rollback_config(snapshot, section, target, config_path, previous_raw, reload_reason) do
-    case Config.save_map(previous_raw, config_path: config_path) do
-      :ok ->
-        _ = reload_runtime(snapshot, config_path)
-        reason = "runtime reload failed: #{format_error(reload_reason)}; config rolled back"
-        log_config_update_failed(snapshot, section, target, reason)
-        {:error, reason}
+  defp channel_type_guides do
+    ChannelCatalog.all()
+    |> Map.new(fn spec ->
+      contract = spec.config_contract()
+      ui = Map.get(contract, "ui", %{})
 
-      {:error, rollback_reason} ->
-        reason =
-          "runtime reload failed: #{format_error(reload_reason)}; rollback failed: #{format_error(rollback_reason)}"
+      {spec.type(),
+       %{
+         "label" => Map.get(contract, "label"),
+         "summary" => Map.get(ui, "summary"),
+         "requires" => Map.get(ui, "requires", [])
+       }}
+    end)
+  end
 
-        log_config_update_failed(snapshot, section, target, reason)
-        {:error, reason}
+  defp channel_option_values(type, field) do
+    case channel_contract(type) do
+      %{} = contract -> get_in(contract, ["options", field]) || []
+      nil -> []
     end
   end
 
-  defp bounded(value, limit \\ 500) do
-    value = to_string(value)
-
-    if String.length(value) > limit do
-      String.slice(value, 0, limit) <> "...[truncated]"
+  defp channel_contract(type) do
+    with {:ok, spec} <- ChannelCatalog.fetch(type) do
+      spec.config_contract()
     else
-      value
+      {:error, _reason} -> nil
     end
+  end
+
+  defp channel_desired_entry(type, %{} = entry) do
+    with {:ok, spec} <- ChannelCatalog.fetch(type) do
+      spec.apply_defaults(entry)
+    else
+      {:error, _reason} -> entry
+    end
+  end
+
+  defp contract_field(%{} = contract, field) do
+    case Map.get(contract, field) do
+      values when is_list(values) -> values
+      _ -> []
+    end
+  end
+
+  defp contract_field(_contract, _field), do: []
+
+  defp apply_channel_options(entry, attrs, base, contract) do
+    contract
+    |> Map.get("options", %{})
+    |> Enum.reduce(entry, fn {field, allowed}, acc ->
+      default = get_in(contract, ["defaults", field])
+      value = Map.get(attrs, field, Map.get(base, field, default))
+      Map.put(acc, field, normalize_option_value(value, allowed, default))
+    end)
+  end
+
+  defp normalize_option_value(value, allowed, default) when is_binary(value) do
+    normalized = value |> String.trim() |> String.downcase()
+    if normalized in allowed, do: normalized, else: default
+  end
+
+  defp normalize_option_value(value, allowed, default) do
+    if value in allowed, do: value, else: default
+  end
+
+  defp prune_channel_fields(entry, contract) do
+    fields = MapSet.new(contract_field(contract, "fields"))
+    Map.filter(entry, fn {key, _value} -> MapSet.member?(fields, key) end)
   end
 
   defp stringify_map_keys(map) when is_map(map) do

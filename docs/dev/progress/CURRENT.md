@@ -151,6 +151,15 @@ Config contract cutover is now landed on top of the existing runtime mainline:
 - channel processes are instance-keyed through `Nex.Agent.Channel.Registry`
 - inbound and outbound routing now use channel instance ids, with channel type stored as metadata
 
+Phase 19 is now implemented for channel spec registry and prompt governance:
+
+- `Nex.Agent.Channel.Catalog` is the CODE-layer built-in channel type registry for Feishu and Discord.
+- `Nex.Agent.Channel.Specs.*` own channel defaults, validation diagnostics, runtime projection, gateway module, format prompt, IM profile, renderer discovery, and Workbench config contract metadata.
+- `Config.channel_runtime/2` returns `{:ok, runtime}` or `{:error, diagnostic}`; unknown/invalid channel entries are preserved in `channel_instances`, excluded from `channels_runtime`, and surfaced through `channel_diagnostics/1`.
+- `ContextBuilder` keeps runtime context metadata-only and injects the current channel format prompt as system content for matching channel turns.
+- `Workbench.ConfigPanel` derives channel type lists, guides, options, defaults, secret redaction, and enabled requirements from channel specs.
+- `IMIR.new/1` resolves channel profiles through the catalog and no longer owns direct Feishu/Discord function heads.
+
 Local tool backend selection is now the active contract for tool-backed external capabilities:
 
 - `web_search` and `image_generation` are always model-visible local function tools

@@ -393,6 +393,7 @@ defmodule Nex.Agent.Workbench.ServerTest do
     assert "server_side_then_recent" in config["context_strategies"]
     assert config["provider_type_guides"]["openai-codex"]["requires"] != []
     assert [%{"id" => "feishu_ops", "app_secret" => %{"mode" => "env"}}] = config["channels"]
+    assert config["channels"] |> hd() |> Map.fetch!("streaming") == true
     assert config["channels"] |> hd() |> get_in(["app_secret", "display_value"]) == "******"
     openai_env = Enum.find(config["providers"], &(&1["key"] == "openai-env"))
     assert get_in(openai_env, ["api_key", "display_value"]) == "******"
@@ -409,7 +410,7 @@ defmodule Nex.Agent.Workbench.ServerTest do
                "api_key_value" => "sk-kimi"
              })
 
-    assert reload_status in ["reloaded", "unavailable"]
+    assert reload_status in ["reloaded", "failed"]
     assert Enum.any?(config["providers"], &(&1["key"] == "kimi"))
     assert {:ok, raw} = Config.read_map(config_path: config_path)
     assert get_in(raw, ["provider", "providers", "kimi", "api_key"]) == "sk-kimi"
@@ -456,7 +457,8 @@ defmodule Nex.Agent.Workbench.ServerTest do
     assert Enum.any?(config["channels"], fn channel ->
              channel["id"] == "discord_ops" and channel["token"]["configured"] == true and
                channel["token"]["display_value"] == "******" and
-               channel["allow_from"] == ["123", "456"]
+               channel["allow_from"] == ["123", "456"] and
+               channel["show_table_as"] == "embed"
            end)
 
     assert {400, %{"error" => error}} =
@@ -490,9 +492,22 @@ defmodule Nex.Agent.Workbench.ServerTest do
     assert error =~ "requires app_secret"
     assert {:ok, raw} = Config.read_map(config_path: config_path)
     assert raw == original
+
+    assert {400, %{"error" => error}} =
+             request_json(port, "PUT", "/api/workbench/config/channels/telegram_bad", %{
+               "type" => "telegram",
+               "enabled" => true,
+               "token_mode" => "literal",
+               "token_value" => "telegram-token"
+             })
+
+    assert error =~ "channel type"
+    assert error =~ "not supported"
+    assert {:ok, raw} = Config.read_map(config_path: config_path)
+    assert raw == original
   end
 
-  test "config API rolls back when runtime reload fails", %{workspace: workspace} do
+  test "config API preserves raw-valid saves when runtime reload fails", %{workspace: workspace} do
     config_path = Path.join(workspace, "config.json")
     original = config_panel_config(workspace)
     assert :ok = Config.save_map(original, config_path: config_path)
@@ -519,7 +534,14 @@ defmodule Nex.Agent.Workbench.ServerTest do
       %{state | prompt_builder: fn _opts -> {:error, :forced_reload_failure} end}
     end)
 
-    assert {400, %{"error" => error}} =
+    assert {200,
+            %{
+              "runtime_reload" => %{
+                "status" => "failed",
+                "applied" => false,
+                "reason" => reason
+              }
+            }} =
              request_json(port, "PUT", "/api/workbench/config/providers/kimi", %{
                "type" => "openai-compatible",
                "base_url" => "https://api.moonshot.cn/v1",
@@ -527,10 +549,10 @@ defmodule Nex.Agent.Workbench.ServerTest do
                "api_key_value" => "sk-kimi"
              })
 
-    assert error =~ "runtime reload failed"
-    assert error =~ "config rolled back"
+    assert reason =~ "forced_reload_failure"
     assert {:ok, raw} = Config.read_map(config_path: config_path)
-    assert raw == original
+    refute raw == original
+    assert get_in(raw, ["provider", "providers", "kimi", "api_key"]) == "sk-kimi"
   end
 
   test "serves self evolution energy candidates detail and confirmed actions", %{

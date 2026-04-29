@@ -3,6 +3,7 @@ defmodule Nex.Agent.Config do
   Configuration management for the runtime config contract.
   """
 
+  alias Nex.Agent.Channel.Catalog, as: ChannelCatalog
   alias Nex.Agent.LLM.ProviderProfile
 
   @default_config_path Path.join(System.get_env("HOME", "~"), ".nex/agent/config.json")
@@ -16,7 +17,6 @@ defmodule Nex.Agent.Config do
     "openrouter" => :openrouter,
     "ollama" => :ollama
   }
-  @discord_table_modes ~w(raw ascii embed)
   @workbench_app_id_re ~r/^[a-z][a-z0-9_-]{1,63}$/
 
   defstruct max_iterations: 40,
@@ -51,6 +51,14 @@ defmodule Nex.Agent.Config do
           model: map(),
           subagents: map(),
           tools: map()
+        }
+
+  @type channel_diagnostic :: %{
+          required(:code) => atom(),
+          required(:instance_id) => String.t(),
+          required(:type) => String.t() | nil,
+          optional(:field) => String.t(),
+          required(:message) => String.t()
         }
 
   @spec default_config_path() :: String.t()
@@ -268,23 +276,30 @@ defmodule Nex.Agent.Config do
     Map.get(config.channel || %{}, to_string(instance_id))
   end
 
-  @spec channel_runtime(t(), String.t() | atom()) :: map()
+  @spec channel_runtime(t(), String.t() | atom()) :: {:ok, map()} | {:error, channel_diagnostic()}
   def channel_runtime(%__MODULE__{} = config, instance_id) do
-    case channel_instance(config, instance_id) do
-      %{} = instance ->
-        runtime = %{
-          "type" => Map.get(instance, "type"),
-          "streaming" => Map.get(instance, "streaming", default_streaming(instance)) == true
-        }
+    instance_id = to_string(instance_id)
 
-        if Map.get(instance, "type") == "discord" do
-          Map.put(runtime, "show_table_as", discord_show_table_as(instance))
-        else
-          runtime
-        end
+    with %{} = instance <- channel_instance(config, instance_id),
+         {:ok, spec} <- ChannelCatalog.fetch(Map.get(instance, "type")),
+         normalized = spec.apply_defaults(instance),
+         :ok <- spec.validate_instance(normalized, instance_id: instance_id, mode: :runtime) do
+      {:ok, spec.runtime(normalized)}
+    else
+      nil ->
+        {:error,
+         channel_diagnostic(:unknown_channel_instance, instance_id, nil,
+           message: "channel instance #{instance_id} is not configured"
+         )}
 
-      _ ->
-        %{"type" => nil, "streaming" => false}
+      {:error, {:unknown_channel_type, type}} ->
+        {:error,
+         channel_diagnostic(:unknown_channel_type, instance_id, blank_to_nil(type),
+           message: "channel type #{inspect(blank_to_nil(type))} is not supported"
+         )}
+
+      {:error, diagnostics} when is_list(diagnostics) ->
+        {:error, normalize_channel_diagnostic(List.first(diagnostics), instance_id)}
     end
   end
 
@@ -292,15 +307,27 @@ defmodule Nex.Agent.Config do
   def channels_runtime(%__MODULE__{} = config) do
     config
     |> channel_instances()
-    |> Enum.into(%{}, fn {id, _instance} -> {id, channel_runtime(config, id)} end)
+    |> Enum.reduce(%{}, fn {id, _instance}, acc ->
+      case channel_runtime(config, id) do
+        {:ok, runtime} -> Map.put(acc, id, runtime)
+        {:error, _diagnostic} -> acc
+      end
+    end)
+  end
+
+  @spec channel_diagnostics(t()) :: [channel_diagnostic()]
+  def channel_diagnostics(%__MODULE__{} = config) do
+    config
+    |> channel_instances()
+    |> Enum.flat_map(fn {id, instance} -> channel_instance_diagnostics(id, instance) end)
   end
 
   @spec channel_streaming?(t(), String.t() | atom()) :: boolean()
   def channel_streaming?(%__MODULE__{} = config, instance_id) do
-    config
-    |> channel_runtime(instance_id)
-    |> Map.get("streaming", false)
-    |> Kernel.==(true)
+    case channel_runtime(config, instance_id) do
+      {:ok, runtime} -> Map.get(runtime, "streaming", false) == true
+      {:error, _diagnostic} -> false
+    end
   end
 
   @spec channel_type(t(), String.t() | atom()) :: String.t() | nil
@@ -595,21 +622,8 @@ defmodule Nex.Agent.Config do
   end
 
   defp valid_channels?(%__MODULE__{} = config) do
-    config
-    |> channel_instances()
-    |> Enum.all?(fn {_id, instance} -> valid_channel_instance?(instance) end)
+    channel_diagnostics(config) == []
   end
-
-  defp valid_channel_instance?(%{"enabled" => true, "type" => "feishu"} = instance) do
-    present?(Map.get(instance, "app_id")) and present?(Map.get(instance, "app_secret"))
-  end
-
-  defp valid_channel_instance?(%{"enabled" => true, "type" => "discord"} = instance) do
-    present?(Map.get(instance, "token"))
-  end
-
-  defp valid_channel_instance?(%{"type" => type}) when type in ["feishu", "discord"], do: true
-  defp valid_channel_instance?(_instance), do: false
 
   defp normalize_max_iterations(value) when is_integer(value) and value > 0, do: value
 
@@ -648,33 +662,37 @@ defmodule Nex.Agent.Config do
 
   defp normalize_channel_instance(%{} = instance) do
     instance = stringify_map_keys(instance)
+    type = normalize_optional_string(Map.get(instance, "type"))
 
-    case normalize_optional_string(Map.get(instance, "type")) do
-      type when type in ["feishu", "discord"] ->
-        normalized =
-          instance
-          |> Map.put("type", type)
-          |> Map.put("enabled", Map.get(instance, "enabled", false) == true)
-          |> normalize_channel_secret("token")
-          |> normalize_channel_secret("app_secret")
+    normalized =
+      instance
+      |> Map.put("type", type)
+      |> Map.put("enabled", Map.get(instance, "enabled", false) == true)
+      |> normalize_channel_secrets(type)
 
-        if type == "discord" do
-          Map.put(normalized, "show_table_as", discord_show_table_as(normalized))
-        else
-          normalized
-        end
-
-      _ ->
-        nil
+    case ChannelCatalog.fetch(type) do
+      {:ok, spec} -> spec.apply_defaults(normalized)
+      {:error, _reason} -> normalized
     end
   end
 
   defp normalize_channel_instance(_instance), do: nil
 
-  defp normalize_channel_secret(instance, key) do
-    case Map.get(instance, key) do
-      %{} = secret -> Map.put(instance, key, resolve_secret(secret))
-      _ -> instance
+  defp normalize_channel_secrets(instance, type) do
+    type
+    |> channel_secret_fields()
+    |> Enum.reduce(instance, fn key, acc ->
+      case Map.get(acc, key) do
+        %{} = secret -> Map.put(acc, key, resolve_secret(secret))
+        _ -> acc
+      end
+    end)
+  end
+
+  defp channel_secret_fields(type) do
+    case ChannelCatalog.fetch(type) do
+      {:ok, spec} -> get_in(spec.config_contract(), ["secret_fields"]) || []
+      {:error, _reason} -> []
     end
   end
 
@@ -1011,24 +1029,53 @@ defmodule Nex.Agent.Config do
 
   defp normalize_port(_value, default), do: default
 
-  defp default_streaming(%{"type" => "feishu"}), do: true
-  defp default_streaming(%{"type" => "discord"}), do: false
-  defp default_streaming(_instance), do: false
+  defp channel_instance_diagnostics(instance_id, %{} = instance) do
+    case ChannelCatalog.fetch(Map.get(instance, "type")) do
+      {:ok, spec} ->
+        normalized = spec.apply_defaults(instance)
 
-  defp discord_show_table_as(%{} = instance) do
-    instance
-    |> Map.get("show_table_as")
-    |> normalize_optional_string()
-    |> then(fn
-      nil -> nil
-      mode -> String.downcase(mode)
-    end)
-    |> case do
-      mode when mode in @discord_table_modes -> mode
-      _ -> "ascii"
+        case spec.validate_instance(normalized, instance_id: instance_id, mode: :runtime) do
+          :ok ->
+            []
+
+          {:error, diagnostics} when is_list(diagnostics) ->
+            Enum.map(diagnostics, &normalize_channel_diagnostic(&1, instance_id))
+        end
+
+      {:error, {:unknown_channel_type, type}} ->
+        [
+          channel_diagnostic(:unknown_channel_type, instance_id, blank_to_nil(type),
+            message: "channel type #{inspect(blank_to_nil(type))} is not supported"
+          )
+        ]
     end
   end
 
-  defp present?(value) when is_binary(value), do: String.trim(value) != ""
-  defp present?(_value), do: false
+  defp normalize_channel_diagnostic(%{} = diagnostic, instance_id) do
+    channel_diagnostic(
+      Map.get(diagnostic, :code, :invalid_channel_instance),
+      Map.get(diagnostic, :instance_id) || instance_id,
+      Map.get(diagnostic, :type),
+      field: Map.get(diagnostic, :field),
+      message: Map.get(diagnostic, :message, "channel instance is invalid")
+    )
+  end
+
+  defp channel_diagnostic(code, instance_id, type, opts) do
+    diagnostic = %{
+      code: code,
+      instance_id: to_string(instance_id),
+      type: type,
+      message: Keyword.fetch!(opts, :message)
+    }
+
+    case Keyword.get(opts, :field) do
+      nil -> diagnostic
+      field -> Map.put(diagnostic, :field, field)
+    end
+  end
+
+  defp blank_to_nil(nil), do: nil
+  defp blank_to_nil(""), do: nil
+  defp blank_to_nil(value), do: value
 end

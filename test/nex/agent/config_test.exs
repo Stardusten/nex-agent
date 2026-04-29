@@ -179,7 +179,53 @@ defmodule Nex.Agent.ConfigTest do
 
     assert Config.channel_instance(config, "discord_kai")["show_table_as"] == "embed"
     assert Config.channel_instance(config, "discord_bad")["show_table_as"] == "ascii"
-    assert Config.channel_runtime(config, "discord_kai")["show_table_as"] == "embed"
+    assert {:ok, runtime} = Config.channel_runtime(config, "discord_kai")
+    assert runtime["show_table_as"] == "embed"
+  end
+
+  test "unknown channel types are preserved as invalid config" do
+    config =
+      Config.from_map(%{
+        full_config()
+        | "channel" => %{
+            "telegram_main" => %{"type" => "telegram", "enabled" => true, "token" => "token"}
+          }
+      })
+
+    assert Config.channel_instance(config, "telegram_main")["type"] == "telegram"
+    refute Config.valid?(config)
+
+    assert {:error, diagnostic} = Config.channel_runtime(config, "telegram_main")
+    assert diagnostic.code == :unknown_channel_type
+    assert diagnostic.instance_id == "telegram_main"
+    assert diagnostic.type == "telegram"
+    assert Config.channels_runtime(config) == %{}
+    assert [diagnostic] == Config.channel_diagnostics(config)
+  end
+
+  test "channel diagnostics report missing enabled requirements" do
+    config =
+      Config.from_map(%{
+        full_config()
+        | "channel" => %{
+            "discord_bad" => %{"type" => "discord", "enabled" => true},
+            "feishu_bad" => %{"type" => "feishu", "enabled" => true, "app_id" => "cli"}
+          }
+      })
+
+    refute Config.valid?(config)
+
+    diagnostics = Config.channel_diagnostics(config)
+
+    assert Enum.any?(diagnostics, fn diagnostic ->
+             diagnostic.code == :missing_required_channel_field and
+               diagnostic.instance_id == "discord_bad" and diagnostic.field == "token"
+           end)
+
+    assert Enum.any?(diagnostics, fn diagnostic ->
+             diagnostic.code == :missing_required_channel_field and
+               diagnostic.instance_id == "feishu_bad" and diagnostic.field == "app_secret"
+           end)
   end
 
   test "old top-level provider and model strings are invalid" do

@@ -12,6 +12,8 @@ defmodule Nex.Agent.Gateway do
   use GenServer
   require Logger
 
+  alias Nex.Agent.Channel.Catalog, as: ChannelCatalog
+
   alias Nex.Agent.Runtime
   alias Nex.Agent.Runtime.Snapshot
 
@@ -264,10 +266,7 @@ defmodule Nex.Agent.Gateway do
   defp start_channel_instance(instance_id, config, instance_config) do
     if Process.whereis(Nex.Agent.ChannelSupervisor) do
       case channel_module(instance_config) do
-        nil ->
-          :ok
-
-        module ->
+        {:ok, module} ->
           spec = channel_child_spec(module, instance_id, config, instance_config)
 
           case DynamicSupervisor.start_child(Nex.Agent.ChannelSupervisor, spec) do
@@ -280,6 +279,9 @@ defmodule Nex.Agent.Gateway do
             {:error, reason} ->
               Logger.warning("[Gateway] Failed to start #{instance_id}: #{inspect(reason)}")
           end
+
+        {:error, reason} ->
+          Logger.warning("[Gateway] Skipping #{instance_id}: #{inspect(reason)}")
       end
     end
   end
@@ -308,8 +310,8 @@ defmodule Nex.Agent.Gateway do
     |> Nex.Agent.Config.enabled_channel_instances()
     |> Enum.flat_map(fn {instance_id, instance_config} ->
       case channel_module(instance_config) do
-        nil -> []
-        module -> [channel_child_spec(module, instance_id, config, instance_config)]
+        {:ok, module} -> [channel_child_spec(module, instance_id, config, instance_config)]
+        {:error, _reason} -> []
       end
     end)
   end
@@ -323,9 +325,13 @@ defmodule Nex.Agent.Gateway do
     }
   end
 
-  defp channel_module(%{"type" => "feishu"}), do: Nex.Agent.Channel.Feishu
-  defp channel_module(%{"type" => "discord"}), do: Nex.Agent.Channel.Discord
-  defp channel_module(_instance_config), do: nil
+  defp channel_module(%{"type" => type}) do
+    with {:ok, spec} <- ChannelCatalog.fetch(type) do
+      {:ok, spec.gateway_module()}
+    end
+  end
+
+  defp channel_module(_instance_config), do: {:error, {:unknown_channel_type, nil}}
 
   defp do_send_message(message) do
     snapshot = runtime_snapshot()

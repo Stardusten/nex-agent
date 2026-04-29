@@ -5,6 +5,7 @@ defmodule Nex.Agent.ContextBuilder do
 
   require Logger
 
+  alias Nex.Agent.Channel.Catalog, as: ChannelCatalog
   alias Nex.Agent.{Config, ContextDiagnostics, Skills, Workspace}
   alias Nex.Agent.Media.Projector
 
@@ -133,7 +134,6 @@ defmodule Nex.Agent.ContextBuilder do
     - Wherever `<newmsg/>` appears in assistant text, the runtime treats it as a hard new-message boundary.
     - Use `<newmsg/>` only when you intentionally want the runtime to split or separate user-visible sections.
     - If a structure is not reliably supported by the current channel, prefer simpler markdown-like text instead of inventing unsupported syntax.
-    - For Discord, do not use `####` or deeper headings; only `#`, `##`, and `###` headings render reliably.
 
     ## Feishu Tooling
     - When using the `message` tool for channel=`feishu`, plain `content` is usually enough for assistant replies.
@@ -358,38 +358,18 @@ defmodule Nex.Agent.ContextBuilder do
   defp present?(_value), do: true
 
   defp channel_runtime_lines(channel, %Config{} = config) do
-    channel_runtime = Config.channel_runtime(config, channel)
-    channel_type = Map.get(channel_runtime, "type")
-    streaming? = Map.get(channel_runtime, "streaming", false) == true
-    show_table_as = Map.get(channel_runtime, "show_table_as", "ascii")
+    case Config.channel_runtime(config, channel) do
+      {:ok, channel_runtime} ->
+        channel_type = Map.get(channel_runtime, "type")
+        streaming? = Map.get(channel_runtime, "streaming", false) == true
 
-    base = ["Channel Streaming: #{if streaming?, do: "streaming", else: "single"}"]
+        [
+          "Channel Type: #{channel_type}",
+          "Channel Streaming: #{if streaming?, do: "streaming", else: "single"}"
+        ]
 
-    newmsg_guidance =
-      "`<newmsg/>` splits your reply into separate messages wherever it appears."
-
-    case channel_type do
-      "feishu" ->
-        base ++
-          [
-            "Channel IR: feishu markdown-like text IR",
-            "Feishu IR supports headings, lists, quotes, fenced code blocks, tables, and `<newmsg/>`.",
-            newmsg_guidance
-          ]
-
-      "discord" ->
-        base ++
-          [
-            "Channel IR: Discord markdown",
-            "Discord supports: bold, italic, underline (__text__), strikethrough, headings (#/##/### only), lists, quotes (> and >>>), inline code, fenced code blocks with syntax highlighting, links, spoiler tags (||text||), and `<newmsg/>`.",
-            "Discord format guide: use paragraphs, bullets, short headings, blockquotes, and bold for emphasis; reserve fenced code blocks for code, logs, config, or table-like data.",
-            "Do not use `####` or deeper headings, and do not wrap plain emphasis or short concept contrasts in fenced `text` blocks.",
-            "Discord does NOT support image embeds (![]()), horizontal rules (---), or HTML. Markdown tables render as #{show_table_as} (raw/ascii/embed channel setting).",
-            newmsg_guidance
-          ]
-
-      _ ->
-        base ++ ["Channel IR: markdown-like plain text"]
+      {:error, _diagnostic} ->
+        []
     end
   end
 
@@ -438,6 +418,7 @@ defmodule Nex.Agent.ContextBuilder do
           build_system_prompt(opts)
       end
       |> append_context_hook_fragments(Keyword.get(opts, :context_hook_fragments, []))
+      |> append_channel_format_prompt(channel, opts)
 
     system_content =
       case runtime_system_messages do
@@ -470,6 +451,27 @@ defmodule Nex.Agent.ContextBuilder do
   end
 
   defp append_context_hook_fragments(system_prompt, _fragments), do: system_prompt
+
+  defp append_channel_format_prompt(system_prompt, channel, opts) do
+    case channel_format_prompt(channel, Keyword.get(opts, :config), opts) do
+      "" -> system_prompt
+      prompt -> system_prompt <> "\n\n---\n\n" <> prompt
+    end
+  end
+
+  defp channel_format_prompt(channel, %Config{} = config, opts) when is_binary(channel) do
+    with {:ok, runtime} <- Config.channel_runtime(config, channel),
+         type when is_binary(type) <- Map.get(runtime, "type"),
+         {:ok, spec} <- ChannelCatalog.fetch(type) do
+      spec.format_prompt(runtime, opts)
+      |> to_string()
+      |> String.trim()
+    else
+      _ -> ""
+    end
+  end
+
+  defp channel_format_prompt(_channel, _config, _opts), do: ""
 
   defp render_context_hook_fragment(%{} = fragment) do
     title = Map.get(fragment, "title") || Map.get(fragment, :title) || "Context Hook"

@@ -1571,7 +1571,13 @@ defmodule Nex.Agent.InboundWorkerTest do
 
     worker_config =
       config_with_channels(%{
-        @feishu_instance => %{"type" => "feishu", "enabled" => true, "streaming" => true}
+        @feishu_instance => %{
+          "type" => "feishu",
+          "enabled" => true,
+          "streaming" => true,
+          "app_id" => "cli_test",
+          "app_secret" => "sec_test"
+        }
       })
 
     http_post_fun = fn url, body, headers ->
@@ -1692,7 +1698,13 @@ defmodule Nex.Agent.InboundWorkerTest do
 
     worker_config =
       config_with_channels(%{
-        @feishu_instance => %{"type" => "feishu", "enabled" => true, "streaming" => true}
+        @feishu_instance => %{
+          "type" => "feishu",
+          "enabled" => true,
+          "streaming" => true,
+          "app_id" => "cli_test",
+          "app_secret" => "sec_test"
+        }
       })
 
     http_post_fun = fn url, body, headers ->
@@ -1793,7 +1805,12 @@ defmodule Nex.Agent.InboundWorkerTest do
 
     worker_config =
       config_with_channels(%{
-        @discord_instance => %{"type" => "discord", "enabled" => true, "streaming" => true}
+        @discord_instance => %{
+          "type" => "discord",
+          "enabled" => true,
+          "streaming" => true,
+          "token" => "discord-token"
+        }
       })
 
     channel_config = %{"type" => "discord", "enabled" => false, "token" => "discord-token"}
@@ -1875,7 +1892,12 @@ defmodule Nex.Agent.InboundWorkerTest do
 
     worker_config =
       config_with_channels(%{
-        @discord_instance => %{"type" => "discord", "enabled" => true, "streaming" => true}
+        @discord_instance => %{
+          "type" => "discord",
+          "enabled" => true,
+          "streaming" => true,
+          "token" => "discord-token"
+        }
       })
 
     channel_config = %{"type" => "discord", "enabled" => false, "token" => "discord-token"}
@@ -2107,8 +2129,19 @@ defmodule Nex.Agent.InboundWorkerTest do
 
   defp default_worker_config do
     config_with_channels(%{
-      @feishu_instance => %{"type" => "feishu", "enabled" => true, "streaming" => true},
-      @discord_instance => %{"type" => "discord", "enabled" => true, "streaming" => true}
+      @feishu_instance => %{
+        "type" => "feishu",
+        "enabled" => true,
+        "streaming" => true,
+        "app_id" => "cli_test",
+        "app_secret" => "sec_test"
+      },
+      @discord_instance => %{
+        "type" => "discord",
+        "enabled" => true,
+        "streaming" => true,
+        "token" => "discord-token"
+      }
     })
   end
 

@@ -1150,7 +1150,7 @@ defmodule Nex.Agent.InboundWorker do
   end
 
   defp start_discord_follow_up_typing_timer(config, key, channel, chat_id) do
-    runtime = Config.channel_runtime(config, channel)
+    runtime = config_channel_runtime(config, channel)
 
     if Map.get(runtime, "type") == "discord" and Nex.Agent.Channel.Registry.whereis(channel) do
       Discord.trigger_typing(channel, chat_id)
@@ -1287,21 +1287,29 @@ defmodule Nex.Agent.InboundWorker do
 
   defp channel_runtime(envelope, channel, config) do
     workspace = payload_workspace(envelope)
+    fallback = config_channel_runtime(config, channel)
 
     case runtime_snapshot_for_workspace(workspace) do
       %Snapshot{workspace: snapshot_workspace, channels: channels}
       when is_map(channels) and is_binary(snapshot_workspace) ->
         if same_workspace?(snapshot_workspace, workspace) do
-          Config.channel_runtime(config, channel)
+          fallback
         else
-          Map.get(channels, to_string(channel), Config.channel_runtime(config, channel))
+          Map.get(channels, to_string(channel), fallback)
         end
 
       %Snapshot{config: %Config{} = config} ->
-        Config.channel_runtime(config, channel)
+        config_channel_runtime(config, channel)
 
       _ ->
-        Config.channel_runtime(config, channel)
+        fallback
+    end
+  end
+
+  defp config_channel_runtime(config, channel) do
+    case Config.channel_runtime(config, channel) do
+      {:ok, runtime} -> runtime
+      {:error, _diagnostic} -> %{}
     end
   end
 

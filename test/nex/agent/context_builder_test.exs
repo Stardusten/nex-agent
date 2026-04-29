@@ -64,16 +64,25 @@ defmodule Nex.Agent.ContextBuilderTest do
     assert prompt =~ "`<newmsg/>` is a platform text IR separator"
     assert prompt =~ "Wherever `<newmsg/>` appears"
     assert prompt =~ "Use `<newmsg/>` only when you intentionally want the runtime to split"
-    assert prompt =~ "For Discord, do not use `####` or deeper headings"
+    refute prompt =~ "For Discord"
+    refute prompt =~ "Discord supports"
+    refute prompt =~ "Feishu IR supports"
   end
 
-  test "runtime context includes feishu channel ir and streaming mode", %{} do
-    config = %Config{
-      Config.default()
-      | channel: %{
-          "feishu_kai" => %{"type" => "feishu", "enabled" => true, "streaming" => true}
-        }
-    }
+  test "runtime context includes feishu metadata without format instructions", %{} do
+    config =
+      Config.from_map(%{
+        Config.default_map()
+        | "channel" => %{
+            "feishu_kai" => %{
+              "type" => "feishu",
+              "enabled" => true,
+              "streaming" => true,
+              "app_id" => "cli",
+              "app_secret" => "secret"
+            }
+          }
+      })
 
     context =
       ContextBuilder.build_runtime_context("feishu_kai", "chat-1",
@@ -83,32 +92,34 @@ defmodule Nex.Agent.ContextBuilderTest do
 
     assert context =~ "Channel: feishu_kai"
     assert context =~ "Chat ID: chat-1"
+    assert context =~ "Channel Type: feishu"
     assert context =~ "Channel Streaming: streaming"
-    assert context =~ "Channel IR: feishu markdown-like text IR"
-
-    assert context =~
-             "Feishu IR supports headings, lists, quotes, fenced code blocks, tables, and `<newmsg/>`."
+    refute context =~ "Channel IR:"
+    refute context =~ "Feishu IR supports"
+    refute context =~ "splits your reply"
   end
 
-  test "runtime context includes discord heading limits", %{} do
-    config = %Config{
-      Config.default()
-      | channel: %{
-          "discord_main" => %{"type" => "discord", "enabled" => true, "streaming" => false}
-        }
-    }
+  test "runtime context includes discord metadata without format instructions", %{} do
+    config =
+      Config.from_map(%{
+        Config.default_map()
+        | "channel" => %{
+            "discord_main" => %{
+              "type" => "discord",
+              "enabled" => true,
+              "streaming" => false,
+              "token" => "discord-token"
+            }
+          }
+      })
 
     context = ContextBuilder.build_runtime_context("discord_main", "chat-1", config: config)
 
+    assert context =~ "Channel Type: discord"
     assert context =~ "Channel Streaming: single"
-    assert context =~ "Channel IR: Discord markdown"
-    assert context =~ "headings (#/##/### only)"
-    assert context =~ "Discord format guide: use paragraphs, bullets, short headings"
-
-    assert context =~
-             "do not wrap plain emphasis or short concept contrasts in fenced `text` blocks"
-
-    assert context =~ "Markdown tables render as ascii"
+    refute context =~ "Discord supports"
+    refute context =~ "bold standalone labels"
+    refute context =~ "Markdown tables render"
   end
 
   test "runtime context includes current chat scope id", %{} do
@@ -120,13 +131,71 @@ defmodule Nex.Agent.ContextBuilderTest do
     assert context =~ "Chat Scope ID (parent_chat_id): 123"
   end
 
-  test "runtime context falls back to plain text guidance for non-feishu channels", %{} do
+  test "runtime context omits channel runtime metadata for unknown channels", %{} do
     config = Config.default()
 
     context = ContextBuilder.build_runtime_context("telegram", "chat-1", config: config)
 
-    assert context =~ "Channel Streaming: single"
-    assert context =~ "Channel IR: markdown-like plain text"
+    refute context =~ "Channel Streaming:"
+    refute context =~ "Channel Type:"
+    refute context =~ "Channel IR:"
+  end
+
+  test "channel format prompt is injected into system content only for matching channels" do
+    config =
+      Config.from_map(%{
+        Config.default_map()
+        | "channel" => %{
+            "discord_main" => %{
+              "type" => "discord",
+              "enabled" => true,
+              "token" => "discord-token",
+              "show_table_as" => "embed"
+            },
+            "feishu_main" => %{
+              "type" => "feishu",
+              "enabled" => true,
+              "app_id" => "cli",
+              "app_secret" => "secret"
+            }
+          }
+      })
+
+    discord_messages =
+      ContextBuilder.build_messages([], "hello", "discord_main", "chat-1", nil,
+        system_prompt: "Base prompt",
+        config: config
+      )
+
+    discord_system = discord_messages |> List.first() |> Map.fetch!("content")
+    discord_user = discord_messages |> List.last() |> Map.fetch!("content")
+
+    assert discord_system =~ "Base prompt"
+    assert discord_system =~ "## Discord Output Contract"
+    assert discord_system =~ "Markdown tables render as embed"
+    refute discord_system =~ "## Feishu Output Contract"
+    refute discord_user =~ "Discord Output Contract"
+    refute discord_user =~ "Markdown tables render"
+
+    feishu_messages =
+      ContextBuilder.build_messages([], "hello", "feishu_main", "chat-1", nil,
+        system_prompt: "Base prompt",
+        config: config
+      )
+
+    feishu_system = feishu_messages |> List.first() |> Map.fetch!("content")
+    assert feishu_system =~ "## Feishu Output Contract"
+    refute feishu_system =~ "## Discord Output Contract"
+
+    unknown_messages =
+      ContextBuilder.build_messages([], "hello", "telegram", "chat-1", nil,
+        system_prompt: "Base prompt",
+        config: config
+      )
+
+    unknown_system = unknown_messages |> List.first() |> Map.fetch!("content")
+    refute unknown_system =~ "## Discord Output Contract"
+    refute unknown_system =~ "## Feishu Output Contract"
   end
 
   test "runtime system messages are merged into system prompt", %{

@@ -5,6 +5,16 @@ defmodule Nex.Agent.IMIR.ParserTest do
   alias Nex.Agent.IMIR.Block
   alias Nex.Agent.IMIR.Parser
 
+  test "channel parser construction uses catalog profiles" do
+    assert IMIR.new(:discord).profile.name == :discord
+    assert IMIR.new("discord").profile.name == :discord
+    assert IMIR.new(:feishu).profile.name == :feishu
+
+    assert_raise ArgumentError, ~s(unknown channel type: "telegram"), fn ->
+      IMIR.new("telegram")
+    end
+  end
+
   test "parser incrementally emits new_message token outside code blocks" do
     parser = IMIR.new(:feishu)
 
