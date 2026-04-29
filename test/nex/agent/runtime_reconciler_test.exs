@@ -1,7 +1,7 @@
 defmodule Nex.Agent.RuntimeReconcilerTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{Config, Gateway, Runtime}
+  alias Nex.Agent.{Runtime.Config, Interface.Gateway, Runtime}
 
   @feishu_instance "feishu_reconcile"
   @discord_instance "discord_reconcile"
@@ -17,8 +17,8 @@ defmodule Nex.Agent.RuntimeReconcilerTest do
     File.write!(Path.join(workspace, "TOOLS.md"), "# TOOLS\n")
     File.write!(Path.join(workspace, "memory/MEMORY.md"), "# Memory\n")
 
-    if Process.whereis(Nex.Agent.Bus) == nil do
-      start_supervised!({Nex.Agent.Bus, name: Nex.Agent.Bus})
+    if Process.whereis(Nex.Agent.App.Bus) == nil do
+      start_supervised!({Nex.Agent.App.Bus, name: Nex.Agent.App.Bus})
     end
 
     if Process.whereis(Nex.Agent.ChannelSupervisor) == nil do
@@ -28,7 +28,7 @@ defmodule Nex.Agent.RuntimeReconcilerTest do
     end
 
     if Process.whereis(Nex.Agent.ChannelRegistry) == nil do
-      start_supervised!(Nex.Agent.Channel.Registry)
+      start_supervised!(Nex.Agent.Interface.Channel.Registry)
     end
 
     stop_channel_children()
@@ -99,8 +99,8 @@ defmodule Nex.Agent.RuntimeReconcilerTest do
     end)
 
     assert :ok = Gateway.reconcile()
-    assert Nex.Agent.Channel.Registry.whereis(@feishu_instance) == nil
-    assert Nex.Agent.Channel.Registry.whereis(@discord_instance) == nil
+    assert Nex.Agent.Interface.Channel.Registry.whereis(@feishu_instance) == nil
+    assert Nex.Agent.Interface.Channel.Registry.whereis(@discord_instance) == nil
 
     {:ok, _snapshot} =
       Runtime.reload(
@@ -110,8 +110,8 @@ defmodule Nex.Agent.RuntimeReconcilerTest do
       )
 
     assert :ok = Gateway.reconcile()
-    feishu_pid = Nex.Agent.Channel.Registry.whereis(@feishu_instance)
-    discord_pid = Nex.Agent.Channel.Registry.whereis(@discord_instance)
+    feishu_pid = Nex.Agent.Interface.Channel.Registry.whereis(@feishu_instance)
+    discord_pid = Nex.Agent.Interface.Channel.Registry.whereis(@discord_instance)
     assert is_pid(feishu_pid)
     assert is_pid(discord_pid)
 
@@ -123,8 +123,8 @@ defmodule Nex.Agent.RuntimeReconcilerTest do
       )
 
     assert :ok = Gateway.reconcile()
-    assert Nex.Agent.Channel.Registry.whereis(@feishu_instance) != feishu_pid
-    assert Nex.Agent.Channel.Registry.whereis(@discord_instance) == discord_pid
+    assert Nex.Agent.Interface.Channel.Registry.whereis(@feishu_instance) != feishu_pid
+    assert Nex.Agent.Interface.Channel.Registry.whereis(@discord_instance) == discord_pid
 
     {:ok, _snapshot} =
       Runtime.reload(
@@ -134,8 +134,8 @@ defmodule Nex.Agent.RuntimeReconcilerTest do
       )
 
     assert :ok = Gateway.reconcile()
-    assert Nex.Agent.Channel.Registry.whereis(@feishu_instance) == nil
-    assert Nex.Agent.Channel.Registry.whereis(@discord_instance) == nil
+    assert Nex.Agent.Interface.Channel.Registry.whereis(@feishu_instance) == nil
+    assert Nex.Agent.Interface.Channel.Registry.whereis(@discord_instance) == nil
   end
 
   defp config_with_channels(channels) do

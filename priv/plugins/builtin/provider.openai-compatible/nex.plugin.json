@@ -1,0 +1,16 @@
+{
+  "id": "builtin:provider.openai-compatible",
+  "title": "OpenAI-Compatible Provider",
+  "version": "0.1.0",
+  "enabled": true,
+  "source": "builtin",
+  "description": "Built-in OpenAI-compatible provider adapter for third-party chat completions endpoints.",
+  "contributes": {
+    "providers": [
+      {
+        "type": "openai-compatible",
+        "adapter_module": "Nex.Agent.LLM.Providers.OpenAICompatible"
+      }
+    ]
+  }
+}

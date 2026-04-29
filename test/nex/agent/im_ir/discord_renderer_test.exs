@@ -1,7 +1,7 @@
-defmodule Nex.Agent.IMIR.DiscordRendererTest do
+defmodule Nex.Agent.Interface.IMIR.DiscordRendererTest do
   use ExUnit.Case, async: true
 
-  alias Nex.Agent.IMIR.Renderers.Discord
+  alias Nex.Agent.Interface.IMIR.Renderers.Discord
 
   test "renderer preserves Discord-supported markdown blocks" do
     text =

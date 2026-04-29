@@ -7,7 +7,7 @@ phase3a 已经把最重的结构债处理掉了：
 - `Runner` 的 raw stream drain/assemble 已收进 `Assembler`
 - conversation 与 consolidation 共用同一套 raw stream accumulation machinery
 - `MultiMessageSession` 命名已收敛
-- transport finalize 主路径已收口到 `%Nex.Agent.Stream.Result{}`
+- transport finalize 主路径已收口到 `%Nex.Agent.Turn.Stream.Result{}`
 
 剩下的问题不再是 phase3a blocker，更适合作为 phase4 前或 phase4 初期的架构 polish。
 

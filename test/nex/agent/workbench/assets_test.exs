@@ -1,8 +1,8 @@
-defmodule Nex.Agent.Workbench.AssetsTest do
+defmodule Nex.Agent.Interface.Workbench.AssetsTest do
   use ExUnit.Case, async: true
 
-  alias Nex.Agent.ControlPlane.Query
-  alias Nex.Agent.Workbench.{Assets, Store}
+  alias Nex.Agent.Observe.ControlPlane.Query
+  alias Nex.Agent.Interface.Workbench.{Assets, Store}
 
   setup do
     workspace =
@@ -24,8 +24,10 @@ defmodule Nex.Agent.Workbench.AssetsTest do
 
     assert html =~ "<h1>Hello</h1>"
     assert html =~ ~s(<base href="/app-assets/demo/">)
+    assert html =~ ~s(<link rel="stylesheet" href="style.css">)
     assert html =~ "window.Nex"
     assert html =~ "workbench.bridge.request"
+    assert base_tag_position(html) < stylesheet_position(html)
 
     assert [observation] =
              Query.query(%{"tag" => "workbench.app.frame.served", "limit" => 1},
@@ -106,10 +108,20 @@ defmodule Nex.Agent.Workbench.AssetsTest do
 
     File.write!(
       Path.join(app_dir, "index.html"),
-      "<!doctype html><html><head><title>Demo</title></head><body><h1>Hello</h1></body></html>"
+      ~s(<!doctype html><html><head><title>Demo</title><link rel="stylesheet" href="style.css"></head><body><h1>Hello</h1><script src="app.js"></script></body></html>)
     )
 
     File.write!(Path.join(app_dir, "app.js"), "console.log('hello');")
     File.write!(Path.join(app_dir, "style.css"), "body { color: #20251f; }")
+  end
+
+  defp base_tag_position(html) do
+    {position, _length} = :binary.match(html, ~s(<base href="/app-assets/demo/">))
+    position
+  end
+
+  defp stylesheet_position(html) do
+    {position, _length} = :binary.match(html, ~s(<link rel="stylesheet" href="style.css">))
+    position
   end
 end

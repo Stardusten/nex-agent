@@ -1,9 +1,9 @@
-defmodule Nex.Agent.IMIR.ParserTest do
+defmodule Nex.Agent.Interface.IMIR.ParserTest do
   use ExUnit.Case, async: true
 
-  alias Nex.Agent.IMIR
-  alias Nex.Agent.IMIR.Block
-  alias Nex.Agent.IMIR.Parser
+  alias Nex.Agent.Interface.IMIR
+  alias Nex.Agent.Interface.IMIR.Block
+  alias Nex.Agent.Interface.IMIR.Parser
 
   test "channel parser construction uses catalog profiles" do
     assert IMIR.new(:discord).profile.name == :discord

@@ -63,14 +63,14 @@
 
 ## 固定边界 / 已冻结的数据结构与 contract
 
-1. 用户控制层仍然归 `Nex.Agent.Command.Catalog` / `Nex.Agent.Command` / `InboundWorker` 所有。
+1. 用户控制层仍然归 `Nex.Agent.Conversation.Command.Catalog` / `Nex.Agent.Conversation.Command` / `InboundWorker` 所有。
    - 不允许把 `/stop`、`/queue`、`/btw`、`/status` 做成 LLM tool。
    - 不允许让模型决定是否执行硬停止。
 
 2. 每个 session 的主执行权由 owner run 独占：
 
 ```elixir
-%Nex.Agent.RunControl.Run{
+%Nex.Agent.Conversation.RunControl.Run{
   id: String.t(),
   workspace: String.t(),
   session_key: String.t(),
@@ -93,7 +93,7 @@
 3. Follow-up turn 不是 owner run：
 
 ```elixir
-%Nex.Agent.RunControl.FollowUp{
+%Nex.Agent.Conversation.RunControl.FollowUp{
   id: String.t(),
   owner_run_id: String.t(),
   workspace: String.t(),

@@ -1,11 +1,11 @@
 defmodule Nex.Agent.MessageToolTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.Bus
+  alias Nex.Agent.App.Bus
   alias Nex.Agent.Channel.Feishu
-  alias Nex.Agent.Config
-  alias Nex.Agent.Tool.Message
-  alias Nex.Agent.Tool.Registry
+  alias Nex.Agent.Runtime.Config
+  alias Nex.Agent.Capability.Tool.Core.Message
+  alias Nex.Agent.Capability.Tool.Registry
 
   @instance_id "feishu_kai"
   @topic {:channel_outbound, @instance_id}
@@ -16,10 +16,10 @@ defmodule Nex.Agent.MessageToolTest do
     end
 
     if Process.whereis(Nex.Agent.ChannelRegistry) == nil do
-      start_supervised!(Nex.Agent.Channel.Registry)
+      start_supervised!(Nex.Agent.Interface.Channel.Registry)
     end
 
-    if Process.whereis(Nex.Agent.Tool.Registry) == nil do
+    if Process.whereis(Nex.Agent.Capability.Tool.Registry) == nil do
       start_supervised!({Registry, name: Registry})
     end
 

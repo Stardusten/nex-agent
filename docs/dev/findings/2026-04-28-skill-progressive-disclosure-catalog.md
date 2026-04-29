@@ -62,7 +62,7 @@ Workbench app authoring 是 CODE-layer builtin skill：`builtin:workbench-app-au
 
 Nex core recognizes three local sources:
 
-- `builtin`: packaged under `priv/skills/builtin/<name>/SKILL.md`; CODE-layer runtime assets.
+- `builtin`: packaged under `priv/plugins/builtin/skill.<name>/skills/<name>/SKILL.md`; CODE-layer runtime assets owned by builtin skill plugins.
 - `workspace`: user/agent-authored skills under `workspace/skills/<name>/SKILL.md`.
 - `project`: repo-local skills under the active project skill directory.
 

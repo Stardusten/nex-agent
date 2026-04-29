@@ -1,12 +1,12 @@
 defmodule Nex.Agent.ObserveToolTest do
   use ExUnit.Case, async: true
 
-  require Nex.Agent.ControlPlane.Gauge
-  require Nex.Agent.ControlPlane.Log
-  require Nex.Agent.ControlPlane.Metric
+  require Nex.Agent.Observe.ControlPlane.Gauge
+  require Nex.Agent.Observe.ControlPlane.Log
+  require Nex.Agent.Observe.ControlPlane.Metric
 
-  alias Nex.Agent.ControlPlane.Budget
-  alias Nex.Agent.Tool.Observe
+  alias Nex.Agent.Observe.ControlPlane.Budget
+  alias Nex.Agent.Capability.Tool.Core.Observe
 
   setup do
     workspace =
@@ -18,7 +18,7 @@ defmodule Nex.Agent.ObserveToolTest do
 
   test "summary returns recent failures, gauges, and budget", %{workspace: workspace} do
     {:ok, _log} =
-      Nex.Agent.ControlPlane.Log.error(
+      Nex.Agent.Observe.ControlPlane.Log.error(
         "runner.tool.call.failed",
         %{"tool_name" => "bash"},
         workspace: workspace,
@@ -26,7 +26,7 @@ defmodule Nex.Agent.ObserveToolTest do
       )
 
     {:ok, _gauge} =
-      Nex.Agent.ControlPlane.Gauge.set(
+      Nex.Agent.Observe.ControlPlane.Gauge.set(
         "run.owner.current",
         %{"phase" => "tool"},
         %{},
@@ -43,7 +43,7 @@ defmodule Nex.Agent.ObserveToolTest do
 
   test "query, tail, metrics, and incident read only ControlPlane data", %{workspace: workspace} do
     {:ok, log} =
-      Nex.Agent.ControlPlane.Log.error(
+      Nex.Agent.Observe.ControlPlane.Log.error(
         "self_update.deploy.failed",
         %{"reason" => "compile failed"},
         workspace: workspace,
@@ -51,7 +51,7 @@ defmodule Nex.Agent.ObserveToolTest do
       )
 
     {:ok, metric} =
-      Nex.Agent.ControlPlane.Metric.count(
+      Nex.Agent.Observe.ControlPlane.Metric.count(
         "control_plane.budget.spent",
         2,
         %{"action" => "hint_candidate"},
@@ -87,7 +87,7 @@ defmodule Nex.Agent.ObserveToolTest do
 
   test "query accepts tag prefix and runtime dimension filters", %{workspace: workspace} do
     {:ok, log} =
-      Nex.Agent.ControlPlane.Log.warning(
+      Nex.Agent.Observe.ControlPlane.Log.warning(
         "runner.tool.call.failed",
         %{"tool_name" => "read"},
         workspace: workspace,
@@ -99,7 +99,7 @@ defmodule Nex.Agent.ObserveToolTest do
       )
 
     {:ok, _other} =
-      Nex.Agent.ControlPlane.Log.warning(
+      Nex.Agent.Observe.ControlPlane.Log.warning(
         "runner.tool.call.failed",
         %{"tool_name" => "write"},
         workspace: workspace,

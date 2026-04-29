@@ -1,8 +1,8 @@
-defmodule Nex.Agent.Workbench.StoreTest do
+defmodule Nex.Agent.Interface.Workbench.StoreTest do
   use ExUnit.Case, async: true
 
-  alias Nex.Agent.Workbench.{AppManifest, Store}
-  alias Nex.Agent.Workspace
+  alias Nex.Agent.Interface.Workbench.{AppManifest, Store}
+  alias Nex.Agent.Runtime.Workspace
 
   setup do
     workspace =

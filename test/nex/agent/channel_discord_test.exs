@@ -1,7 +1,7 @@
 defmodule Nex.Agent.Channel.DiscordTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{Bus, Config}
+  alias Nex.Agent.{App.Bus, Runtime.Config}
   alias Nex.Agent.Channel.Discord
   alias Nex.Agent.Channel.Discord.StreamConverter
 
@@ -13,7 +13,7 @@ defmodule Nex.Agent.Channel.DiscordTest do
     end
 
     if Process.whereis(Nex.Agent.ChannelRegistry) == nil do
-      start_supervised!(Nex.Agent.Channel.Registry)
+      start_supervised!(Nex.Agent.Interface.Channel.Registry)
     end
 
     Bus.subscribe(:inbound)
@@ -124,7 +124,7 @@ defmodule Nex.Agent.Channel.DiscordTest do
     assert inbound.text == "你能看到这个文件内容吗"
     assert inbound.attachments == []
     assert [ref] = inbound.media_refs
-    assert %Nex.Agent.Media.Ref{} = ref
+    assert %Nex.Agent.Interface.Media.Ref{} = ref
     assert ref.kind == :file
     assert ref.mime_type == "text/plain"
     assert ref.filename == "note.txt"
@@ -523,7 +523,9 @@ defmodule Nex.Agent.Channel.DiscordTest do
     assert inbound.metadata["channel_type"] == "discord"
     assert inbound.chat_id == "123"
     assert inbound.text == "/status"
-    assert %Nex.Agent.Command.Invocation{name: "status", source: :native} = inbound.command
+
+    assert %Nex.Agent.Conversation.Command.Invocation{name: "status", source: :native} =
+             inbound.command
   end
 
   test "discord outbound with interaction token edits original interaction response", %{pid: pid} do

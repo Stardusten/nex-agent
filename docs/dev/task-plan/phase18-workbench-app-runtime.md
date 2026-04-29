@@ -32,7 +32,7 @@ Phase 18 结束时仓库必须满足：
 
 1. Workbench 被定义为新的本地 surface，不是 Admin 平行状态系统。
 2. `workspace/workbench/apps/<id>/nex.app.json` 是 Workbench app 的 durable manifest 真相源。
-3. `Nex.Agent.Workbench.Store` 可以读取、校验、写入、列出 app manifests，并返回 bounded diagnostics。
+3. `Nex.Agent.Interface.Workbench.Store` 可以读取、校验、写入、列出 app manifests，并返回 bounded diagnostics。
 4. Runtime snapshot 或等价统一入口能暴露 Workbench app catalog 和 diagnostics。
 5. Workbench server 只绑定 loopback，默认端口 `50051`，提供最小 HTTP JSON API。
 6. Workbench shell 能列出 app、打开 sandboxed iframe app、显示权限状态和错误。
@@ -219,7 +219,7 @@ Stage 9 依赖 Stage 1、Stage 3、Stage 6。
 
 - 将 `workbench` 加入 Workspace known dirs。
 - 增加 `Workspace.workbench_dir/1`。
-- 定义 `%Nex.Agent.Workbench.AppManifest{}` struct。
+- 定义 `%Nex.Agent.Interface.Workbench.AppManifest{}` struct。
 - 实现 manifest normalize / validate / to_map。
 - 实现 Store：
   - `apps_dir/1`
@@ -524,7 +524,7 @@ npm test -- --run
 
 ### 实施注意事项
 
-- 文件访问必须复用 `Nex.Agent.Security` allowed roots。
+- 文件访问必须复用 `Nex.Agent.Sandbox.Security` allowed roots。
 - 不让 app 自己传任意绝对路径。
 
 ### 本 stage 验收
@@ -623,7 +623,7 @@ npm test -- --run
 - app iframe 直接持有 full backend token。
 - app manifest 声明的 permission 被当成已授权 permission。
 - 新增独立 app state 数据库并与 workspace manifest 平行维护。
-- Workbench bridge 能绕过 `Nex.Agent.Security` 读写任意文件。
+- Workbench bridge 能绕过 `Nex.Agent.Sandbox.Security` 读写任意文件。
 - Workbench core CODE 更新绕过 `self_update` deploy authority。
 - ControlPlane 不记录 permission/app lifecycle/bridge failure。
 - Admin/Runtime/Workbench 对 app catalog 使用三套不同读取逻辑。

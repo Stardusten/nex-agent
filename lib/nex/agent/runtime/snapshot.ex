@@ -3,7 +3,7 @@ defmodule Nex.Agent.Runtime.Snapshot do
   Immutable runtime world view used by the agent main path.
   """
 
-  alias Nex.Agent.Config
+  alias Nex.Agent.Runtime.Config
 
   @type t :: %__MODULE__{
           version: pos_integer(),
@@ -28,7 +28,7 @@ defmodule Nex.Agent.Runtime.Snapshot do
             hash: String.t()
           },
           subagents: %{
-            profiles: %{optional(String.t()) => Nex.Agent.Subagent.Profile.t()},
+            profiles: %{optional(String.t()) => Nex.Agent.Capability.Subagent.Profile.t()},
             definitions: [map()],
             hash: String.t()
           },
@@ -43,6 +43,19 @@ defmodule Nex.Agent.Runtime.Snapshot do
             diagnostics: [map()],
             path: String.t() | nil,
             version: pos_integer(),
+            hash: String.t()
+          },
+          plugins: %{
+            manifests: [map()],
+            enabled: [String.t()],
+            contributions: %{
+              channels: [map()],
+              providers: [map()],
+              tools: [map()],
+              skills: [map()],
+              commands: [map()]
+            },
+            diagnostics: [map()],
             hash: String.t()
           },
           workbench: %{
@@ -91,6 +104,19 @@ defmodule Nex.Agent.Runtime.Snapshot do
               diagnostics: [],
               path: nil,
               version: 1,
+              hash: ""
+            },
+            plugins: %{
+              manifests: [],
+              enabled: [],
+              contributions: %{
+                channels: [],
+                providers: [],
+                tools: [],
+                skills: [],
+                commands: []
+              },
+              diagnostics: [],
               hash: ""
             },
             workbench: %{

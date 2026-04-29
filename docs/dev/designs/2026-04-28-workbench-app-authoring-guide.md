@@ -34,6 +34,8 @@ app 是 workspace artifact，不是 NexAgent 框架 CODE 层。notes、stock das
 <workspace>/workbench/apps/<id>/
 ```
 
+Sessions、Scheduled Tasks、Configuration 这类管理 agent runtime 自身的页面属于 Workbench system view，应放在 `priv/workbench/shell.html` 和 `lib/nex/agent/workbench/**`，不要做成 workspace app。
+
 只有 Workbench core/server/shell/SDK 自身的改动才属于 repo 内的 CODE 层，例如：
 
 ```text
@@ -46,13 +48,13 @@ test/nex/agent/workbench/**
 
 已经实现：
 
-- `Nex.Agent.Workbench.AppManifest`
-- `Nex.Agent.Workbench.Store`
-- `Nex.Agent.Workbench.Permissions`
-- `Nex.Agent.Workbench.Server`
-- `Nex.Agent.Workbench.Router`
-- `Nex.Agent.Workbench.Shell`
-- `Nex.Agent.Workbench.SessionApp`
+- `Nex.Agent.Interface.Workbench.AppManifest`
+- `Nex.Agent.Interface.Workbench.Store`
+- `Nex.Agent.Interface.Workbench.Permissions`
+- `Nex.Agent.Interface.Workbench.Server`
+- `Nex.Agent.Interface.Workbench.Router`
+- `Nex.Agent.Interface.Workbench.Shell`
+- `Nex.Agent.Interface.Workbench.SessionApp`
 - 静态 prototype shell：`priv/workbench/shell.html`
 - Runtime snapshot 中的 `snapshot.workbench`
 - Admin overview 的 Workbench summary
@@ -107,7 +109,7 @@ Workbench server 的启用和端口来自 runtime config，并通过 `Runtime.Sn
 - 代码和测试都不能读取或写入 `~/.nex/agent/config.json`。
 - 测试必须使用临时 `config_path` 和临时 workspace。
 
-`Nex.Agent.HTTP` 是出站 HTTP client/proxy/observe 抽象，不是入站 server。Workbench server 接收浏览器请求，因此不复用 `Nex.Agent.HTTP`。但 app 或 bridge 如果要访问外部 API，例如股票行情，必须走 `Nex.Agent.HTTP` 或已有 tool/data source，不能裸用 `Req`。
+`Nex.Agent.Interface.HTTP` 是出站 HTTP client/proxy/observe 抽象，不是入站 server。Workbench server 接收浏览器请求，因此不复用 `Nex.Agent.Interface.HTTP`。但 app 或 bridge 如果要访问外部 API，例如股票行情，必须走 `Nex.Agent.Interface.HTTP` 或已有 tool/data source，不能裸用 `Req`。
 
 ## Manifest Contract
 
@@ -150,10 +152,10 @@ Workbench server 的启用和端口来自 runtime config，并通过 `Runtime.Sn
 
 在框架代码或测试里操作 app manifest 时，优先使用：
 
-- `Nex.Agent.Workbench.Store.save/2`
-- `Nex.Agent.Workbench.Store.get/2`
-- `Nex.Agent.Workbench.Store.list/1`
-- `Nex.Agent.Workbench.Store.load_all/1`
+- `Nex.Agent.Interface.Workbench.Store.save/2`
+- `Nex.Agent.Interface.Workbench.Store.get/2`
+- `Nex.Agent.Interface.Workbench.Store.list/1`
+- `Nex.Agent.Interface.Workbench.Store.load_all/1`
 
 `load_all/1` 对 invalid app 返回 bounded diagnostics，不让一个坏 manifest 阻塞整个 Runtime reload。
 
@@ -302,7 +304,7 @@ PUT  /api/workbench/config/channels/:channel_id
 DELETE /api/workbench/config/channels/:channel_id
 ```
 
-`GET /api/workbench/sessions` 由 `Nex.Agent.Workbench.SessionApp` 投影，不维护平行 session state：
+`GET /api/workbench/sessions` 由 `Nex.Agent.Interface.Workbench.SessionApp` 投影，不维护平行 session state：
 
 - session 是 NexAgent 的对话工作单元，key 形如 `channel:chat_id`，只有收到用户消息、运行命令、保存模型 override 或存在 active owner run 时才出现。
 - channel 连接状态、Discord guild/thread cache、Feishu WebSocket 在线状态不等于 session，应放在 channel/connectivity surface 或 observability 中展示。
@@ -354,7 +356,7 @@ body 必须显式带二次确认：
 
 当前 `/app-frame/:id` 读取 app manifest 的 `entry` 文件并注入 `window.Nex` SDK bootstrap。`/app-assets/:id/<relative_path>` 只服务该 app 目录下的静态资源，不服务 `nex.app.json`，不允许 `..` / absolute path / directory / app dir escape，第一版文件大小上限是 2MB。
 
-当前配置面板是 Workbench shell 的内置 system view，不是 iframe app，也不是通用 JSON 编辑器。它通过 `Nex.Agent.Workbench.ConfigPanel` 操作 runtime config 的 provider/model/channel section：
+当前配置面板是 Workbench shell 的内置 system view，不是 iframe app，也不是通用 JSON 编辑器。它通过 `Nex.Agent.Interface.Workbench.ConfigPanel` 操作 runtime config 的 provider/model/channel section：
 
 - provider 支持新增、修改、删除；删除仍被 model 引用的 provider 会拒绝。
 - model 支持新增、修改、删除；删除仍被 model role 引用的 model 会拒绝。
@@ -457,7 +459,17 @@ notes.file.read     -> notes:read
 notes.file.write    -> notes:write
 notes.file.delete   -> notes:write
 notes.search        -> notes:read
+tasks.scheduled.list    -> tasks:read
+tasks.scheduled.status  -> tasks:read
+tasks.scheduled.add     -> tasks:write
+tasks.scheduled.update  -> tasks:write
+tasks.scheduled.remove  -> tasks:write
+tasks.scheduled.enable  -> tasks:write
+tasks.scheduled.disable -> tasks:write
+tasks.scheduled.run     -> tasks:write
 ```
+
+Scheduled Tasks 的内置管理界面走 Workbench system HTTP API；上面的 bridge methods 只给未来自定义 app 在 owner grant 后复用同一条 bounded control chain。
 
 每次 bridge call 都要写 ControlPlane observations：
 
@@ -482,7 +494,7 @@ workbench.bridge.call.denied
 6. 不要把 owner grant 写进 manifest。
 7. 不要把 app-specific business logic 写进 Workbench core。
 8. app 不能读取任意 absolute path。
-9. iframe 不要直接抓公网数据；需要外部数据时走 tool/data source/`Nex.Agent.HTTP`。
+9. iframe 不要直接抓公网数据；需要外部数据时走 tool/data source/`Nex.Agent.Interface.HTTP`。
 10. 先补 manifest、permission、bridge enforcement 测试，再依赖 UI 行为。
 11. 创建和修改 app 文件走现有文件主链：`find -> read -> apply_patch`。
 12. simple app 的静态产物改动后，在 Workbench 里点当前 app 的 iframe `Reload` 生效。
@@ -603,7 +615,7 @@ backend / bridge 要求：
 - `notes:write` 用于 save/delete notes。
 - note vault 是外部 data root，不是第二个 NexAgent workspace。
 - iframe 只传 `root_id` 和 vault-relative path，不传 absolute path。
-- 后端把 `root_id` 解析成配置里的 notes root，并复用 `Nex.Agent.Security.validate_path/2` / `validate_write_path/2` 和 explicit notes root 边界。
+- 后端把 `root_id` 解析成配置里的 notes root，并复用 `Nex.Agent.Sandbox.Security.validate_path/2` / `validate_write_path/2` 和 explicit notes root 边界。
 - 第一版 bridge method 是 `notes.roots.list`、`notes.files.list`、`notes.file.read`、`notes.file.write`、`notes.file.delete`、`notes.search`。
 - 写入和删除必须支持可选 `base_revision` 并做 conflict detection；有冲突时拒绝覆盖或删除。
 
@@ -629,7 +641,7 @@ backend / tool 要求：
 
 - 使用 `tools:call:stock_quote` 或更窄的 stock quote capability。
 - 行情查询应实现为 deterministic tool/data source。
-- 外部 HTTP 调用必须使用 `Nex.Agent.HTTP`。
+- 外部 HTTP 调用必须使用 `Nex.Agent.Interface.HTTP`。
 - watchlist 如果是用户长期偏好，沉淀到 USER/MEMORY；如果只是 app 布局状态，放 app config。
 
 不要把股票 provider 细节写进 `Workbench.Server` 或 `Workbench.Router`。

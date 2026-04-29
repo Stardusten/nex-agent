@@ -1,7 +1,15 @@
-defmodule Nex.Agent.MemoryConsolidateTest do
+defmodule Nex.Agent.Knowledge.MemoryConsolidateTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{Config, Memory, MemoryUpdater, Session, SessionManager, Skills}
+  alias Nex.Agent.{
+    Runtime.Config,
+    Knowledge.Memory,
+    Conversation.Session,
+    Conversation.SessionManager,
+    Capability.Skills
+  }
+
+  alias Nex.Agent.Knowledge.Memory.Updater, as: MemoryUpdater
   alias Nex.Agent.Tool.MemoryConsolidate
 
   setup do

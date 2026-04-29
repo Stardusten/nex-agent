@@ -1,7 +1,8 @@
-defmodule Nex.Agent.LLM.ProviderProfileTest do
+defmodule Nex.Agent.Turn.LLM.ProviderProfileTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.LLM.ProviderProfile
+  alias Nex.Agent.Turn.LLM.ProviderProfile
+  alias Nex.Agent.Turn.LLM.Providers, as: CoreProviders
   alias Nex.Agent.LLM.Providers
 
   test "openai-compatible owns OpenAI wire profile and model request options" do
@@ -206,7 +207,7 @@ defmodule Nex.Agent.LLM.ProviderProfileTest do
   test "unknown provider uses default adapter without raising" do
     profile = ProviderProfile.for(:future_provider, base_url: "https://future.example.com/v1")
 
-    assert profile.adapter == Providers.Default
+    assert profile.adapter == CoreProviders.Default
     assert profile.provider == :future_provider
 
     assert ProviderProfile.model_spec(profile, "future-model") == %{

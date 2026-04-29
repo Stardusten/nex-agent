@@ -2,17 +2,18 @@ defmodule Nex.Agent do
   @moduledoc false
 
   alias Nex.Agent.{
-    Config,
-    MemoryUpdater,
-    Onboarding,
-    Runner,
+    Runtime.Config,
+    App.Onboarding,
+    Turn.Runner,
     Runtime,
-    Session,
-    SessionManager,
-    Skills,
-    LLM.ProviderProfile,
-    Workspace
+    Conversation.Session,
+    Conversation.SessionManager,
+    Capability.Skills,
+    Turn.LLM.ProviderProfile,
+    Runtime.Workspace
   }
+
+  alias Nex.Agent.Knowledge.Memory.Updater, as: MemoryUpdater
 
   @type t :: %__MODULE__{
           session_key: String.t(),

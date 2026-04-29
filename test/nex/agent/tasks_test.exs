@@ -1,7 +1,7 @@
-defmodule Nex.Agent.TasksTest do
+defmodule Nex.Agent.Workflow.TasksTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.Tasks
+  alias Nex.Agent.Workflow.Tasks
 
   setup do
     workspace =
@@ -9,7 +9,7 @@ defmodule Nex.Agent.TasksTest do
 
     previous_workspace = Application.get_env(:nex_agent, :workspace_path)
     Application.put_env(:nex_agent, :workspace_path, workspace)
-    Nex.Agent.Onboarding.ensure_initialized()
+    Nex.Agent.App.Onboarding.ensure_initialized()
 
     on_exit(fn ->
       cleanup_task_jobs("task_", workspace)
@@ -60,8 +60,8 @@ defmodule Nex.Agent.TasksTest do
     assert updated["summary"] == "Need a compact P0/P1 split"
     assert updated["follow_up_at"] == "2026-03-22T08:00:00Z"
 
-    if Process.whereis(Nex.Agent.Cron) do
-      jobs = Nex.Agent.Cron.list_jobs(workspace: workspace)
+    if Process.whereis(Nex.Agent.Capability.Cron) do
+      jobs = Nex.Agent.Capability.Cron.list_jobs(workspace: workspace)
       assert Enum.any?(jobs, &(&1.name == "task_due:#{task["id"]}" and &1.channel == "feishu"))
 
       assert Enum.any?(
@@ -75,9 +75,9 @@ defmodule Nex.Agent.TasksTest do
     assert completed["due_at"] == nil
     assert completed["follow_up_at"] == nil
 
-    if Process.whereis(Nex.Agent.Cron) do
+    if Process.whereis(Nex.Agent.Capability.Cron) do
       refute Enum.any?(
-               Nex.Agent.Cron.list_jobs(workspace: workspace),
+               Nex.Agent.Capability.Cron.list_jobs(workspace: workspace),
                &String.ends_with?(&1.name, task["id"])
              )
     end
@@ -100,9 +100,9 @@ defmodule Nex.Agent.TasksTest do
                chat_id: "chat-123"
              )
 
-    if Process.whereis(Nex.Agent.Cron) do
+    if Process.whereis(Nex.Agent.Capability.Cron) do
       assert Enum.any?(
-               Nex.Agent.Cron.list_jobs(workspace: workspace),
+               Nex.Agent.Capability.Cron.list_jobs(workspace: workspace),
                &String.ends_with?(&1.name, task["id"])
              )
     end
@@ -112,19 +112,21 @@ defmodule Nex.Agent.TasksTest do
 
     assert cancelled["status"] == "cancelled"
 
-    if Process.whereis(Nex.Agent.Cron) do
+    if Process.whereis(Nex.Agent.Capability.Cron) do
       refute Enum.any?(
-               Nex.Agent.Cron.list_jobs(workspace: workspace),
+               Nex.Agent.Capability.Cron.list_jobs(workspace: workspace),
                &String.ends_with?(&1.name, task["id"])
              )
     end
   end
 
   defp cleanup_task_jobs(prefix, workspace) do
-    if Process.whereis(Nex.Agent.Cron) do
-      Nex.Agent.Cron.list_jobs(workspace: workspace)
+    if Process.whereis(Nex.Agent.Capability.Cron) do
+      Nex.Agent.Capability.Cron.list_jobs(workspace: workspace)
       |> Enum.filter(&String.starts_with?(&1.name, prefix))
-      |> Enum.each(fn job -> Nex.Agent.Cron.remove_job(job.id, workspace: workspace) end)
+      |> Enum.each(fn job ->
+        Nex.Agent.Capability.Cron.remove_job(job.id, workspace: workspace)
+      end)
     end
   end
 end

@@ -62,7 +62,7 @@ replace Phase 11A self-healing event/energy store
 }
 ```
 
-`context["workspace"]` 必须由 `opts[:workspace]` 规范化而来；缺省使用 `Nex.Agent.Workspace.root/0`。workspace 不允许出现在顶层字段或 `attrs`。`tag` 必须是点分字符串，不接受 atom tag。
+`context["workspace"]` 必须由 `opts[:workspace]` 规范化而来；缺省使用 `Nex.Agent.Runtime.Workspace.root/0`。workspace 不允许出现在顶层字段或 `attrs`。`tag` 必须是点分字符串，不接受 atom tag。
 
 2. 13A 只支持 JSONL backend。
 

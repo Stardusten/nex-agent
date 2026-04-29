@@ -1,15 +1,24 @@
-defmodule Nex.Agent.Workbench.ServerTest do
+defmodule Nex.Agent.Interface.Workbench.ServerTest do
   use ExUnit.Case, async: false
 
-  require Nex.Agent.ControlPlane.Log
+  require Nex.Agent.Observe.ControlPlane.Log
 
-  alias Nex.Agent.Config
-  alias Nex.Agent.ControlPlane.Query
-  alias Nex.Agent.ControlPlane.Store, as: ControlPlaneStore
-  alias Nex.Agent.Evolution
+  alias Nex.Agent.Runtime.Config
+  alias Nex.Agent.Observe.ControlPlane.Query
+  alias Nex.Agent.Observe.ControlPlane.Store, as: ControlPlaneStore
+  alias Nex.Agent.Self.Evolution
   alias Nex.Agent.Runtime.Snapshot
-  alias Nex.Agent.{RunControl, Runtime, Session, SessionManager}
-  alias Nex.Agent.Workbench.{Server, Store}
+
+  alias Nex.Agent.{
+    Capability.Cron,
+    Conversation.RunControl,
+    Runtime,
+    Conversation.Session,
+    Conversation.SessionManager,
+    Capability.Skills
+  }
+
+  alias Nex.Agent.Interface.Workbench.{Server, Store}
 
   setup do
     if Process.whereis(SessionManager) == nil do
@@ -20,13 +29,24 @@ defmodule Nex.Agent.Workbench.ServerTest do
       start_supervised!({RunControl, name: RunControl})
     end
 
+    if Process.whereis(Cron) == nil do
+      start_supervised!({Cron, name: Cron})
+    end
+
     workspace =
       Path.join(
         System.tmp_dir!(),
         "nex-agent-workbench-server-#{System.unique_integer([:positive])}"
       )
 
-    on_exit(fn -> File.rm_rf!(workspace) end)
+    on_exit(fn ->
+      if Process.whereis(Cron) do
+        Cron.list_jobs(workspace: workspace)
+        |> Enum.each(fn job -> Cron.remove_job(job.id, workspace: workspace) end)
+      end
+
+      File.rm_rf!(workspace)
+    end)
 
     :inets.start()
 
@@ -130,7 +150,7 @@ defmodule Nex.Agent.Workbench.ServerTest do
 
   test "serves filtered observation timeline queries", %{workspace: workspace} do
     {:ok, _} =
-      Nex.Agent.ControlPlane.Log.warning(
+      Nex.Agent.Observe.ControlPlane.Log.warning(
         "runner.tool.call.failed",
         %{"tool_name" => "read", "summary" => "missing file"},
         workspace: workspace,
@@ -141,7 +161,7 @@ defmodule Nex.Agent.Workbench.ServerTest do
       )
 
     {:ok, _} =
-      Nex.Agent.ControlPlane.Log.info(
+      Nex.Agent.Observe.ControlPlane.Log.info(
         "runner.run.started",
         %{},
         workspace: workspace,
@@ -194,8 +214,16 @@ defmodule Nex.Agent.Workbench.ServerTest do
     assert shell =~ "Nex Workbench"
     assert shell =~ "Self Evolution"
     assert shell =~ "Sessions"
+    assert shell =~ "Scheduled Tasks"
+    assert shell =~ "Skills"
     assert shell =~ "sandbox = \"allow-scripts\""
     assert shell =~ "id=\"reload-app\""
+    assert shell =~ "id=\"scheduled-nav\""
+    assert shell =~ "id=\"scheduled-view\""
+    assert shell =~ "id=\"refresh-scheduled\""
+    assert shell =~ "id=\"skills-nav\""
+    assert shell =~ "id=\"skills-view\""
+    assert shell =~ "id=\"refresh-skills\""
     assert shell =~ "nex.workbench.shell.view.v1"
     assert shell =~ "restoreInitialView"
     assert shell =~ "app-immersive"
@@ -215,13 +243,17 @@ defmodule Nex.Agent.Workbench.ServerTest do
     assert shell =~ "/api/workbench/apps"
     assert shell =~ "/api/workbench/evolution"
     assert shell =~ "/api/workbench/sessions"
+    assert shell =~ "/api/workbench/scheduled-tasks"
+    assert shell =~ "/api/workbench/skills"
 
     assert {200, frame} = get_raw(port, "/app-frame/notes")
     assert frame =~ "<title>Notes</title>"
     assert frame =~ "Notes App"
     assert frame =~ ~s(<base href="/app-assets/notes/">)
+    assert base_tag_position(frame, "notes") < stylesheet_position(frame)
     assert frame =~ "window.Nex"
     assert frame =~ "workbench.bridge.request"
+    assert frame =~ "tasks.scheduled.list"
 
     assert {200, js_headers, js} = get_raw_with_headers(port, "/app-assets/notes/app.js")
     assert header_value(js_headers, "access-control-allow-origin") == "*"
@@ -233,6 +265,98 @@ defmodule Nex.Agent.Workbench.ServerTest do
 
     assert {404, missing} = get_raw(port, "/app-frame/missing")
     assert missing =~ "Missing app"
+  end
+
+  test "serves skills system API and manages workspace skills", %{workspace: workspace} do
+    assert {:ok, _} =
+             Skills.create(
+               %{
+                 name: "draft-guide",
+                 description: "[Draft] Draft guide",
+                 content: "<!-- status: draft, source: test -->\n\nUse this draft.",
+                 user_invocable: false
+               },
+               workspace: workspace
+             )
+
+    assert {:ok, _} =
+             Skills.create(
+               %{
+                 name: "hidden-guide",
+                 description: "Hidden from model",
+                 content: "Hidden body",
+                 disable_model_invocation: true
+               },
+               workspace: workspace
+             )
+
+    pid = start_server!(snapshot(workspace))
+    %{running: true, port: port} = Server.status(pid)
+
+    assert {200,
+            %{
+              "skills" => skills,
+              "summary" => summary,
+              "source_types" => %{
+                "builtin" => %{"writable" => false},
+                "workspace" => %{"writable" => true},
+                "project" => %{"writable" => false}
+              }
+            }} = get_json(port, "/api/workbench/skills?source=workspace&limit=100")
+
+    assert summary["by_source"]["workspace"] == 2
+    assert Enum.any?(skills, &(&1["id"] == "workspace:draft-guide" and &1["status"] == "draft"))
+
+    assert Enum.any?(
+             skills,
+             &(&1["id"] == "workspace:hidden-guide" and &1["status"] == "model-hidden")
+           )
+
+    assert {200, %{"skill" => detail}} =
+             get_json(port, "/api/workbench/skills/#{URI.encode("workspace:draft-guide")}")
+
+    assert detail["writable"] == true
+    assert detail["content"] =~ "Use this draft."
+
+    assert {200, %{"skill" => published}} =
+             post_json(
+               port,
+               "/api/workbench/skills/#{URI.encode("workspace:draft-guide")}/publish",
+               %{}
+             )
+
+    assert published["draft"] == false
+    assert published["status"] in ["active", "model-only"]
+
+    assert {200, %{"skill" => saved}} =
+             request_json(
+               port,
+               "PUT",
+               "/api/workbench/skills/#{URI.encode("workspace:hidden-guide")}",
+               %{
+                 "description" => "Visible again",
+                 "content" => "Updated body",
+                 "user_invocable" => true,
+                 "disable_model_invocation" => false
+               }
+             )
+
+    assert saved["status"] == "active"
+    assert saved["content"] =~ "Updated body"
+
+    assert {200, %{"deleted" => true}} =
+             request_json(
+               port,
+               "DELETE",
+               "/api/workbench/skills/#{URI.encode("workspace:hidden-guide")}"
+             )
+
+    assert {400, %{"error" => "Only workspace skills can be changed from Workbench"}} =
+             request_json(
+               port,
+               "DELETE",
+               "/api/workbench/skills/#{URI.encode("builtin:workbench-app-authoring")}"
+             )
   end
 
   test "serves backend bridge route with app-bound permissions", %{workspace: workspace} do
@@ -370,6 +494,61 @@ defmodule Nex.Agent.Workbench.ServerTest do
              })
 
     assert Session.model_override(Session.load(session_key, workspace: workspace)) == nil
+  end
+
+  test "serves scheduled task system API without app permissions", %{workspace: workspace} do
+    pid = start_server!(snapshot(workspace))
+    %{running: true, port: port} = Server.status(pid)
+
+    assert {200, %{"jobs" => [], "total" => 0, "status" => %{"total" => 0}}} =
+             get_json(port, "/api/workbench/scheduled-tasks")
+
+    assert {200,
+            %{
+              "job" => %{
+                "id" => job_id,
+                "name" => "Daily planning",
+                "message" => "Review today's active projects.",
+                "enabled" => true,
+                "schedule" => %{"type" => "every", "seconds" => 3600}
+              }
+            }} =
+             post_json(port, "/api/workbench/scheduled-tasks", %{
+               "name" => "Daily planning",
+               "message" => "Review today's active projects.",
+               "enabled" => true,
+               "schedule" => %{"type" => "every", "seconds" => 3600},
+               "channel" => "feishu",
+               "chat_id" => "chat-ops"
+             })
+
+    assert {200, %{"total" => 1, "jobs" => [%{"id" => ^job_id}]}} =
+             get_json(port, "/api/workbench/scheduled-tasks?query=planning&status=enabled")
+
+    assert {200,
+            %{
+              "job" => %{
+                "id" => ^job_id,
+                "message" => "Run the morning review.",
+                "schedule" => %{"type" => "cron", "expr" => "0 9 * * *"}
+              }
+            }} =
+             request_json(port, "PUT", "/api/workbench/scheduled-tasks/#{job_id}", %{
+               "message" => "Run the morning review.",
+               "schedule" => %{"type" => "cron", "expr" => "0 9 * * *"}
+             })
+
+    assert {200, %{"job" => %{"id" => ^job_id, "enabled" => false}}} =
+             post_json(port, "/api/workbench/scheduled-tasks/#{job_id}/disable", %{})
+
+    assert {200, %{"job" => %{"id" => ^job_id, "enabled" => true}}} =
+             post_json(port, "/api/workbench/scheduled-tasks/#{job_id}/enable", %{})
+
+    assert {200, %{"removed" => true, "job_id" => ^job_id}} =
+             request_json(port, "DELETE", "/api/workbench/scheduled-tasks/#{job_id}")
+
+    assert {200, %{"jobs" => [], "total" => 0}} =
+             get_json(port, "/api/workbench/scheduled-tasks")
   end
 
   test "serves visual config API and writes structured config changes", %{
@@ -561,7 +740,7 @@ defmodule Nex.Agent.Workbench.ServerTest do
     File.mkdir_p!(Path.join(workspace, "memory"))
 
     assert {:ok, evidence} =
-             Nex.Agent.ControlPlane.Log.warning(
+             Nex.Agent.Observe.ControlPlane.Log.warning(
                "runner.tool.call.failed",
                %{"tool_name" => "read", "error_summary" => "missing file"},
                workspace: workspace,
@@ -579,7 +758,7 @@ defmodule Nex.Agent.Workbench.ServerTest do
     proposed_at = ControlPlaneStore.timestamp()
 
     assert {:ok, _} =
-             Nex.Agent.ControlPlane.Log.info(
+             Nex.Agent.Observe.ControlPlane.Log.info(
                "evolution.candidate.proposed",
                %{
                  "id" => "cand_ui",
@@ -649,7 +828,7 @@ defmodule Nex.Agent.Workbench.ServerTest do
     File.write!(Path.join(workspace, "memory/MEMORY.md"), "# Memory\n")
 
     assert {:ok, _} =
-             Nex.Agent.ControlPlane.Log.info(
+             Nex.Agent.Observe.ControlPlane.Log.info(
                "evolution.candidate.proposed",
                %{
                  "id" => "cand_memory_apply",
@@ -728,7 +907,7 @@ defmodule Nex.Agent.Workbench.ServerTest do
       workspace: workspace,
       workbench: %{
         runtime: %{"enabled" => true, "host" => "127.0.0.1", "port" => 0},
-        apps: Enum.map(apps, &Nex.Agent.Workbench.AppManifest.to_map/1),
+        apps: Enum.map(apps, &Nex.Agent.Interface.Workbench.AppManifest.to_map/1),
         diagnostics: diagnostics,
         hash: "test"
       }
@@ -817,6 +996,16 @@ defmodule Nex.Agent.Workbench.ServerTest do
   end
 
   defp header_value(headers, key), do: Map.get(headers, String.downcase(key))
+
+  defp base_tag_position(html, app_id) do
+    {position, _length} = :binary.match(html, ~s(<base href="/app-assets/#{app_id}/">))
+    position
+  end
+
+  defp stylesheet_position(html) do
+    {position, _length} = :binary.match(html, ~s(<link rel="stylesheet" href="style.css">))
+    position
+  end
 
   defp model_config do
     %Config{

@@ -1,0 +1,16 @@
+{
+  "id": "builtin:provider.ollama",
+  "title": "Ollama Provider",
+  "version": "0.1.0",
+  "enabled": true,
+  "source": "builtin",
+  "description": "Built-in local Ollama provider adapter.",
+  "contributes": {
+    "providers": [
+      {
+        "type": "ollama",
+        "adapter_module": "Nex.Agent.LLM.Providers.Ollama"
+      }
+    ]
+  }
+}

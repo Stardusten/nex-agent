@@ -1,10 +1,10 @@
-defmodule Nex.Agent.Workbench.NotesTest do
+defmodule Nex.Agent.Interface.Workbench.NotesTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.Config
-  alias Nex.Agent.ControlPlane.Query
+  alias Nex.Agent.Runtime.Config
+  alias Nex.Agent.Observe.ControlPlane.Query
   alias Nex.Agent.Runtime.Snapshot
-  alias Nex.Agent.Workbench.{Bridge, Permissions, Store}
+  alias Nex.Agent.Interface.Workbench.{Bridge, Permissions, Store}
 
   setup do
     previous_allowed_roots = System.get_env("NEX_ALLOWED_ROOTS")

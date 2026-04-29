@@ -1,7 +1,7 @@
-defmodule Nex.Agent.MemoryWriteTest do
+defmodule Nex.Agent.Knowledge.MemoryWriteTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{Bus, Memory}
+  alias Nex.Agent.{App.Bus, Knowledge.Memory}
   alias Nex.Agent.Tool.MemoryWrite
 
   setup do

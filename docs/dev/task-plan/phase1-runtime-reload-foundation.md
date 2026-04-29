@@ -2,18 +2,18 @@
 
 ## 当前状态
 
-- `Nex.Agent.Config.load/0` 被多个调用点直接读取，配置真相源分散。
-- `Nex.Agent.ContextBuilder.build_system_prompt/1` 每轮现读 `AGENTS.md`、`SOUL.md`、`USER.md`、`TOOLS.md`，但没有统一 runtime version。
-- `Nex.Agent.Runner` 每轮现取 `Tool.Registry` definitions，但工具可见性和 prompt 层没有被同一份快照绑定。
-- `Nex.Agent.InboundWorker` 会缓存 session 对应的 agent struct，旧 agent 可能继续带旧 provider/model/tools/max_iterations。
+- `Nex.Agent.Runtime.Config.load/0` 被多个调用点直接读取，配置真相源分散。
+- `Nex.Agent.Turn.ContextBuilder.build_system_prompt/1` 每轮现读 `AGENTS.md`、`SOUL.md`、`USER.md`、`TOOLS.md`，但没有统一 runtime version。
+- `Nex.Agent.Turn.Runner` 每轮现取 `Tool.Registry` definitions，但工具可见性和 prompt 层没有被同一份快照绑定。
+- `Nex.Agent.Conversation.InboundWorker` 会缓存 session 对应的 agent struct，旧 agent 可能继续带旧 provider/model/tools/max_iterations。
 - channel 进程在 `init/1` 读取配置后长期持有 state，配置变化不会自动传播。
-- `Nex.Agent.SystemPrompt` 不是当前 runtime workspace 真相源，不能作为本 phase 的 resolver 基础。
+- `Nex.Agent.Runtime.Prompt` 不是当前 runtime workspace 真相源，不能作为本 phase 的 resolver 基础。
 
 ## 完成后必须达到的结果
 
 - 新增统一 runtime snapshot 真相源，后续主链不再各自直接读 `Config.load/0` 或零散拼接 runtime world view。
 - config、prompt layers、tool definitions 至少能在下一轮用户 turn 以同一个 runtime version 生效。
-- `Nex.Agent.Gateway` 不需要为了配置变更做全量 stop/start。
+- `Nex.Agent.Interface.Gateway` 不需要为了配置变更做全量 stop/start。
 - session history 保留，但 stale agent 会在下一轮按当前 runtime snapshot 重建。
 - 仓库中形成可继续推进的主链，后续 stage 可以在此基础上继续做 watcher 和 channel reconcile。
 
@@ -43,7 +43,7 @@
 ```elixir
 %Nex.Agent.Runtime.Snapshot{
   version: pos_integer(),
-  config: Nex.Agent.Config.t(),
+  config: Nex.Agent.Runtime.Config.t(),
   workspace: String.t(),
   prompt: %{
     system_prompt: String.t(),
@@ -75,7 +75,7 @@
    - 读取 config
    - 构建 prompt
    - 从当前 `Tool.Registry` 读取 definitions
-   - 从当前 `Nex.Agent.Skills` 读取 `always_instructions`
+   - 从当前 `Nex.Agent.Capability.Skills` 读取 `always_instructions`
    - 组装 candidate snapshot
    - candidate 完整成功后才发布新 version
 5. phase 1 的 runtime version contract 冻结为：
@@ -158,7 +158,7 @@ pos_integer() | nil
   2. 读取 config
   3. 构建 prompt 与 diagnostics
   4. 从当前 `Tool.Registry` 读取 `definitions(:all|:subagent|:cron)`
-  5. 从当前 `Nex.Agent.Skills` 读取 `always_instructions`
+  5. 从当前 `Nex.Agent.Capability.Skills` 读取 `always_instructions`
   6. 计算 hash 并组装 candidate snapshot
   7. 成功后发布新 snapshot 与新 version
 - 在 `reload/1` 中统一构建：
@@ -170,14 +170,14 @@ pos_integer() | nil
   - 对应 hash
 - 初始启动时先构建 version 1 snapshot。
 - `lib/nex/agent/application.ex` 中的启动顺序必须冻结为：
-  - `Nex.Agent.Skills`
-  - `Nex.Agent.SessionManager`
+  - `Nex.Agent.Capability.Skills`
+  - `Nex.Agent.Conversation.SessionManager`
   - `Nex.Agent.MessageBus`
-  - `Nex.Agent.InfrastructureSupervisor`
+  - `Nex.Agent.App.InfrastructureSupervisor`
   - `Nex.Agent.Runtime`
-  - `Nex.Agent.WorkerSupervisor`
+  - `Nex.Agent.App.WorkerSupervisor`
   - `Nex.Agent.ChannelSupervisor`
-  - `Nex.Agent.Gateway`
+  - `Nex.Agent.Interface.Gateway`
 - `Nex.Agent.Runtime` 必须位于 `Skills` 与 `InfrastructureSupervisor` 之后，且位于 `WorkerSupervisor` 与 `Gateway` 之前。
 - phase 1 的初始启动失败语义冻结为：
   - 如果 version 1 snapshot 构建失败，则应用 fail-fast

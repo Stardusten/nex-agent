@@ -1,7 +1,13 @@
-defmodule Nex.Agent.MemoryRebuildTest do
+defmodule Nex.Agent.Knowledge.MemoryRebuildTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{Memory, Session, SessionManager, Skills}
+  alias Nex.Agent.{
+    Knowledge.Memory,
+    Conversation.Session,
+    Conversation.SessionManager,
+    Capability.Skills
+  }
+
   alias Nex.Agent.Tool.MemoryRebuild
 
   setup do

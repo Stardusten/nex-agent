@@ -1,7 +1,7 @@
-defmodule Nex.Agent.MemoryNoticeTest do
+defmodule Nex.Agent.Knowledge.MemoryNoticeTest do
   use ExUnit.Case, async: true
 
-  alias Nex.Agent.Memory.Notice
+  alias Nex.Agent.Knowledge.Memory.Notice
 
   test "render marks truncated summaries with ellipsis" do
     summary = String.duplicate("a", 160)

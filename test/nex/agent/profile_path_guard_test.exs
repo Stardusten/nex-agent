@@ -1,7 +1,7 @@
 defmodule Nex.Agent.ProfilePathGuardTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.Tool.{ApplyPatch, Read}
+  alias Nex.Agent.Capability.Tool.Core.{ApplyPatch, Read}
 
   setup do
     workspace = Path.join("/tmp", "nex-agent-profile-guard-#{System.unique_integer([:positive])}")

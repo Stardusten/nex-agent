@@ -1,8 +1,8 @@
-defmodule Nex.Agent.Workbench.PermissionsTest do
+defmodule Nex.Agent.Interface.Workbench.PermissionsTest do
   use ExUnit.Case, async: true
 
-  alias Nex.Agent.ControlPlane.Query
-  alias Nex.Agent.Workbench.{Permissions, Store}
+  alias Nex.Agent.Observe.ControlPlane.Query
+  alias Nex.Agent.Interface.Workbench.{Permissions, Store}
 
   setup do
     workspace =

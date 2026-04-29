@@ -1,7 +1,7 @@
-defmodule Nex.Agent.Media.ProjectorTest do
+defmodule Nex.Agent.Interface.Media.ProjectorTest do
   use ExUnit.Case, async: true
 
-  alias Nex.Agent.Media.{Attachment, Projector}
+  alias Nex.Agent.Interface.Media.{Attachment, Projector}
 
   test "text file attachments are projected with file content" do
     path =

@@ -3,9 +3,9 @@ defmodule Nex.Agent.ControlPlaneLogTest do
 
   import ExUnit.CaptureLog
 
-  require Nex.Agent.ControlPlane.Log
+  require Nex.Agent.Observe.ControlPlane.Log
 
-  alias Nex.Agent.ControlPlane.Query
+  alias Nex.Agent.Observe.ControlPlane.Query
 
   setup do
     workspace = tmp_workspace("log")
@@ -15,7 +15,7 @@ defmodule Nex.Agent.ControlPlaneLogTest do
 
   test "log macro captures source and writes an observation", %{workspace: workspace} do
     assert {:ok, observation} =
-             Nex.Agent.ControlPlane.Log.error(
+             Nex.Agent.Observe.ControlPlane.Log.error(
                "runner.llm.call.failed",
                %{"provider" => "test"},
                workspace: workspace,
@@ -40,7 +40,7 @@ defmodule Nex.Agent.ControlPlaneLogTest do
     log =
       capture_log(fn ->
         assert {:ok, _observation} =
-                 Nex.Agent.ControlPlane.Log.error(
+                 Nex.Agent.Observe.ControlPlane.Log.error(
                    "runner.llm.call.failed",
                    %{
                      "api_key" => "sk-secret",

@@ -4,7 +4,7 @@ defmodule Nex.Agent.SoulUpdateValidationTest do
   Code.require_file("layer_contract_helper.exs", __DIR__)
 
   alias Nex.Agent.LayerContractHelper
-  alias Nex.Agent.Tool.SoulUpdate
+  alias Nex.Agent.Capability.Tool.Core.SoulUpdate
 
   setup do
     workspace =

@@ -1,5 +1,5 @@
 defmodule Nex.Agent.TestSkillMessageTool do
-  @behaviour Nex.Agent.Tool.Behaviour
+  @behaviour Nex.Agent.Capability.Tool.Behaviour
 
   def name, do: "skill_message"
   def description, do: "Test tool that collides with skill-generated name."
@@ -23,18 +23,12 @@ end
 defmodule Nex.Agent.ToolAlignmentTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{Runner, Session, Skills}
+  alias Nex.Agent.{Runtime.Config, Turn.Runner, Conversation.Session, Capability.Skills}
   alias Nex.Agent.Runtime.Snapshot
 
-  alias Nex.Agent.Tool.{
-    AskAdvisor,
-    EvolutionCandidate,
-    Registry,
-    SkillGet,
-    SpawnTask,
-    SoulUpdate,
-    ToolList
-  }
+  alias Nex.Agent.Capability.Tool.Registry
+  alias Nex.Agent.Capability.Tool.Core.{SkillGet, SoulUpdate, SpawnTask, ToolList}
+  alias Nex.Agent.Tool.{AskAdvisor, EvolutionCandidate}
 
   setup do
     workspace =
@@ -196,13 +190,13 @@ defmodule Nex.Agent.ToolAlignmentTest do
     definition =
       SpawnTask.definition(
         subagent_profiles: %{
-          "debugger" => %Nex.Agent.Subagent.Profile{
+          "debugger" => %Nex.Agent.Capability.Subagent.Profile{
             name: "debugger",
             description: "Diagnose failures.",
             prompt: "debug",
             source: :test
           },
-          "reviewer" => %Nex.Agent.Subagent.Profile{
+          "reviewer" => %Nex.Agent.Capability.Subagent.Profile{
             name: "reviewer",
             description: "Review code.",
             prompt: "review",
@@ -229,7 +223,7 @@ defmodule Nex.Agent.ToolAlignmentTest do
     definition =
       AskAdvisor.definition(
         subagent_profiles: %{
-          "advisor" => %Nex.Agent.Subagent.Profile{
+          "advisor" => %Nex.Agent.Capability.Subagent.Profile{
             name: "advisor",
             description: "Advise.",
             prompt: "advise",
@@ -254,6 +248,28 @@ defmodule Nex.Agent.ToolAlignmentTest do
     assert "ask_advisor" in all_names
     refute "ask_advisor" in follow_up_names
     refute "ask_advisor" in subagent_names
+  end
+
+  test "disabled optional tool plugin removes definitions and direct execution" do
+    config =
+      Config.from_map(%{
+        "plugins" => %{
+          "disabled" => ["builtin:tool.image-generation", "builtin:workflow.personal-task"]
+        }
+      })
+
+    names =
+      Registry.definitions(:all, config: config)
+      |> Enum.map(& &1["name"])
+
+    refute "image_generation" in names
+    refute "task" in names
+
+    assert {:error, reason} = Registry.execute("image_generation", %{}, %{config: config})
+    assert reason =~ "Unknown tool: image_generation"
+
+    assert {:error, reason} = Registry.execute("task", %{"action" => "list"}, %{config: config})
+    assert reason =~ "Unknown tool: task"
   end
 
   test "hook tool stays owner-only and out of restricted tool surfaces" do
@@ -284,8 +300,8 @@ defmodule Nex.Agent.ToolAlignmentTest do
 
   test "web_search stays a single function tool name on official codex backend" do
     config =
-      %Nex.Agent.Config{
-        Nex.Agent.Config.default()
+      %Nex.Agent.Runtime.Config{
+        Nex.Agent.Runtime.Config.default()
         | tools: %{
             "web_search" => %{
               "provider" => "codex",
@@ -310,8 +326,8 @@ defmodule Nex.Agent.ToolAlignmentTest do
 
   test "image_generation is exposed as a single function tool on official codex backend" do
     config =
-      %Nex.Agent.Config{
-        Nex.Agent.Config.default()
+      %Nex.Agent.Runtime.Config{
+        Nex.Agent.Runtime.Config.default()
         | tools: %{
             "image_generation" => %{
               "provider" => "codex",
@@ -338,8 +354,8 @@ defmodule Nex.Agent.ToolAlignmentTest do
     workspace: workspace
   } do
     codex_config =
-      %Nex.Agent.Config{
-        Nex.Agent.Config.default()
+      %Nex.Agent.Runtime.Config{
+        Nex.Agent.Runtime.Config.default()
         | tools: %{
             "web_search" => %{
               "provider" => "codex",

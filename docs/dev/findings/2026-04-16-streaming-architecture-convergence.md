@@ -6,7 +6,7 @@
 
 当前 phase3 主链已经成立，尤其是下面三点是对的：
 
-- 统一事件流和 `%Nex.Agent.Stream.Result{}` 已经把“用户可见交付”和“内部收尾值”拆开。
+- 统一事件流和 `%Nex.Agent.Turn.Stream.Result{}` 已经把“用户可见交付”和“内部收尾值”拆开。
 - `InboundWorker` 负责 session 生命周期、`Runner` 负责生产事件，这个大方向是成立的。
 - Feishu 特化没有重新散落回 agent loop 主干。
 
@@ -132,7 +132,7 @@ phase3a 应把 `MessageSession` 明确改成能力导向命名，例如 `MultiMe
 
 `Stream.Session.finalize_success/2` 现在接受：
 
-- `%Nex.Agent.Stream.Result{}`
+- `%Nex.Agent.Turn.Stream.Result{}`
 - `:message_sent`
 - `String.t()`
 

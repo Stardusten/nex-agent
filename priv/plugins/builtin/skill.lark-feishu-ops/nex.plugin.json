@@ -1,0 +1,16 @@
+{
+  "id": "builtin:skill.lark-feishu-ops",
+  "title": "Lark And Feishu Ops Skill",
+  "version": "0.1.0",
+  "enabled": true,
+  "source": "builtin",
+  "description": "Builtin Feishu/Lark operations and native message workflow skill.",
+  "contributes": {
+    "skills": [
+      {
+        "id": "builtin:lark-feishu-ops",
+        "path": "skills/lark-feishu-ops/SKILL.md"
+      }
+    ]
+  }
+}

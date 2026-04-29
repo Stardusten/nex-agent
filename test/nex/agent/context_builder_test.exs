@@ -1,9 +1,9 @@
-defmodule Nex.Agent.ContextBuilderTest do
+defmodule Nex.Agent.Turn.ContextBuilderTest do
   use ExUnit.Case, async: false
 
   Code.require_file("layer_contract_helper.exs", __DIR__)
 
-  alias Nex.Agent.{Config, ContextBuilder}
+  alias Nex.Agent.{Runtime.Config, Turn.ContextBuilder}
   alias Nex.Agent.LayerContractHelper
 
   setup do

@@ -1,10 +1,10 @@
 defmodule Nex.Agent.Tool.AskAdvisorTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{Config, Session}
-  alias Nex.Agent.ControlPlane.Query
+  alias Nex.Agent.{Runtime.Config, Conversation.Session}
+  alias Nex.Agent.Observe.ControlPlane.Query
   alias Nex.Agent.Runtime.Snapshot
-  alias Nex.Agent.Subagent.Profile
+  alias Nex.Agent.Capability.Subagent.Profile
   alias Nex.Agent.Tool.AskAdvisor
 
   setup do

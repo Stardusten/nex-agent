@@ -4,11 +4,11 @@
 
 当前 channel 相关真相源分散在多处：
 
-- `Nex.Agent.Config` 知道 channel type、默认 streaming、Discord `show_table_as` 规范化。
-- `Nex.Agent.Gateway` 通过私有分支把 channel type 映射到 channel GenServer module。
-- `Nex.Agent.ContextBuilder` 同时硬编码全局 channel output rules 和 per-channel runtime prompt。
-- `Nex.Agent.IMIR` 通过私有分支选择 Feishu / Discord parser profile。
-- `Nex.Agent.IMIR.Renderers.*` 和 channel module 各自知道如何渲染或发送。
+- `Nex.Agent.Runtime.Config` 知道 channel type、默认 streaming、Discord `show_table_as` 规范化。
+- `Nex.Agent.Interface.Gateway` 通过私有分支把 channel type 映射到 channel GenServer module。
+- `Nex.Agent.Turn.ContextBuilder` 同时硬编码全局 channel output rules 和 per-channel runtime prompt。
+- `Nex.Agent.Interface.IMIR` 通过私有分支选择 Feishu / Discord parser profile。
+- `Nex.Agent.Interface.IMIR.Renderers.*` 和 channel module 各自知道如何渲染或发送。
 - `Nex.Agent.Runtime.Snapshot.channels` 只是 config runtime 投影，不知道 channel 的 prompt / renderer / gateway spec。
 
 这导致新增或调整一个 channel 时，执行者必须在多个文件里人工同步同一件事。以 Discord 为例，格式 prompt 藏在 `ContextBuilder` 中，parser heading 能力藏在 `IMIR.Parser` 中，table mode 藏在 `Config` 和 renderer 中；reviewer 很难确认一个 channel 的完整 contract 是否一致。
@@ -19,8 +19,8 @@
 
 Phase 19 结束时仓库必须满足：
 
-1. 新增 `Nex.Agent.Channel.Spec` behaviour，冻结 channel spec 最小接口。
-2. 新增 `Nex.Agent.Channel.Catalog`，作为内置 channel type 的唯一注册入口。
+1. 新增 `Nex.Agent.Interface.Channel.Spec` behaviour，冻结 channel spec 最小接口。
+2. 新增 `Nex.Agent.Interface.Channel.Catalog`，作为内置 channel type 的唯一注册入口。
 3. Feishu 和 Discord 都有独立 spec module，并且只通过 catalog 暴露给 Config / Gateway / ContextBuilder / IMIR。
 4. `ContextBuilder` 不再硬编码 Discord / Feishu format prompt。
 5. `ContextBuilder.build_runtime_context/3` 只输出 runtime metadata，不再混入 format 指令。
@@ -65,7 +65,7 @@ Phase 19 结束时仓库必须满足：
 1. Channel catalog 是 channel type 的 CODE 层唯一注册入口。
 
 ```elixir
-defmodule Nex.Agent.Channel.Catalog do
+defmodule Nex.Agent.Interface.Channel.Catalog do
   @spec all() :: [module()]
   def all
 
@@ -84,8 +84,8 @@ end
 
 ```elixir
 [
-  Nex.Agent.Channel.Specs.Feishu,
-  Nex.Agent.Channel.Specs.Discord
+  Nex.Agent.Interface.Channel.Specs.Feishu,
+  Nex.Agent.Interface.Channel.Specs.Discord
 ]
 ```
 
@@ -94,7 +94,7 @@ end
 3. Channel spec behaviour 最小接口冻结为：
 
 ```elixir
-defmodule Nex.Agent.Channel.Spec do
+defmodule Nex.Agent.Interface.Channel.Spec do
   @type instance_config :: map()
   @type runtime_config :: map()
   @type diagnostic :: %{
@@ -129,10 +129,10 @@ lib/nex/agent/channel/specs/discord.ex
 Module names:
 
 ```elixir
-Nex.Agent.Channel.Spec
-Nex.Agent.Channel.Catalog
-Nex.Agent.Channel.Specs.Feishu
-Nex.Agent.Channel.Specs.Discord
+Nex.Agent.Interface.Channel.Spec
+Nex.Agent.Interface.Channel.Catalog
+Nex.Agent.Interface.Channel.Specs.Feishu
+Nex.Agent.Interface.Channel.Specs.Discord
 ```
 
 5. `config_contract/0` 是 channel config / Workbench editing metadata 的真相源。
@@ -586,8 +586,8 @@ Stage 5 depends on Stages 2, 3, and 4.
 
 ### 这一步要做
 
-- Define `Nex.Agent.Channel.Spec` behaviour exactly as frozen above.
-- Implement `Nex.Agent.Channel.Catalog` with a static list of Feishu and Discord specs.
+- Define `Nex.Agent.Interface.Channel.Spec` behaviour exactly as frozen above.
+- Implement `Nex.Agent.Interface.Channel.Catalog` with a static list of Feishu and Discord specs.
 - Implement Feishu spec:
   - `type/0` returns `"feishu"`.
   - `gateway_module/0` returns `Nex.Agent.Channel.Feishu`.
@@ -596,8 +596,8 @@ Stage 5 depends on Stages 2, 3, and 4.
   - `validate_instance/2` enforces enabled Feishu requires `app_id` and `app_secret`.
   - `runtime/1` returns only non-secret runtime keys.
   - `format_prompt/2` returns hand-written Feishu output contract.
-  - `im_profile/0` returns `Nex.Agent.IMIR.Profiles.Feishu.profile()`.
-  - `renderer/0` returns `Nex.Agent.IMIR.Renderers.Feishu`.
+  - `im_profile/0` returns `Nex.Agent.Interface.IMIR.Profiles.Feishu.profile()`.
+  - `renderer/0` returns `Nex.Agent.Interface.IMIR.Renderers.Feishu`.
 - Implement Discord spec:
   - `type/0` returns `"discord"`.
   - `gateway_module/0` returns `Nex.Agent.Channel.Discord`.
@@ -606,8 +606,8 @@ Stage 5 depends on Stages 2, 3, and 4.
   - `validate_instance/2` enforces enabled Discord requires `token`.
   - `runtime/1` returns only non-secret runtime keys.
   - `format_prompt/2` returns hand-written Discord output contract, including no h4/h5/h6 and bold standalone labels.
-  - `im_profile/0` returns `Nex.Agent.IMIR.Profiles.Discord.profile()`.
-  - `renderer/0` returns `Nex.Agent.IMIR.Renderers.Discord`.
+  - `im_profile/0` returns `Nex.Agent.Interface.IMIR.Profiles.Discord.profile()`.
+  - `renderer/0` returns `Nex.Agent.Interface.IMIR.Renderers.Discord`.
 
 ### 实施注意事项
 
@@ -687,7 +687,7 @@ mix test test/nex/agent/channel_spec_test.exs
 ### 实施注意事项
 
 - Do not preserve old Config helper branches as fallback.
-- Do not add a second channel registry. `Nex.Agent.Channel.Registry` remains runtime instance/pid registry; `Nex.Agent.Channel.Catalog` is type/spec catalog.
+- Do not add a second channel registry. `Nex.Agent.Interface.Channel.Registry` remains runtime instance/pid registry; `Nex.Agent.Interface.Channel.Catalog` is type/spec catalog.
 - Config must not leak secrets into `channels_runtime`.
 - Unknown channel type should be invalid config, not silently treated as plain text.
 - Workbench raw config views must preserve env references and keep secret redaction behavior.
@@ -864,7 +864,7 @@ mix test test/nex/agent/channel_spec_test.exs
 ### 本 stage 验收
 
 - The only Feishu/Discord specific format prompt text lives under `lib/nex/agent/channel/specs/`.
-- The only built-in channel type registration list lives in `Nex.Agent.Channel.Catalog`.
+- The only built-in channel type registration list lives in `Nex.Agent.Interface.Channel.Catalog`.
 - `ContextBuilder` only orchestrates prompt assembly and no longer owns platform-specific format copy.
 - `Config` uses catalog/spec for channel type behavior.
 - `Workbench.ConfigPanel` uses catalog/spec for channel type behavior and raw config editing metadata.

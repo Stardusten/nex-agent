@@ -6,7 +6,7 @@ defmodule Nex.Agent.Runtime.Reconciler do
   use GenServer
   require Logger
 
-  alias Nex.Agent.{Gateway, Runtime}
+  alias Nex.Agent.{Interface.Gateway, Runtime}
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do

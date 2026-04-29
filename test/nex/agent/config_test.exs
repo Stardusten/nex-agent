@@ -1,8 +1,8 @@
-defmodule Nex.Agent.ConfigTest do
+defmodule Nex.Agent.Runtime.ConfigTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.Auth.Codex
-  alias Nex.Agent.Config
+  alias Nex.Agent.Interface.Auth.Codex
+  alias Nex.Agent.Runtime.Config
 
   test "loads new config shape and resolves model roles" do
     previous = System.get_env("HY3_API_KEY")
@@ -27,6 +27,8 @@ defmodule Nex.Agent.ConfigTest do
              "port" => 50_051,
              "apps" => %{}
            }
+
+    assert Config.plugins_runtime(config) == %{"disabled" => [], "enabled" => %{}}
 
     assert %{
              model_key: "hy3-preview",
@@ -203,6 +205,22 @@ defmodule Nex.Agent.ConfigTest do
     assert [diagnostic] == Config.channel_diagnostics(config)
   end
 
+  test "disabled channel plugin makes matching channel runtime unavailable" do
+    config =
+      Config.from_map(%{
+        full_config()
+        | "plugins" => %{"disabled" => ["builtin:channel.discord"]}
+      })
+
+    assert Config.channel_instance(config, "discord_kai")["type"] == "discord"
+    assert {:error, diagnostic} = Config.channel_runtime(config, "discord_kai")
+    assert diagnostic.code == :unknown_channel_type
+    assert diagnostic.type == "discord"
+
+    refute Map.has_key?(Config.channels_runtime(config), "discord_kai")
+    assert Enum.any?(Config.channel_diagnostics(config), &(&1.instance_id == "discord_kai"))
+  end
+
   test "channel diagnostics report missing enabled requirements" do
     config =
       Config.from_map(%{
@@ -267,6 +285,74 @@ defmodule Nex.Agent.ConfigTest do
     assert get_in(loaded.provider, ["providers", "hy3-tencent", "api_key"]) == %{
              "env" => "HY3_API_KEY"
            }
+  end
+
+  test "plugin config normalizes enablement with disabled preserved" do
+    config =
+      Config.from_map(%{
+        full_config()
+        | "plugins" => %{
+            "disabled" => [" builtin:tool.web ", "bad id", "builtin:tool.web"],
+            "enabled" => %{
+              "workspace:notes" => true,
+              "workspace:falsey" => false,
+              "bad id" => true
+            }
+          }
+      })
+
+    assert Config.plugins_runtime(config) == %{
+             "disabled" => ["builtin:tool.web"],
+             "enabled" => %{"workspace:notes" => true}
+           }
+  end
+
+  test "unknown provider types are preserved and do not fall back to openai" do
+    config =
+      Config.from_map(%{
+        full_config()
+        | "provider" => %{
+            "providers" => %{
+              "hy3-tencent" => %{
+                "type" => "future-provider",
+                "api_key" => %{"env" => "HY3_API_KEY"}
+              }
+            }
+          },
+          "model" => %{
+            "default_model" => "hy3-preview",
+            "models" => %{
+              "hy3-preview" => %{"provider" => "hy3-tencent", "id" => "hy3-preview"}
+            }
+          }
+      })
+
+    assert get_in(config.provider, ["providers", "hy3-tencent", "type"]) == "future-provider"
+    assert Config.default_model_runtime(config) == nil
+
+    assert [
+             %{
+               code: :unknown_provider_type,
+               provider_key: "hy3-tencent",
+               type: "future-provider"
+             }
+           ] = Config.provider_diagnostics(config)
+  end
+
+  test "disabled provider plugin makes matching model runtime unavailable" do
+    config =
+      Config.from_map(%{
+        full_config()
+        | "plugins" => %{"disabled" => ["builtin:provider.openai-compatible"]}
+      })
+
+    assert Config.default_model_runtime(config) == nil
+
+    assert Enum.any?(Config.provider_diagnostics(config), fn diagnostic ->
+             diagnostic.code == :disabled_provider_type and
+               diagnostic.provider_key == "hy3-tencent" and
+               diagnostic.type == "openai-compatible"
+           end)
   end
 
   test "workbench runtime is normalized under gateway config" do
@@ -572,7 +658,8 @@ defmodule Nex.Agent.ConfigTest do
           "provider" => "codex",
           "providers" => %{"codex" => %{"output_format" => "png"}}
         }
-      }
+      },
+      "plugins" => %{}
     }
   end
 

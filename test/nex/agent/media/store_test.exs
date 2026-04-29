@@ -1,7 +1,7 @@
-defmodule Nex.Agent.Media.StoreTest do
+defmodule Nex.Agent.Interface.Media.StoreTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.Media.Store
+  alias Nex.Agent.Interface.Media.Store
 
   test "put_binary persists inbound media under workspace media dir" do
     workspace =

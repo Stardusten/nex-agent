@@ -1,0 +1,16 @@
+{
+  "id": "builtin:provider.anthropic",
+  "title": "Anthropic Provider",
+  "version": "0.1.0",
+  "enabled": true,
+  "source": "builtin",
+  "description": "Built-in Anthropic provider adapter.",
+  "contributes": {
+    "providers": [
+      {
+        "type": "anthropic",
+        "adapter_module": "Nex.Agent.LLM.Providers.Anthropic"
+      }
+    ]
+  }
+}

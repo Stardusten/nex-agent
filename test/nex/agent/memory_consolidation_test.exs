@@ -1,7 +1,7 @@
-defmodule Nex.Agent.MemoryConsolidationTest do
+defmodule Nex.Agent.Knowledge.MemoryConsolidationTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{Memory, Runner, Session}
+  alias Nex.Agent.{Knowledge.Memory, Turn.Runner, Conversation.Session}
 
   setup do
     workspace =

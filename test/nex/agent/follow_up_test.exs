@@ -1,7 +1,7 @@
-defmodule Nex.Agent.FollowUpTest do
+defmodule Nex.Agent.Conversation.FollowUpTest do
   use ExUnit.Case, async: true
 
-  alias Nex.Agent.{FollowUp, RunControl}
+  alias Nex.Agent.{Conversation.FollowUp, Conversation.RunControl}
 
   test "busy prompt requires observe for status and incident questions" do
     run = %RunControl.Run{

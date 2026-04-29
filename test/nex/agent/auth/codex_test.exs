@@ -1,7 +1,7 @@
-defmodule Nex.Agent.Auth.CodexTest do
+defmodule Nex.Agent.Interface.Auth.CodexTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.Auth.Codex
+  alias Nex.Agent.Interface.Auth.Codex
 
   test "resolve_access_token refreshes expired codex tokens and persists them" do
     tmp_dir =

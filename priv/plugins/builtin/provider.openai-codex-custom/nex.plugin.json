@@ -1,0 +1,16 @@
+{
+  "id": "builtin:provider.openai-codex-custom",
+  "title": "OpenAI Codex Custom Provider",
+  "version": "0.1.0",
+  "enabled": true,
+  "source": "builtin",
+  "description": "Built-in OpenAI Codex-compatible custom endpoint provider adapter.",
+  "contributes": {
+    "providers": [
+      {
+        "type": "openai-codex-custom",
+        "adapter_module": "Nex.Agent.LLM.Providers.OpenAICodexCustom"
+      }
+    ]
+  }
+}

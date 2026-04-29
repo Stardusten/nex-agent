@@ -3,7 +3,7 @@
 ## 结论先放前面
 
 - `nex-agent` 目前没有统一的“增量事件流”主链。
-- `Nex.Agent.LLM.ReqLLM.stream/3` 已存在，但 `Runner` 主链仍走一次性 `chat` 返回，不会把模型增量直接交给 channel。
+- `Nex.Agent.Turn.LLM.ReqLLM.stream/3` 已存在，但 `Runner` 主链仍走一次性 `chat` 返回，不会把模型增量直接交给 channel。
 - 不同 IM 的能力边界不同，必须把“assistant 增量输出 contract”和“平台传输策略”拆开。
 - 第一版统一抽象不应该绑定“同步返回值”或“回调风格”，而应该绑定“事件流语义”。
 - 平台传输至少分三类：

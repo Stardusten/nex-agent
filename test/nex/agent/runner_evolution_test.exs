@@ -1,5 +1,5 @@
 defmodule Nex.Agent.Test.MalformedTool do
-  @behaviour Nex.Agent.Tool.Behaviour
+  @behaviour Nex.Agent.Capability.Tool.Behaviour
 
   def name, do: "malformed_tool"
   def description, do: "Returns a bare map instead of a tagged tuple"
@@ -21,7 +21,7 @@ defmodule Nex.Agent.Test.MalformedTool do
 end
 
 defmodule Nex.Agent.Test.SecretFailTool do
-  @behaviour Nex.Agent.Tool.Behaviour
+  @behaviour Nex.Agent.Capability.Tool.Behaviour
 
   def name, do: "secret_fail_tool"
   def description, do: "Fails while receiving secret-like args"
@@ -42,22 +42,22 @@ defmodule Nex.Agent.Test.SecretFailTool do
   def execute(_args, _ctx), do: {:error, "forced failure"}
 end
 
-defmodule Nex.Agent.RunnerEvolutionTest do
+defmodule Nex.Agent.Turn.RunnerEvolutionTest do
   use ExUnit.Case, async: false
 
   alias Nex.Agent.{
-    Bus,
-    ContextBuilder,
-    Media.Attachment,
-    Onboarding,
-    RequestTrace,
-    Runner,
-    Session,
-    SessionManager,
-    Skills
+    App.Bus,
+    Turn.ContextBuilder,
+    Interface.Media.Attachment,
+    App.Onboarding,
+    Observe.Compat.RequestTrace,
+    Turn.Runner,
+    Conversation.Session,
+    Conversation.SessionManager,
+    Capability.Skills
   }
 
-  alias Nex.Agent.ControlPlane.Query, as: ControlPlaneQuery
+  alias Nex.Agent.Observe.ControlPlane.Query, as: ControlPlaneQuery
 
   @feishu_instance "feishu_runner_evolution"
   @feishu_topic {:channel_outbound, @feishu_instance}
@@ -89,8 +89,10 @@ defmodule Nex.Agent.RunnerEvolutionTest do
       start_supervised!({SessionManager, name: SessionManager})
     end
 
-    if Process.whereis(Nex.Agent.Tool.Registry) == nil do
-      start_supervised!({Nex.Agent.Tool.Registry, name: Nex.Agent.Tool.Registry})
+    if Process.whereis(Nex.Agent.Capability.Tool.Registry) == nil do
+      start_supervised!(
+        {Nex.Agent.Capability.Tool.Registry, name: Nex.Agent.Capability.Tool.Registry}
+      )
     end
 
     on_exit(fn ->
@@ -379,12 +381,12 @@ defmodule Nex.Agent.RunnerEvolutionTest do
   end
 
   test "runner failed tool evidence uses redacted bounded args summary", %{workspace: workspace} do
-    Nex.Agent.Tool.Registry.register(Nex.Agent.Test.SecretFailTool)
+    Nex.Agent.Capability.Tool.Registry.register(Nex.Agent.Test.SecretFailTool)
     wait_for_registry_tool("secret_fail_tool", Nex.Agent.Test.SecretFailTool)
 
     on_exit(fn ->
-      Nex.Agent.Tool.Registry.unregister("secret_fail_tool")
-      Nex.Agent.Tool.Registry.list()
+      Nex.Agent.Capability.Tool.Registry.unregister("secret_fail_tool")
+      Nex.Agent.Capability.Tool.Registry.list()
     end)
 
     secret = "sk-runner-secret"
@@ -649,12 +651,12 @@ defmodule Nex.Agent.RunnerEvolutionTest do
   end
 
   test "runner does not crash when a tool returns a bare map", %{workspace: workspace} do
-    Nex.Agent.Tool.Registry.register(Nex.Agent.Test.MalformedTool)
-    assert "malformed_tool" in Nex.Agent.Tool.Registry.list()
+    Nex.Agent.Capability.Tool.Registry.register(Nex.Agent.Test.MalformedTool)
+    assert "malformed_tool" in Nex.Agent.Capability.Tool.Registry.list()
 
     on_exit(fn ->
-      Nex.Agent.Tool.Registry.unregister("malformed_tool")
-      Nex.Agent.Tool.Registry.list()
+      Nex.Agent.Capability.Tool.Registry.unregister("malformed_tool")
+      Nex.Agent.Capability.Tool.Registry.list()
     end)
 
     llm_client = fn messages, _opts ->
@@ -808,7 +810,7 @@ defmodule Nex.Agent.RunnerEvolutionTest do
             },
             %{
               "role" => "tool",
-              "content" => "defmodule Nex.Agent.Runner do\n",
+              "content" => "defmodule Nex.Agent.Turn.Runner do\n",
               "timestamp" => now,
               "tool_call_id" => tool_call_id,
               "name" => "read"
@@ -1191,7 +1193,7 @@ defmodule Nex.Agent.RunnerEvolutionTest do
   defp wait_for_registry_tool(_name, _module, 0), do: :ok
 
   defp wait_for_registry_tool(name, module, attempts) do
-    if Nex.Agent.Tool.Registry.get(name) == module do
+    if Nex.Agent.Capability.Tool.Registry.get(name) == module do
       :ok
     else
       Process.sleep(10)

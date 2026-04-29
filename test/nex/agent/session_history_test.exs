@@ -1,7 +1,7 @@
-defmodule Nex.Agent.SessionHistoryTest do
+defmodule Nex.Agent.Conversation.SessionHistoryTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.Session
+  alias Nex.Agent.Conversation.Session
 
   test "get_history prepends the matching assistant tool call when the window starts at tool result" do
     session =
@@ -56,7 +56,7 @@ defmodule Nex.Agent.SessionHistoryTest do
       },
       %{
         "role" => "tool",
-        "content" => "defmodule Nex.Agent.Runner do\n",
+        "content" => "defmodule Nex.Agent.Turn.Runner do\n",
         "timestamp" => now,
         "tool_call_id" => tool_call_id,
         "name" => "read"

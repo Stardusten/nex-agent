@@ -1,10 +1,10 @@
 defmodule Nex.Agent.Channel.FeishuStreamConverterTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{Bus, Config}
+  alias Nex.Agent.{App.Bus, Runtime.Config}
   alias Nex.Agent.Channel.Feishu
   alias Nex.Agent.Channel.Feishu.StreamConverter
-  alias Nex.Agent.Channel.Registry, as: ChannelRegistry
+  alias Nex.Agent.Interface.Channel.Registry, as: ChannelRegistry
 
   @instance_id "feishu_stream_test"
 

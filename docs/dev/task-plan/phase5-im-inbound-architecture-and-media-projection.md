@@ -40,7 +40,7 @@ raw event
 ```
 
 - `ContextBuilder` 不再直接认识各 channel 私有 `metadata["media"]` shape。
-- `Runner` / `ContextBuilder` 的媒体输入冻结为 `[Nex.Agent.Media.Attachment.t()]`。
+- `Runner` / `ContextBuilder` 的媒体输入冻结为 `[Nex.Agent.Interface.Media.Attachment.t()]`。
 - Feishu first-path 完整落地：
   - image message
   - post 内图片资源
@@ -80,14 +80,14 @@ raw event
    - 不把 attachment 写进 `Session.add_message/4` 主格式
 
 2. 入站主链统一由三个内部结构承接：
-   - `Nex.Agent.Inbound.Envelope`
-   - `Nex.Agent.Media.Ref`
-   - `Nex.Agent.Media.Attachment`
+   - `Nex.Agent.Interface.Inbound.Envelope`
+   - `Nex.Agent.Interface.Media.Ref`
+   - `Nex.Agent.Interface.Media.Attachment`
 
 最小代码 shape 冻结为：
 
 ```elixir
-defmodule Nex.Agent.Inbound.Envelope do
+defmodule Nex.Agent.Interface.Inbound.Envelope do
   @enforce_keys [:channel, :chat_id, :sender_id, :text, :message_type, :raw, :metadata]
   defstruct [
     :channel,
@@ -104,7 +104,7 @@ defmodule Nex.Agent.Inbound.Envelope do
   ]
 end
 
-defmodule Nex.Agent.Media.Ref do
+defmodule Nex.Agent.Interface.Media.Ref do
   @enforce_keys [:channel, :kind, :platform_ref]
   defstruct [
     :channel,
@@ -117,7 +117,7 @@ defmodule Nex.Agent.Media.Ref do
   ]
 end
 
-defmodule Nex.Agent.Media.Attachment do
+defmodule Nex.Agent.Interface.Media.Attachment do
   @enforce_keys [:id, :channel, :kind, :mime_type, :local_path, :source, :platform_ref]
   defstruct [
     :id,
@@ -138,7 +138,7 @@ end
 3. `ContextBuilder.build_messages/6` 的媒体输入冻结为：
 
 ```elixir
-media :: [Nex.Agent.Media.Attachment.t()] | nil
+media :: [Nex.Agent.Interface.Media.Attachment.t()] | nil
 ```
 
 4. `ContextBuilder` 不再接收 channel 私有 media map 作为长期 contract。
@@ -157,8 +157,8 @@ media :: [Nex.Agent.Media.Attachment.t()] | nil
    - 本地文件上传、Feishu `image_key/file_key` 出站发送属于 phase6
 
 9. `Inbound.Envelope` 是跨模块真相源。
-   - Bus 发布的 inbound payload 必须是 `%Nex.Agent.Inbound.Envelope{}`
-   - `InboundWorker` 直接消费 `%Nex.Agent.Inbound.Envelope{}`
+   - Bus 发布的 inbound payload 必须是 `%Nex.Agent.Interface.Inbound.Envelope{}`
+   - `InboundWorker` 直接消费 `%Nex.Agent.Interface.Inbound.Envelope{}`
    - 不再允许“旧式 payload map + metadata 新字段”并行存在
 
 10. `Runner` 与 `ContextBuilder` 的最小调用 contract 冻结为：
@@ -187,8 +187,8 @@ messages =
 11. `ContextBuilder` 与 provider projection 的最小接口冻结为：
 
 ```elixir
-defmodule Nex.Agent.Media.Projector do
-  @spec project_for_model([Nex.Agent.Media.Attachment.t()] | nil, keyword()) :: [map()]
+defmodule Nex.Agent.Interface.Media.Projector do
+  @spec project_for_model([Nex.Agent.Interface.Media.Attachment.t()] | nil, keyword()) :: [map()]
 end
 
 # image first-path target shape
@@ -307,7 +307,7 @@ def image?(_), do: false
 Feishu image ref 直接按下面 shape 落：
 
 ```elixir
-%Nex.Agent.Media.Ref{
+%Nex.Agent.Interface.Media.Ref{
   channel: "feishu",
   kind: :image,
   message_id: message_id,
@@ -324,7 +324,7 @@ Feishu image ref 直接按下面 shape 落：
 Feishu file/audio/media ref 直接按下面 shape 落：
 
 ```elixir
-%Nex.Agent.Media.Ref{
+%Nex.Agent.Interface.Media.Ref{
   channel: "feishu",
   kind: :file | :audio | :video,
   message_id: message_id,
@@ -354,7 +354,7 @@ Feishu file/audio/media ref 直接按下面 shape 落：
 Bus inbound payload 主链最小 shape 冻结为：
 
 ```elixir
-%Nex.Agent.Inbound.Envelope{
+%Nex.Agent.Interface.Inbound.Envelope{
   channel: "feishu",
   chat_id: reply_target,
   sender_id: sender_id,
@@ -417,8 +417,8 @@ Bus inbound payload 主链最小 shape 冻结为：
 `Media.Store` 第一版接口直接按下面落：
 
 ```elixir
-defmodule Nex.Agent.Media.Store do
-  @spec put_binary(binary(), keyword()) :: {:ok, Nex.Agent.Media.Attachment.t()} | {:error, term()}
+defmodule Nex.Agent.Interface.Media.Store do
+  @spec put_binary(binary(), keyword()) :: {:ok, Nex.Agent.Interface.Media.Attachment.t()} | {:error, term()}
   @spec media_dir(keyword()) :: String.t()
 end
 ```
@@ -432,9 +432,9 @@ end
 hydrator 接口直接按下面落：
 
 ```elixir
-defmodule Nex.Agent.Media.Hydrator do
-  @spec hydrate_refs([Nex.Agent.Media.Ref.t()], keyword()) ::
-          {[Nex.Agent.Media.Attachment.t()], [Nex.Agent.Media.Ref.t()]}
+defmodule Nex.Agent.Interface.Media.Hydrator do
+  @spec hydrate_refs([Nex.Agent.Interface.Media.Ref.t()], keyword()) ::
+          {[Nex.Agent.Interface.Media.Attachment.t()], [Nex.Agent.Interface.Media.Ref.t()]}
 end
 ```
 
@@ -461,7 +461,7 @@ end
 第一版 image attachment 直接按下面 shape 落：
 
 ```elixir
-%Nex.Agent.Media.Attachment{
+%Nex.Agent.Interface.Media.Attachment{
   id: "media_" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower),
   channel: "feishu",
   kind: :image,
@@ -530,8 +530,8 @@ end
 `Media.Projector` 第一版接口和返回值直接按下面落：
 
 ```elixir
-defmodule Nex.Agent.Media.Projector do
-  @spec project_for_model([Nex.Agent.Media.Attachment.t()] | nil, keyword()) :: [map()]
+defmodule Nex.Agent.Interface.Media.Projector do
+  @spec project_for_model([Nex.Agent.Interface.Media.Attachment.t()] | nil, keyword()) :: [map()]
 end
 ```
 
@@ -571,7 +571,7 @@ end
 defp build_user_content(text, nil), do: text
 
 defp build_user_content(text, attachments) when is_list(attachments) and attachments != [] do
-  projected = Nex.Agent.Media.Projector.project_for_model(attachments, [])
+  projected = Nex.Agent.Interface.Media.Projector.project_for_model(attachments, [])
   projected ++ [%{"type" => "text", "text" => text}]
 end
 ```
@@ -620,7 +620,7 @@ end
 
 ### 这一步要做
 
-- `InboundWorker` 直接消费 `%Nex.Agent.Inbound.Envelope{}`。
+- `InboundWorker` 直接消费 `%Nex.Agent.Interface.Inbound.Envelope{}`。
 - 删除旧 `extract_media/1` 长期路径。
 - `Runner` 的 `opts[:media]` 语义冻结为 attachments。
 - 清掉现有硬编码的“只认 image media map”调用链。
@@ -628,7 +628,7 @@ end
 `InboundWorker` 主链 helper 伪代码冻结为：
 
 ```elixir
-defp handle_inbound(%Nex.Agent.Inbound.Envelope{} = envelope, state) do
+defp handle_inbound(%Nex.Agent.Interface.Inbound.Envelope{} = envelope, state) do
   content = envelope.text
   attachments = envelope.attachments
   dispatch_async(state, key, session_key, workspace, content, envelope, attachments)

@@ -1,9 +1,9 @@
 defmodule Nex.Agent.ControlPlaneGaugeTest do
   use ExUnit.Case, async: true
 
-  require Nex.Agent.ControlPlane.Gauge
+  require Nex.Agent.Observe.ControlPlane.Gauge
 
-  alias Nex.Agent.ControlPlane.{Gauge, Query, Store}
+  alias Nex.Agent.Observe.ControlPlane.{Gauge, Query, Store}
 
   setup do
     workspace = tmp_workspace("gauge")
@@ -13,7 +13,7 @@ defmodule Nex.Agent.ControlPlaneGaugeTest do
 
   test "set writes gauge observation and current gauge state", %{workspace: workspace} do
     assert {:ok, observation} =
-             Nex.Agent.ControlPlane.Gauge.set(
+             Nex.Agent.Observe.ControlPlane.Gauge.set(
                "run.owner.current",
                %{"phase" => "tool"},
                %{"queued" => 1},
@@ -39,7 +39,7 @@ defmodule Nex.Agent.ControlPlaneGaugeTest do
     workspace: workspace
   } do
     assert {:ok, _observation} =
-             Nex.Agent.ControlPlane.Gauge.set(
+             Nex.Agent.Observe.ControlPlane.Gauge.set(
                "run.owner.current",
                %{"api_key" => "sk-secret"},
                %{

@@ -1,7 +1,7 @@
 defmodule Nex.Agent.ControlPlaneBudgetTest do
   use ExUnit.Case, async: true
 
-  alias Nex.Agent.ControlPlane.{Budget, Query, Store}
+  alias Nex.Agent.Observe.ControlPlane.{Budget, Query, Store}
 
   setup do
     workspace = tmp_workspace("budget")

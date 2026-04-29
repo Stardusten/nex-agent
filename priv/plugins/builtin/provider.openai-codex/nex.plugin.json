@@ -1,0 +1,16 @@
+{
+  "id": "builtin:provider.openai-codex",
+  "title": "OpenAI Codex Provider",
+  "version": "0.1.0",
+  "enabled": true,
+  "source": "builtin",
+  "description": "Built-in OpenAI Codex Responses provider adapter.",
+  "contributes": {
+    "providers": [
+      {
+        "type": "openai-codex",
+        "adapter_module": "Nex.Agent.LLM.Providers.OpenAICodex"
+      }
+    ]
+  }
+}

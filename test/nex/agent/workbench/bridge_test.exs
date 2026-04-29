@@ -1,8 +1,8 @@
-defmodule Nex.Agent.Workbench.BridgeTest do
+defmodule Nex.Agent.Interface.Workbench.BridgeTest do
   use ExUnit.Case, async: true
 
-  alias Nex.Agent.ControlPlane.{Log, Query}
-  alias Nex.Agent.Workbench.{Bridge, Permissions, Store}
+  alias Nex.Agent.Observe.ControlPlane.{Log, Query}
+  alias Nex.Agent.Interface.Workbench.{Bridge, Permissions, Store}
   require Log
 
   setup do

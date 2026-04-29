@@ -1,7 +1,7 @@
-defmodule Nex.Agent.SelfUpdate.PlannerTest do
+defmodule Nex.Agent.Self.Update.PlannerTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.SelfUpdate.Planner
+  alias Nex.Agent.Self.Update.Planner
 
   setup do
     repo_root =
@@ -73,7 +73,7 @@ defmodule Nex.Agent.SelfUpdate.PlannerTest do
   test "plan rejects protected modules", %{repo_root: repo_root} do
     path = Path.join(repo_root, "lib/nex/agent/self_update/planner.ex")
     File.mkdir_p!(Path.dirname(path))
-    File.write!(path, "defmodule Nex.Agent.SelfUpdate.Planner do\nend\n")
+    File.write!(path, "defmodule Nex.Agent.Self.Update.Planner do\nend\n")
 
     assert {:error, message} = Planner.plan([path])
     assert message =~ "Protected module cannot be deployed via self_update"

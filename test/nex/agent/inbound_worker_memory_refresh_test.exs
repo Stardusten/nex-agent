@@ -1,8 +1,17 @@
-defmodule Nex.Agent.InboundWorkerMemoryRefreshTest do
+defmodule Nex.Agent.Conversation.InboundWorkerMemoryRefreshTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{Bus, Config, InboundWorker, Memory, MemoryUpdater, Session, SessionManager}
-  alias Nex.Agent.Inbound.Envelope
+  alias Nex.Agent.{
+    App.Bus,
+    Runtime.Config,
+    Conversation.InboundWorker,
+    Knowledge.Memory,
+    Conversation.Session,
+    Conversation.SessionManager
+  }
+
+  alias Nex.Agent.Interface.Inbound.Envelope
+  alias Nex.Agent.Knowledge.Memory.Updater, as: MemoryUpdater
 
   @feishu_instance "feishu_memory_refresh"
   @feishu_topic {:channel_outbound, @feishu_instance}

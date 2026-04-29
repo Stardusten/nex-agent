@@ -120,10 +120,10 @@ Hermes 的优点是：
 
 ## 冻结的数据结构
 
-### `Nex.Agent.Inbound.Envelope`
+### `Nex.Agent.Interface.Inbound.Envelope`
 
 ```elixir
-%Nex.Agent.Inbound.Envelope{
+%Nex.Agent.Interface.Inbound.Envelope{
   channel: String.t(),
   chat_id: String.t(),
   sender_id: String.t(),
@@ -133,8 +133,8 @@ Hermes 的优点是：
   message_type: atom(),
   raw: map(),
   metadata: map(),
-  media_refs: [Nex.Agent.Media.Ref.t()],
-  attachments: [Nex.Agent.Media.Attachment.t()]
+  media_refs: [Nex.Agent.Interface.Media.Ref.t()],
+  attachments: [Nex.Agent.Interface.Media.Attachment.t()]
 }
 ```
 
@@ -144,10 +144,10 @@ Hermes 的优点是：
 - `media_refs` 是未 hydrate 前的平台资源引用
 - `attachments` 是已落地本地文件后的统一媒体列表
 
-### `Nex.Agent.Media.Ref`
+### `Nex.Agent.Interface.Media.Ref`
 
 ```elixir
-%Nex.Agent.Media.Ref{
+%Nex.Agent.Interface.Media.Ref{
   channel: String.t(),
   kind: :image | :audio | :video | :file,
   message_id: String.t() | nil,
@@ -163,10 +163,10 @@ Hermes 的优点是：
 - `platform_ref` 保留 Feishu `image_key/file_key`、Telegram `file_id`、Discord attachment URL 等平台差异
 - 该 struct 只用于 hydrate 前阶段，不进入 prompt build
 
-### `Nex.Agent.Media.Attachment`
+### `Nex.Agent.Interface.Media.Attachment`
 
 ```elixir
-%Nex.Agent.Media.Attachment{
+%Nex.Agent.Interface.Media.Attachment{
   id: String.t(),
   channel: String.t(),
   kind: :image | :audio | :video | :file,

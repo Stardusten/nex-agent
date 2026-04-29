@@ -1,7 +1,7 @@
 defmodule Nex.Agent.ToolCreateValidationTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.Tool.CustomTools
+  alias Nex.Agent.Capability.Tool.CustomTools
 
   setup do
     root =
@@ -37,6 +37,6 @@ defmodule Nex.Agent.ToolCreateValidationTest do
                created_by: "test"
              )
 
-    assert reason =~ "declare @behaviour Nex.Agent.Tool.Behaviour"
+    assert reason =~ "declare @behaviour Nex.Agent.Capability.Tool.Behaviour"
   end
 end

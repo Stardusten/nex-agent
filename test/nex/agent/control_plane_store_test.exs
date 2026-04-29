@@ -1,7 +1,7 @@
 defmodule Nex.Agent.ControlPlaneStoreTest do
   use ExUnit.Case, async: true
 
-  alias Nex.Agent.ControlPlane.{Query, Store}
+  alias Nex.Agent.Observe.ControlPlane.{Query, Store}
 
   setup do
     workspace = tmp_workspace("store")
@@ -19,7 +19,7 @@ defmodule Nex.Agent.ControlPlaneStoreTest do
                  "level" => "error",
                  "tag" => "runner.tool.call.failed",
                  "source" => %{
-                   "module" => "Nex.Agent.Runner",
+                   "module" => "Nex.Agent.Turn.Runner",
                    "function" => "run/2",
                    "file" => "lib/nex/agent/runner.ex",
                    "line" => 42

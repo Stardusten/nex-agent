@@ -1,11 +1,20 @@
-defmodule Nex.Agent.AdminTest do
+defmodule Nex.Agent.Observe.AdminTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{Admin, Audit, Bus, CodeUpgrade, Session, Skills, Workspace}
-  alias Nex.Agent.ControlPlane.Log
-  alias Nex.Agent.SelfUpdate.ReleaseStore
-  alias Nex.Agent.Tool.CustomTools
-  alias Nex.Agent.Workbench.Store, as: WorkbenchStore
+  alias Nex.Agent.{
+    Observe.Admin,
+    Observe.Compat.Audit,
+    App.Bus,
+    Self.CodeUpgrade,
+    Conversation.Session,
+    Capability.Skills,
+    Runtime.Workspace
+  }
+
+  alias Nex.Agent.Observe.ControlPlane.Log
+  alias Nex.Agent.Self.Update.ReleaseStore
+  alias Nex.Agent.Capability.Tool.CustomTools
+  alias Nex.Agent.Interface.Workbench.Store, as: WorkbenchStore
   require Log
 
   setup do
@@ -215,7 +224,7 @@ defmodule Nex.Agent.AdminTest do
     assert :ok = Session.save(session, workspace: workspace)
 
     assert :ok =
-             Nex.Agent.Evolution.record_signal(
+             Nex.Agent.Self.Evolution.record_signal(
                %{source: :qa, signal: "needs triage", context: %{layer: "MEMORY"}},
                workspace: workspace
              )
@@ -290,10 +299,10 @@ defmodule Nex.Agent.AdminTest do
   end
 
   test "code upgrade source path resolves project source files" do
-    path = CodeUpgrade.source_path(Nex.Agent.Admin)
+    path = CodeUpgrade.source_path(Nex.Agent.Observe.Admin)
 
     assert File.exists?(path)
-    assert String.ends_with?(path, "/lib/nex/agent/admin.ex")
+    assert String.ends_with?(path, "/lib/nex/agent/observe/admin.ex")
   end
 
   test "code_state includes custom tool modules and reads their source" do
@@ -331,7 +340,7 @@ defmodule Nex.Agent.AdminTest do
       Path.join(tool_dir, "tool.ex"),
       """
       defmodule #{tool_module} do
-        @behaviour Nex.Agent.Tool.Behaviour
+        @behaviour Nex.Agent.Capability.Tool.Behaviour
 
         def name, do: "#{tool_name}"
         def definition, do: %{"name" => "#{tool_name}"}
@@ -356,7 +365,7 @@ defmodule Nex.Agent.AdminTest do
   test "code_state surfaces release history for selected module", %{repo_root: repo_root} do
     ReleaseStore.ensure_layout()
 
-    path = CodeUpgrade.source_path(Nex.Agent.Admin)
+    path = CodeUpgrade.source_path(Nex.Agent.Observe.Admin)
 
     :ok =
       ReleaseStore.save_release(%{
@@ -371,19 +380,19 @@ defmodule Nex.Agent.AdminTest do
             "after_sha" => "b"
           }
         ],
-        "modules" => ["Nex.Agent.Admin"],
+        "modules" => ["Nex.Agent.Observe.Admin"],
         "tests" => [],
         "status" => "deployed"
       })
 
-    state = Admin.code_state(module: "Nex.Agent.Admin")
+    state = Admin.code_state(module: "Nex.Agent.Observe.Admin")
 
     assert [%{"id" => "rel-admin-test"} | _] = state.releases
     assert ReleaseStore.root_dir() == Path.join(repo_root, ".nex_self_update")
   end
 
   test "code_state marks tool-layer modules as read-only deploy targets" do
-    state = Admin.code_state(module: "Nex.Agent.Tool.ToolList")
+    state = Admin.code_state(module: "Nex.Agent.Capability.Tool.Core.ToolList")
 
     refute state.deployable
     assert state.deploy_warning =~ "Only repo CODE-layer modules"

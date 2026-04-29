@@ -1,8 +1,8 @@
-defmodule Nex.Agent.IMIR.RenderResultTest do
+defmodule Nex.Agent.Interface.IMIR.RenderResultTest do
   use ExUnit.Case, async: true
 
-  alias Nex.Agent.IMIR.Block
-  alias Nex.Agent.IMIR.RenderResult
+  alias Nex.Agent.Interface.IMIR.Block
+  alias Nex.Agent.Interface.IMIR.RenderResult
 
   test "from_block preserves frozen render result shape for ordinary blocks" do
     block = %Block{

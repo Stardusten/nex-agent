@@ -2,7 +2,7 @@
 
 ## Active Workstream
 
-Phase 1 runtime reload foundation is implemented. Phase 3 streaming delivery and Phase 3A architecture convergence are in place. Phase 4 is now closed as the text-IR foundation, Phase 4A is superseded, Phase 5 IM inbound architecture and media projection is implemented, and Phase 7 Feishu streaming converter simplification is in place. Phase 8 session run control and busy follow-up is landed, and Phase 9 follow-up LLM turn and interrupt request is now landed on top of it. Phase 6 Feishu outbound official format/media send remains landed. Phase 18 Workbench App Runtime is now opened as the local-first evolvable console/workbench track.
+Phase 1 runtime reload foundation is implemented. Phase 3 streaming delivery and Phase 3A architecture convergence are in place. Phase 4 is now closed as the text-IR foundation, Phase 4A is superseded, Phase 5 IM inbound architecture and media projection is implemented, and Phase 7 Feishu streaming converter simplification is in place. Phase 8 session run control and busy follow-up is landed, and Phase 9 follow-up LLM turn and interrupt request is now landed on top of it. Phase 6 Feishu outbound official format/media send remains landed. Phase 18 Workbench App Runtime is now opened as the local-first evolvable console/workbench track. Phase 20 Plugin Runtime Foundation is now planned as the large pluginization track for non-core capabilities.
 
 ## Why This Is Active
 
@@ -38,9 +38,9 @@ Phase 5 is now the completed inbound/media foundation:
 - architecture is multi-channel from day one
 - implementation first-path is Feishu only
 - inbound media now enters the model through:
-  - `%Nex.Agent.Inbound.Envelope{}`
-  - `%Nex.Agent.Media.Ref{}`
-  - hydrated `%Nex.Agent.Media.Attachment{}`
+  - `%Nex.Agent.Interface.Inbound.Envelope{}`
+  - `%Nex.Agent.Interface.Media.Ref{}`
+  - hydrated `%Nex.Agent.Interface.Media.Attachment{}`
   - provider-facing projection from `ContextBuilder` / `ReqLLM`
 
 Phase 6 established the current Feishu outbound baseline:
@@ -148,17 +148,84 @@ Config contract cutover is now landed on top of the existing runtime mainline:
 
 - external config shape is the new `channel` / `gateway` / `provider.providers` / `model.models` / `tools` contract
 - old top-level `provider` / `model` strings, `providers`, `defaults`, and top-level channel config are intentionally invalid
-- channel processes are instance-keyed through `Nex.Agent.Channel.Registry`
+- channel processes are instance-keyed through `Nex.Agent.Interface.Channel.Registry`
 - inbound and outbound routing now use channel instance ids, with channel type stored as metadata
 
 Phase 19 is now implemented for channel spec registry and prompt governance:
 
-- `Nex.Agent.Channel.Catalog` is the CODE-layer built-in channel type registry for Feishu and Discord.
-- `Nex.Agent.Channel.Specs.*` own channel defaults, validation diagnostics, runtime projection, gateway module, format prompt, IM profile, renderer discovery, and Workbench config contract metadata.
+- `Nex.Agent.Interface.Channel.Catalog` is the CODE-layer built-in channel type registry for Feishu and Discord.
+- `Nex.Agent.Interface.Channel.Specs.*` own channel defaults, validation diagnostics, runtime projection, gateway module, format prompt, IM profile, renderer discovery, and Workbench config contract metadata.
 - `Config.channel_runtime/2` returns `{:ok, runtime}` or `{:error, diagnostic}`; unknown/invalid channel entries are preserved in `channel_instances`, excluded from `channels_runtime`, and surfaced through `channel_diagnostics/1`.
 - `ContextBuilder` keeps runtime context metadata-only and injects the current channel format prompt as system content for matching channel turns.
 - `Workbench.ConfigPanel` derives channel type lists, guides, options, defaults, secret redaction, and enabled requirements from channel specs.
 - `IMIR.new/1` resolves channel profiles through the catalog and no longer owns direct Feishu/Discord function heads.
+
+Phase 20 planning now defines the pluginization direction:
+
+- plugin is the install/enable/disable/diagnostic package, not a new runtime truth source
+- `Runtime.Snapshot` remains the long-running process world view
+- current catalogs/registries become consumers of plugin contributions rather than independent hardcoded lists
+- Stage 1 is plugin host abstraction and inventory only
+- Stage 2 connects existing channel/provider/tool/skill/command catalogs to plugin contributions
+- Stage 3 physically migrates Feishu, Discord, provider adapters, tool families, and builtin skills into builtin plugins
+- Stage 1 is now implemented:
+  - `Nex.Agent.Extension.Plugin.{Manifest,Store,Catalog,Contribution}` and `Nex.Agent.Extension.Plugin` facade are in place
+  - `Runtime.Snapshot.plugins` carries manifests, enabled plugin ids, active channels/providers/tools/skills/commands contributions, diagnostics, and hash
+  - `Config.plugins_runtime/1` normalizes plugin enablement with disabled taking precedence
+  - `Workspace.ensure!/1` creates `plugins/`
+  - `Runtime.Watcher` watches plugin manifest paths and triggers the existing runtime reload path
+  - active contribution kinds are intentionally limited to channels/providers/tools/skills/commands; Workbench app/view/subagent contribution remains deferred until consumer tests exist
+- Stage 2 catalog migration is now implemented:
+  - builtin channel/provider/optional-tool manifests live under `priv/plugins/builtin/<id>/nex.plugin.json`
+  - `Channel.Catalog` consumes enabled plugin `channels` contributions; disabled channel plugins disappear from catalog and channel runtime
+  - `ProviderRegistry` consumes enabled plugin `providers` contributions; `Config` preserves raw provider type and reports unknown/disabled provider diagnostics without falling back to `:openai`
+  - `Workbench.ConfigPanel` reads channel/provider type metadata from the same runtime plugin projection
+  - optional tool families (`web`, `image-generation`, `advisor`, `memory`, `evolution`, `cron`) are loaded from enabled plugin `tools` contributions
+  - `Tool.Registry.definitions/2` and `Tool.Registry.execute/3` use the same plugin projection filter, and tool surfaces come from plugin metadata or core module `surfaces/0`
+  - builtin skills are loaded only from enabled plugin `skills` contributions; disabling a skill plugin removes its card and `skill_get` target
+  - slash commands are loaded from `builtin:command.core` plugin command contributions and only bind to the bounded core handler table
+  - plugin manifest changes refresh ToolRegistry and then publish a new Runtime snapshot through the watcher path
+- Stage 3 physical migration is now implemented:
+  - Feishu and Discord channel gateways/spec modules live under `priv/plugins/builtin/channel.*/lib`
+  - provider adapters live under `priv/plugins/builtin/provider.*/lib`; only provider infrastructure remains in core `lib`
+  - optional tool families live under `priv/plugins/builtin/tool.*/lib`; core tools and registry remain in core `lib`
+  - builtin skill bodies live under `priv/plugins/builtin/skill.*/skills`
+  - Mix compiles builtin plugin `lib` directories, but workspace/project plugins still cannot load arbitrary Elixir code
+  - focused Phase 20, channel, InboundWorker, runner stream, Workbench, LLM, compile, and diff-check validation passed when run by boundary
+
+Post-Phase 20 agent core organization refactor is now implemented:
+
+- `lib/nex/agent` no longer contains root `.ex` files; `lib/nex/agent.ex` remains the external facade.
+- Core modules are organized by architecture layer:
+  - `app/` for OTP host and supervision
+  - `runtime/` for config/prompt/workspace/snapshot/watcher/reconciler truth source
+  - `conversation/` for session ownership, inbound routing, run control, follow-up, and commands
+  - `turn/` for Runner, context assembly, streams, and LLM provider infrastructure
+  - `capability/` for tools, skills, hooks, cron, executor/subagent/workflow primitives
+  - `interface/` for gateway, channel contracts, inbound/outbound, media, IM IR, MCP, Workbench, HTTP/WS/auth
+  - `extension/` for plugin manifests/catalog/contributions/store
+  - `knowledge/` for memory and project knowledge
+  - `observe/` for ControlPlane/Admin plus Audit/RequestTrace compat projections
+  - `self/` for code upgrade, hot reload, self-update, evolution, and healing
+  - `sandbox/` for security/path policy
+- No internal compatibility alias modules were kept; call sites were migrated directly.
+- Phase 20 plugin behavior remains green after the rename: runtime, watcher, inbound/runner, capability, workbench/channel, memory, and self/evolution focused suites passed, along with `compile --warnings-as-errors` and `git diff --check`.
+
+Post-Phase 20 personal workflow plugin cleanup is now implemented:
+
+- `task` and explicit personal task summary workflow live under `priv/plugins/builtin/workflow.personal-task`.
+- `Tool.Registry` gets `task` only from the enabled plugin contribution; disabling `builtin:workflow.personal-task` removes definitions and direct execution.
+- `InboundWorker` no longer creates daily/weekly personal summary cron jobs as an inbound side effect.
+- Core keeps only the generic `Cron` scheduler/executor primitive; onboarding only normalizes legacy summary cron job messages during migration.
+- Admin task overview reads the personal task workflow only when the plugin is enabled.
+
+Post-Phase 20 dependency direction review is now implemented:
+
+- Core no longer imports Feishu/Discord channel implementation modules; `InboundWorker` routes stream lifecycle through the existing plugin-derived `Channel.Spec` boundary and keeps only opaque stream state.
+- Core no longer imports optional tool/workflow implementation modules such as `WebFetch`, `MemoryWrite`, `MemoryConsolidate`, `EvolutionCandidate`, or `Workflow.Tasks`; deterministic calls go through `Tool.Registry` and the active runtime/plugin projection.
+- Core no longer imports provider plugin modules for special cases; provider-specific forced tool-choice behavior is exposed through the existing `ProviderProfile`/adapter facade.
+- No new single-implementation behavior was introduced for this cleanup. The only boundary expanded was `Channel.Spec`, which already has real Feishu and Discord implementations and is the channel plugin contract.
+- `test/nex/agent/plugin/core_dependency_test.exs` statically rejects direct references from `lib/nex/agent/**/*.ex` to builtin plugin modules, so core-to-plugin module dependencies fail fast.
 
 Local tool backend selection is now the active contract for tool-backed external capabilities:
 
@@ -171,7 +238,7 @@ File access roots are now a TOOL-layer runtime config contract:
 
 - `workspace` remains a single durable agent home, not an array
 - extra readable/writable project roots live under `tools.file_access.allowed_roots`
-- `read`, `find`, and `apply_patch` pass tool ctx into `Nex.Agent.Security`
+- `read`, `find`, and `apply_patch` pass tool ctx into `Nex.Agent.Sandbox.Security`
 - path validation only has explicit-context APIs: `allowed_roots(ctx)`, `validate_path(path, ctx)`, and `validate_write_path(path, ctx)`
 - `NEX_ALLOWED_ROOTS` remains a process-level full override
 
@@ -183,15 +250,15 @@ Phase 18 is now opened for the Workbench App Runtime:
 - app development handoff guidance now lives in `docs/dev/designs/2026-04-28-workbench-app-authoring-guide.md`
 - Stage 1 implementation is in place:
   - `Workspace` now creates `workbench/`
-  - `Nex.Agent.Workbench.AppManifest` normalizes and validates app manifests
-  - `Nex.Agent.Workbench.Store` reads/writes/lists manifests and returns bounded diagnostics for invalid apps
+  - `Nex.Agent.Interface.Workbench.AppManifest` normalizes and validates app manifests
+  - `Nex.Agent.Interface.Workbench.Store` reads/writes/lists manifests and returns bounded diagnostics for invalid apps
 - Stage 2 implementation is in place:
   - `Runtime.Snapshot` now carries `workbench.apps`, `workbench.diagnostics`, and `workbench.hash`
   - `Runtime.reload/1` projects the app catalog through `Workbench.Store`
   - invalid app manifests remain diagnostics and do not fail runtime reload
   - `Admin.overview_state/1` now includes a Workbench summary
 - Stage 3 implementation is in place:
-  - `Nex.Agent.Workbench.Permissions` owns `workspace/workbench/permissions.json`
+  - `Nex.Agent.Interface.Workbench.Permissions` owns `workspace/workbench/permissions.json`
   - app manifests declare requestable permissions, while `permissions.json` stores owner grants
   - `grant/revoke/check/list/app` are implemented
   - permission views separate effective grants from stale grants left behind after manifest changes
@@ -202,7 +269,7 @@ Phase 18 is now opened for the Workbench App Runtime:
   - `Workbench.Server` reads port from Runtime snapshot, not from config files
   - server is supervised by the application and only binds `127.0.0.1`
   - minimal HTTP JSON endpoints expose apps, app detail, permission grant/revoke, and observe summary
-  - `Nex.Agent.HTTP` remains the outbound client/proxy abstraction; Workbench server is an inbound loopback listener and does not reuse the client module
+  - `Nex.Agent.Interface.HTTP` remains the outbound client/proxy abstraction; Workbench server is an inbound loopback listener and does not reuse the client module
   - supervised Workbench server startup is disabled by default in `MIX_ENV=test`; tests start explicit ephemeral listeners
   - the minimal HTTP listener now caps request headers/body and returns bounded errors
 - Stage 5 static prototype is in place:
@@ -218,14 +285,14 @@ Phase 18 is now opened for the Workbench App Runtime:
   - the static shell default view is an Observability timeline with warning/error/critical highlighting, single-observation detail, and simple budget/gauge panels
   - `ControlPlane.Store.query/2` scans newest observation files and newest lines first, stops once `limit` is satisfied, and keeps the public return order chronological; recent Workbench queries no longer decode the full JSONL store
 - Stage 5 self-evolution observability MVP is in place:
-  - `Nex.Agent.Workbench.EvolutionApp` projects energy/budget, gauges, candidate list, candidate detail, and evidence summaries from ControlPlane/Evolution
+  - `Nex.Agent.Interface.Workbench.EvolutionApp` projects energy/budget, gauges, candidate list, candidate detail, and evidence summaries from ControlPlane/Evolution
   - `GET /api/workbench/evolution` and candidate detail/action endpoints expose this surface to the local shell
   - `approve`/`discard`/`apply` reuse the existing `evolution_candidate` owner-approved execution lane
   - all candidate actions require explicit confirmation and write `workbench.bridge.call.*` plus existing `evolution.candidate.*` lifecycle observations
   - the static shell includes a `Self Evolution` system view with energy, candidates, evidence chain, and confirmed approve/discard/apply controls
 - Stage 5 configuration surface is in place:
   - `Runtime.Snapshot.config_path` carries the current runtime config path for Workbench write-back
-  - `Nex.Agent.Workbench.ConfigPanel` exposes structured provider/model/model-role/channel editing without a generic JSON editor
+  - `Nex.Agent.Interface.Workbench.ConfigPanel` exposes structured provider/model/model-role/channel editing without a generic JSON editor
   - `GET/PUT/DELETE/PATCH /api/workbench/config/**` operate through `Config.read_map/1` and `Config.save_map/2`, preserving raw config shape and secret env references
   - config API responses redact secret values to `env` / `configured` / `none`
   - secret views now expose only a fixed `display_value: "******"` placeholder for configured secrets, never the raw secret
@@ -235,19 +302,25 @@ Phase 18 is now opened for the Workbench App Runtime:
   - runtime reload failures roll the raw config file back and write `workbench.config.update_failed`
   - the static shell includes a `Configuration` system view with entity lists, structured forms, and runtime impact inspector
 - Stage 5 session management surface is in place:
-  - `Nex.Agent.Workbench.SessionApp` projects sessions from `SessionManager`/workspace history plus active owner runs from `RunControl`
+  - `Nex.Agent.Interface.Workbench.SessionApp` projects sessions from `SessionManager`/workspace history plus active owner runs from `RunControl`
   - session means a NexAgent conversation/work unit keyed by `channel:chat_id`; channel connection and Discord thread cache are not sessions
   - `GET /api/workbench/sessions` and detail endpoints expose status, run phase/tool/tails, model source, recent messages, and session-scoped observations
   - the sessions overview avoids ControlPlane observation scans so historical session inventory stays responsive; detail view loads session-scoped observations lazily
   - `POST /api/workbench/sessions/:session_key/stop` reuses the existing InboundWorker stop lane when available and falls back to `RunControl.cancel_owner/3`
   - `POST /api/workbench/sessions/:session_key/model` reuses session model overrides and invalidates idle InboundWorker agent cache so the next turn uses the selected model
   - the static shell includes a `Sessions` system view with inventory, stop control, model switch/reset, recent messages, and observations
+- Stage 5 scheduled task management surface is in place:
+  - `Nex.Agent.Interface.Workbench.ScheduledTasks` exposes bounded list/status/add/update/remove/enable/disable/run operations over `Nex.Agent.Capability.Cron`
+  - `GET/POST/PUT/DELETE /api/workbench/scheduled-tasks/**` powers the built-in Workbench system view, so Scheduled Tasks is not a workspace app artifact
+  - app bridge methods `tasks.scheduled.*` remain available only through manifest-declared and owner-granted `tasks:read` / `tasks:write`
+  - `GET /app-frame/:id` injects `<base href="/app-assets/:id/">` at the start of `<head>` so relative app CSS/JS assets resolve before browser parsing
+  - the static shell includes a `Scheduled Tasks` system view with inventory, filters, create/edit form, enable/disable/delete, and confirmed run-now control
 - Phase 18B static iframe app runtime is in place:
   - app manifests no longer require `runtime`; `entry` defaults to `index.html`, and legacy `runtime` fields are ignored rather than displayed as meaningful app settings
   - `GET /app-frame/:id` serves the app entry HTML with injected `window.Nex` SDK bootstrap; missing/invalid entries render bounded iframe error pages
   - `GET /app-assets/:id/<relative_path>` serves only files under that app directory, rejects `..`, absolute paths, directories, `nex.app.json`, app dir escapes, and files above 2MB
   - the shell has a manual app `Reload` button and reloads iframes with cache-busting URLs on app switch/reload
-  - `POST /api/workbench/bridge/:app_id/call` is implemented through `Nex.Agent.Workbench.Bridge` with fixed methods `permissions.current`, `observe.summary`, and `observe.query`
+  - `POST /api/workbench/bridge/:app_id/call` is implemented through `Nex.Agent.Interface.Workbench.Bridge` with fixed methods `permissions.current`, `observe.summary`, and `observe.query`
   - bridge calls are app-bound by the host shell, require both manifest declaration and owner grant through `Permissions.check/3`, and write started/finished/failed/denied ControlPlane observations
   - app artifact authoring remains `find -> read -> apply_patch -> iframe Reload`; no `workbench_app`/write-file tool, Vite/build/HMR, or domain app schema is part of 18B
 - Workbench app artifact reload contract is now documented as the next design direction:
@@ -277,7 +350,7 @@ Phase 18 is now opened for the Workbench App Runtime:
 - Phase 18D Notes App MVP is now implemented:
   - notes root config is normalized under `gateway.workbench.apps.notes.root`
   - `Config.workbench_runtime/1` now projects `"apps"` and `Config.workbench_app_config/2` returns per-app config
-  - `Nex.Agent.Workbench.Notes` provides bounded root/list/read/write/search over a configured Markdown vault
+  - `Nex.Agent.Interface.Workbench.Notes` provides bounded root/list/read/write/search over a configured Markdown vault
   - `Workbench.Bridge` exposes `notes.roots.list`, `notes.files.list`, `notes.file.read`, `notes.file.write`, and `notes.search`
   - notes calls require manifest-declared and owner-granted `notes:read` / `notes:write`
   - iframe SDK bootstrap exposes `window.Nex.notes.*`
@@ -299,7 +372,7 @@ Phase 17 is now implemented as the first memory-system polish step:
 Model context-window policy is now model runtime metadata:
 
 - configured models may carry `context_window`, `auto_compact_token_limit`, and `context_strategy`
-- `Nex.Agent.ContextWindow` is the single projection boundary for local history trimming and provider-native compaction
+- `Nex.Agent.Turn.ContextWindow` is the single projection boundary for local history trimming and provider-native compaction
 - `Runner` uses that projection before the first LLM request and again inside tool-loop recursion when native compaction emits opaque items
 - OpenAI Codex Responses payload policy can inject `context_management` and carry returned `compaction` items into the next request
 - global `context` / ratio-style context config is not part of the current contract

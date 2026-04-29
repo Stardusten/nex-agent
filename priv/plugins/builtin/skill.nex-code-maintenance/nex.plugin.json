@@ -1,0 +1,16 @@
+{
+  "id": "builtin:skill.nex-code-maintenance",
+  "title": "Nex Code Maintenance Skill",
+  "version": "0.1.0",
+  "enabled": true,
+  "source": "builtin",
+  "description": "Builtin NexAgent framework maintenance workflow skill.",
+  "contributes": {
+    "skills": [
+      {
+        "id": "builtin:nex-code-maintenance",
+        "path": "skills/nex-code-maintenance/SKILL.md"
+      }
+    ]
+  }
+}

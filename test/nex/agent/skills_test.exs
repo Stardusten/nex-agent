@@ -1,7 +1,7 @@
-defmodule Nex.Agent.SkillsTest do
+defmodule Nex.Agent.Capability.SkillsTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.Skills
+  alias Nex.Agent.{Runtime.Config, Capability.Skills}
 
   setup do
     workspace =
@@ -132,6 +132,9 @@ defmodule Nex.Agent.SkillsTest do
     assert {:ok, card} =
              Skills.resolve_catalog_skill("builtin:workbench-app-authoring", workspace: workspace)
 
+    assert card["path"] =~
+             "priv/plugins/builtin/skill.workbench-app-authoring/skills/workbench-app-authoring/SKILL.md"
+
     assert {:ok, loaded} = Skills.read_catalog_skill(card)
 
     assert loaded["content"] =~ "workspace/workbench/apps/<id>/"
@@ -146,6 +149,27 @@ defmodule Nex.Agent.SkillsTest do
     refute loaded["content"] =~ "save_manifest"
     refute loaded["content"] =~ "stock schema"
     refute loaded["content"] =~ "notes schema"
+  end
+
+  test "disabled builtin skill plugin removes skill card and skill_get target", %{
+    workspace: workspace
+  } do
+    config =
+      Config.from_map(%{
+        "plugins" => %{"disabled" => ["builtin:skill.lark-feishu-ops"]}
+      })
+
+    cards = Skills.catalog(workspace: workspace, config: config)
+
+    refute Enum.any?(cards, &(&1["id"] == "builtin:lark-feishu-ops"))
+
+    assert {:error, reason} =
+             Skills.resolve_catalog_skill("builtin:lark-feishu-ops",
+               workspace: workspace,
+               config: config
+             )
+
+    assert reason == "Skill not found: builtin:lark-feishu-ops"
   end
 
   test "prompt extraction builtin skills are loadable by id", %{

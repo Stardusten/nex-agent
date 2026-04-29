@@ -1,8 +1,8 @@
-defmodule Nex.Agent.IMIR.FeishuRendererTest do
+defmodule Nex.Agent.Interface.IMIR.FeishuRendererTest do
   use ExUnit.Case, async: true
 
-  alias Nex.Agent.IMIR.RenderResult
-  alias Nex.Agent.IMIR.Renderers.Feishu
+  alias Nex.Agent.Interface.IMIR.RenderResult
+  alias Nex.Agent.Interface.IMIR.Renderers.Feishu
 
   test "renderer builds card elements for heading list quote code and table" do
     elements =

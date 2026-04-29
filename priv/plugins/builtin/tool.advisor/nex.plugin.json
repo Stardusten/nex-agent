@@ -1,0 +1,17 @@
+{
+  "id": "builtin:tool.advisor",
+  "title": "Advisor Tool",
+  "version": "0.1.0",
+  "enabled": true,
+  "source": "builtin",
+  "description": "Built-in owner-only advisor tool.",
+  "contributes": {
+    "tools": [
+      {
+        "name": "ask_advisor",
+        "module": "Nex.Agent.Tool.AskAdvisor",
+        "surfaces": ["all", "base"]
+      }
+    ]
+  }
+}

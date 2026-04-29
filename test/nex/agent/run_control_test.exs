@@ -1,8 +1,8 @@
-defmodule Nex.Agent.RunControlTest do
+defmodule Nex.Agent.Conversation.RunControlTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.ControlPlane.{Gauge, Query}
-  alias Nex.Agent.{FollowUp, RunControl}
+  alias Nex.Agent.Observe.ControlPlane.{Gauge, Query}
+  alias Nex.Agent.{Conversation.FollowUp, Conversation.RunControl}
 
   setup do
     server = String.to_atom("run_control_test_#{System.unique_integer([:positive])}")

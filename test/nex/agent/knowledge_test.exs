@@ -1,7 +1,7 @@
 defmodule Nex.Agent.KnowledgeTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{Knowledge, Skills}
+  alias Nex.Agent.{Knowledge, Capability.Skills}
 
   setup do
     workspace =
@@ -9,7 +9,7 @@ defmodule Nex.Agent.KnowledgeTest do
 
     previous_workspace = Application.get_env(:nex_agent, :workspace_path)
     Application.put_env(:nex_agent, :workspace_path, workspace)
-    Nex.Agent.Onboarding.ensure_initialized()
+    Nex.Agent.App.Onboarding.ensure_initialized()
     Skills.load()
 
     note_path = Path.join([workspace, "notes", "release-note.md"])

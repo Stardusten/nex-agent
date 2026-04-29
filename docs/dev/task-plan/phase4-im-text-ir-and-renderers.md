@@ -32,7 +32,7 @@
   - 平台 IR parser 可增量解析
   - renderer 可将文本 IR 转成 Feishu 可发送/可 patch 的 payload
   - 代码块与表格不再依赖当前“弱 markdown 转卡片”路径硬扛
-- phase 结束时仓库仍保留现有 `%Nex.Agent.Stream.Event{}` / `%Nex.Agent.Stream.Result{}` 外部 streaming contract，不回退成一次性整段发送。
+- phase 结束时仓库仍保留现有 `%Nex.Agent.Stream.Event{}` / `%Nex.Agent.Turn.Stream.Result{}` 外部 streaming contract，不回退成一次性整段发送。
 
 ## 开工前必须先看的代码路径
 
@@ -94,16 +94,16 @@
 8. `<newmsg/>` 不是 message mode，不单独占一个 runtime config 字段。
    - 它是平台 IR 语法的一部分
    - 在 `single` 和 `streaming` 下都允许出现
-9. `%Nex.Agent.Stream.Result.final_content` 的 canonical 内容冻结为模型原始正文。
+9. `%Nex.Agent.Turn.Stream.Result.final_content` 的 canonical 内容冻结为模型原始正文。
    - 保留 `<newmsg/>`
    - 保留平台文本 IR 原文
    - 只移除 transport-only 占位、cursor、thinking/progress 文本
    - history / memory / audit 使用 canonical `final_content`
    - 用户可见文本由平台 renderer 决定，不反向覆盖 canonical `final_content`
-10. `Nex.Agent.IMIR.RenderResult` 是内部 handoff shape，不是对模型或工具暴露的新接口。最小 shape 冻结为：
+10. `Nex.Agent.Interface.IMIR.RenderResult` 是内部 handoff shape，不是对模型或工具暴露的新接口。最小 shape 冻结为：
 
 ```elixir
-%Nex.Agent.IMIR.RenderResult{
+%Nex.Agent.Interface.IMIR.RenderResult{
   payload: term(),
   text: String.t(),
   complete?: boolean(),
@@ -254,7 +254,7 @@ Stage 6 依赖 Stage 3、Stage 4、Stage 5。
   - `push/2`
   - `flush/1`
   - 允许内部 combinator 组合
-- 落地 `Nex.Agent.IMIR.RenderResult` 最小 shape：
+- 落地 `Nex.Agent.Interface.IMIR.RenderResult` 最小 shape：
   - `payload`
   - `text`
   - `complete?`

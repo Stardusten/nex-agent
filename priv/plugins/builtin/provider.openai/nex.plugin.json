@@ -1,0 +1,16 @@
+{
+  "id": "builtin:provider.openai",
+  "title": "OpenAI Provider",
+  "version": "0.1.0",
+  "enabled": true,
+  "source": "builtin",
+  "description": "Built-in first-party OpenAI provider adapter.",
+  "contributes": {
+    "providers": [
+      {
+        "type": "openai",
+        "adapter_module": "Nex.Agent.LLM.Providers.OpenAI"
+      }
+    ]
+  }
+}

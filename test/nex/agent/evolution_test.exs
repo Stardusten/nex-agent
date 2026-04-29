@@ -1,8 +1,8 @@
-defmodule Nex.Agent.EvolutionTest do
+defmodule Nex.Agent.Self.EvolutionTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{Evolution, Skills, Workspace}
-  alias Nex.Agent.ControlPlane.{Gauge, Log, Query, Store}
+  alias Nex.Agent.{Self.Evolution, Capability.Skills, Runtime.Workspace}
+  alias Nex.Agent.Observe.ControlPlane.{Gauge, Log, Query, Store}
   alias Nex.Agent.Tool.EvolutionCandidate
   require Log
   require Gauge

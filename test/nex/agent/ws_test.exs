@@ -1,7 +1,7 @@
-defmodule Nex.Agent.WSTest do
+defmodule Nex.Agent.Interface.WSTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.WS
+  alias Nex.Agent.Interface.WS
 
   @proxy_keys [
     "HTTP_PROXY",

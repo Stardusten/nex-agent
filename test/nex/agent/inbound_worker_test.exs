@@ -1,23 +1,23 @@
-defmodule Nex.Agent.InboundWorkerTest do
+defmodule Nex.Agent.Conversation.InboundWorkerTest do
   use ExUnit.Case, async: false
 
   alias Nex.Agent.{
-    Bus,
-    Config,
-    InboundWorker,
-    Memory,
-    RunControl,
-    Runner,
+    App.Bus,
+    Runtime.Config,
+    Conversation.InboundWorker,
+    Knowledge.Memory,
+    Conversation.RunControl,
+    Turn.Runner,
     Runtime,
-    Session,
-    Skills
+    Conversation.Session,
+    Capability.Skills
   }
 
   alias Nex.Agent.Channel.{Discord, Feishu}
-  alias Nex.Agent.ControlPlane.Query, as: ControlPlaneQuery
-  alias Nex.Agent.Inbound.Envelope
-  alias Nex.Agent.Media.{Attachment, Ref}
-  alias Nex.Agent.Stream.Result
+  alias Nex.Agent.Observe.ControlPlane.Query, as: ControlPlaneQuery
+  alias Nex.Agent.Interface.Inbound.Envelope
+  alias Nex.Agent.Interface.Media.{Attachment, Ref}
+  alias Nex.Agent.Turn.Stream.Result
 
   @feishu_instance "feishu_test"
   @discord_instance "discord_test"
@@ -45,26 +45,32 @@ defmodule Nex.Agent.InboundWorkerTest do
     end
 
     if Process.whereis(Nex.Agent.ChannelRegistry) == nil do
-      start_supervised!(Nex.Agent.Channel.Registry)
+      start_supervised!(Nex.Agent.Interface.Channel.Registry)
     end
 
     if Process.whereis(Nex.Agent.TaskSupervisor) == nil do
       start_supervised!({Task.Supervisor, name: Nex.Agent.TaskSupervisor})
     end
 
-    if Process.whereis(Nex.Agent.Tool.Registry) == nil do
-      start_supervised!({Nex.Agent.Tool.Registry, name: Nex.Agent.Tool.Registry})
+    if Process.whereis(Nex.Agent.Capability.Tool.Registry) == nil do
+      start_supervised!(
+        {Nex.Agent.Capability.Tool.Registry, name: Nex.Agent.Capability.Tool.Registry}
+      )
     end
 
-    if Process.whereis(Nex.Agent.SessionManager) == nil do
-      start_supervised!({Nex.Agent.SessionManager, name: Nex.Agent.SessionManager})
+    if Process.whereis(Nex.Agent.Conversation.SessionManager) == nil do
+      start_supervised!(
+        {Nex.Agent.Conversation.SessionManager, name: Nex.Agent.Conversation.SessionManager}
+      )
     end
 
-    if Process.whereis(Nex.Agent.MemoryUpdater) == nil do
-      start_supervised!({Nex.Agent.MemoryUpdater, name: Nex.Agent.MemoryUpdater})
+    if Process.whereis(Nex.Agent.Knowledge.Memory.Updater) == nil do
+      start_supervised!(
+        {Nex.Agent.Knowledge.Memory.Updater, name: Nex.Agent.Knowledge.Memory.Updater}
+      )
     end
 
-    if Process.whereis(Nex.Agent.RunControl) == nil do
+    if Process.whereis(Nex.Agent.Conversation.RunControl) == nil do
       start_supervised!({RunControl, name: RunControl})
     end
 
@@ -1131,7 +1137,7 @@ defmodule Nex.Agent.InboundWorkerTest do
         :follow_up ->
           send(parent, {:follow_up_interrupt_prompt, prompt})
 
-          module = Nex.Agent.Tool.Registry.get("interrupt_session")
+          module = Nex.Agent.Capability.Tool.Registry.get("interrupt_session")
 
           result =
             module.execute(
@@ -1623,7 +1629,7 @@ defmodule Nex.Agent.InboundWorkerTest do
        http_get_fun: fn _url, _headers -> {:error, :unused} end}
     )
 
-    :sys.replace_state(Nex.Agent.Channel.Registry.whereis(@feishu_instance), fn state ->
+    :sys.replace_state(Nex.Agent.Interface.Channel.Registry.whereis(@feishu_instance), fn state ->
       %{state | enabled: true, app_id: "cli_test", app_secret: "sec_test"}
     end)
 
@@ -1750,7 +1756,7 @@ defmodule Nex.Agent.InboundWorkerTest do
        http_get_fun: fn _url, _headers -> {:error, :unused} end}
     )
 
-    :sys.replace_state(Nex.Agent.Channel.Registry.whereis(@feishu_instance), fn state ->
+    :sys.replace_state(Nex.Agent.Interface.Channel.Registry.whereis(@feishu_instance), fn state ->
       %{state | enabled: true, app_id: "cli_test", app_secret: "sec_test"}
     end)
 
@@ -1830,9 +1836,12 @@ defmodule Nex.Agent.InboundWorkerTest do
        end}
     )
 
-    :sys.replace_state(Nex.Agent.Channel.Registry.whereis(@discord_instance), fn state ->
-      %{state | enabled: true, token: "discord-token"}
-    end)
+    :sys.replace_state(
+      Nex.Agent.Interface.Channel.Registry.whereis(@discord_instance),
+      fn state ->
+        %{state | enabled: true, token: "discord-token"}
+      end
+    )
 
     worker_name =
       String.to_atom("inbound_worker_discord_stream_#{System.unique_integer([:positive])}")
@@ -1917,9 +1926,12 @@ defmodule Nex.Agent.InboundWorkerTest do
        end}
     )
 
-    :sys.replace_state(Nex.Agent.Channel.Registry.whereis(@discord_instance), fn state ->
-      %{state | enabled: true, token: "discord-token"}
-    end)
+    :sys.replace_state(
+      Nex.Agent.Interface.Channel.Registry.whereis(@discord_instance),
+      fn state ->
+        %{state | enabled: true, token: "discord-token"}
+      end
+    )
 
     worker_name =
       String.to_atom("inbound_worker_discord_feedback_#{System.unique_integer([:positive])}")
@@ -2039,7 +2051,7 @@ defmodule Nex.Agent.InboundWorkerTest do
     |> :sys.get_state()
     |> Map.fetch!(:stream_states)
     |> Enum.find_value(fn
-      {key, {:discord, _state}} -> key
+      {key, {:channel_stream, Nex.Agent.Interface.Channel.Specs.Discord, _state}} -> key
       _entry -> nil
     end)
     |> case do

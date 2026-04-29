@@ -1,7 +1,7 @@
-defmodule Nex.Agent.Media.AttachmentTest do
+defmodule Nex.Agent.Interface.Media.AttachmentTest do
   use ExUnit.Case, async: true
 
-  alias Nex.Agent.Media.Attachment
+  alias Nex.Agent.Interface.Media.Attachment
 
   test "kind helpers classify attachments" do
     image = %Attachment{

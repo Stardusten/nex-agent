@@ -1,8 +1,8 @@
 defmodule Nex.Agent.SelfHealingRouterTest do
   use ExUnit.Case, async: true
 
-  alias Nex.Agent.ControlPlane.{Budget, Log, Query}
-  alias Nex.Agent.SelfHealing.Router
+  alias Nex.Agent.Observe.ControlPlane.{Budget, Log, Query}
+  alias Nex.Agent.Self.Healing.Router
   require Log
 
   setup do

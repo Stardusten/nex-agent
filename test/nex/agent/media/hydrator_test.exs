@@ -1,9 +1,9 @@
-defmodule Nex.Agent.Media.HydratorTest do
+defmodule Nex.Agent.Interface.Media.HydratorTest do
   use ExUnit.Case, async: true
 
   import ExUnit.CaptureLog
 
-  alias Nex.Agent.Media.{Hydrator, Ref}
+  alias Nex.Agent.Interface.Media.{Hydrator, Ref}
 
   test "unsupported media refs stay unresolved without warning noise" do
     ref = %Ref{

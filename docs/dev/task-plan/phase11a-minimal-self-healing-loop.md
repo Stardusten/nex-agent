@@ -64,7 +64,7 @@ self_update.deploy.failed
 <workspace>/self_healing/energy.json
 ```
 
-如果调用方没有 workspace，则使用 `Nex.Agent.Workspace.root/0`。不得使用 `~/.nex`。
+如果调用方没有 workspace，则使用 `Nex.Agent.Runtime.Workspace.root/0`。不得使用 `~/.nex`。
 
 3. Event envelope 最小 shape：
 
@@ -198,7 +198,7 @@ Stage 4 依赖 Stage 3。
 
 ### 前置检查
 
-- 确认 `Nex.Agent.Workspace.root/0` 和 workspace opts 的用法。
+- 确认 `Nex.Agent.Runtime.Workspace.root/0` 和 workspace opts 的用法。
 - 确认没有读取安全禁区。
 - 确认 event 写入失败可以只 logger warning。
 

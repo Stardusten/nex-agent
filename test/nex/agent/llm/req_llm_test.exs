@@ -1,7 +1,7 @@
-defmodule Nex.Agent.LLM.ReqLLMTest do
+defmodule Nex.Agent.Turn.LLM.ReqLLMTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.LLM.ReqLLM, as: AgentReqLLM
+  alias Nex.Agent.Turn.LLM.ReqLLM, as: AgentReqLLM
   alias Nex.Agent.LLM.Providers.OpenAICodex.Stream
   alias ReqLLM.Message
 

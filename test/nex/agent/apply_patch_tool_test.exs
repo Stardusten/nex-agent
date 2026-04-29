@@ -1,8 +1,8 @@
 defmodule Nex.Agent.ApplyPatchToolTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.Config
-  alias Nex.Agent.Tool.ApplyPatch
+  alias Nex.Agent.Runtime.Config
+  alias Nex.Agent.Capability.Tool.Core.ApplyPatch
 
   test "apply_patch updates files with multiple hunks" do
     path = Path.join("/tmp", "nex-agent-apply-patch-#{System.unique_integer([:positive])}.ex")

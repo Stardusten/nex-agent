@@ -3,7 +3,7 @@ defmodule Mix.Tasks.Nex.AgentCliTest do
 
   import ExUnit.CaptureIO
 
-  alias Nex.Agent.Config
+  alias Nex.Agent.Runtime.Config
 
   @env_keys [:config_path, :workspace_path, :agent_base_dir]
 

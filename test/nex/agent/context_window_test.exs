@@ -1,7 +1,7 @@
-defmodule Nex.Agent.ContextWindowTest do
+defmodule Nex.Agent.Turn.ContextWindowTest do
   use ExUnit.Case, async: true
 
-  alias Nex.Agent.{ContextWindow, Session}
+  alias Nex.Agent.{Turn.ContextWindow, Conversation.Session}
 
   @projection_key "context_window_projection"
 

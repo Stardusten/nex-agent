@@ -58,10 +58,10 @@ Phase 12 完成时仓库必须满足：
 
 `Config.provider_to_atom/1` 的已有 provider 名称映射不能在本 phase 改名。
 
-2. `Nex.Agent.LLM.ProviderProfile` 最小 shape 冻结为：
+2. `Nex.Agent.Turn.LLM.ProviderProfile` 最小 shape 冻结为：
 
 ```elixir
-%Nex.Agent.LLM.ProviderProfile{
+%Nex.Agent.Turn.LLM.ProviderProfile{
   provider: atom(),
   resolved_provider: atom(),
   base_url: String.t() | nil,
@@ -79,17 +79,17 @@ Phase 12 完成时仓库必须满足：
         (ReqLLM.model_input(), ReqLLM.Context.prompt(), keyword() ->
            {:ok, ReqLLM.StreamResponse.t()} | {:error, term()})
 
-@callback build_profile(keyword()) :: Nex.Agent.LLM.ProviderProfile.t()
+@callback build_profile(keyword()) :: Nex.Agent.Turn.LLM.ProviderProfile.t()
 @callback default_model() :: String.t()
 @callback default_api_key() :: String.t() | nil
 @callback default_base_url() :: String.t() | nil
-@callback prepare_messages_and_options([map()], Nex.Agent.LLM.ProviderProfile.t(), keyword()) ::
+@callback prepare_messages_and_options([map()], Nex.Agent.Turn.LLM.ProviderProfile.t(), keyword()) ::
             {[map()], keyword()}
-@callback api_key_config(Nex.Agent.LLM.ProviderProfile.t(), keyword()) ::
+@callback api_key_config(Nex.Agent.Turn.LLM.ProviderProfile.t(), keyword()) ::
             {String.t() | nil, boolean()}
-@callback provider_options(Nex.Agent.LLM.ProviderProfile.t(), keyword()) :: keyword()
-@callback model_spec(Nex.Agent.LLM.ProviderProfile.t(), String.t()) :: String.t() | map()
-@callback stream_text_fun(Nex.Agent.LLM.ProviderProfile.t()) :: stream_text_fun()
+@callback provider_options(Nex.Agent.Turn.LLM.ProviderProfile.t(), keyword()) :: keyword()
+@callback model_spec(Nex.Agent.Turn.LLM.ProviderProfile.t(), String.t()) :: String.t() | map()
+@callback stream_text_fun(Nex.Agent.Turn.LLM.ProviderProfile.t()) :: stream_text_fun()
 
 @optional_callbacks default_model: 0,
                     default_api_key: 0,
@@ -291,7 +291,7 @@ Default adapter 实现当前 generic provider 行为。
 
 - 不要为了减少文件数把多个 provider 写进同一个模块。
 - 不要引入 “provider group” 共享 mutable state。
-- 可抽取纯 helper，例如 `Nex.Agent.LLM.Providers.Helpers`, 但 helper 不能成为新的 policy dumping ground。
+- 可抽取纯 helper，例如 `Nex.Agent.Turn.LLM.Providers.Helpers`, 但 helper 不能成为新的 policy dumping ground。
 
 ### 本 stage 验收
 

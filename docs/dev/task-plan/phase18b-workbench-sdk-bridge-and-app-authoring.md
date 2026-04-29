@@ -5,9 +5,9 @@
 Phase 18 已经把 Workbench 从 0 推到可用原型：
 
 - `workspace/workbench/apps/<id>/nex.app.json` 是 app manifest 真相源。
-- `Nex.Agent.Workbench.Store` / `AppManifest` 可以读写、校验、列出 app。
+- `Nex.Agent.Interface.Workbench.Store` / `AppManifest` 可以读写、校验、列出 app。
 - `Runtime.Snapshot.workbench` 暴露 app catalog、diagnostics 和 runtime config。
-- `Nex.Agent.Workbench.Permissions` 拥有 `workspace/workbench/permissions.json` owner grant 真相源。
+- `Nex.Agent.Interface.Workbench.Permissions` 拥有 `workspace/workbench/permissions.json` owner grant 真相源。
 - `Workbench.Server` / `Router` 提供 loopback HTTP API。
 - `priv/workbench/shell.html` 是当前静态 shell，已有 Observability、Self Evolution、Sessions、Configuration 四个系统视图。
 - shell 已支持窄屏 `Menu` / `Detail` 抽屉。
@@ -32,7 +32,7 @@ Phase 18B 结束时仓库必须满足：
 6. shell 提供手动 Reload 当前 app 的按钮；切换 app 时也会重新加载 iframe。18B 不实现 Vite、HMR、自动 build 或 Node dev server。
 7. iframe app 能通过 `window.Nex.call(...)` 发起 host-mediated bridge call。
 8. host shell 只接受来自当前 app iframe `contentWindow` 的 bridge message，并为请求绑定当前 app id。
-9. backend 通过 `Nex.Agent.Workbench.Bridge` 执行固定 method allowlist，不暴露 arbitrary HTTP、arbitrary file path 或 arbitrary tool call。
+9. backend 通过 `Nex.Agent.Interface.Workbench.Bridge` 执行固定 method allowlist，不暴露 arbitrary HTTP、arbitrary file path 或 arbitrary tool call。
 10. 每个 bridge call 都必须先经过 `Permissions.check/3`，同时满足 manifest declared permission 和 owner granted permission。
 11. bridge started / finished / failed / denied 都写 ControlPlane observations。
 12. Workbench core CODE 更新仍走现有 `apply_patch` / `self_update`；Workbench app artifact 更新只写 workspace app 文件，刷新 iframe 后生效，不需要 `self_update deploy`。
@@ -432,7 +432,7 @@ NODE
 ### 前置检查
 
 - `test/nex/agent/workbench/permissions_test.exs` 通过。
-- `Nex.Agent.Workbench.Permissions.check/3` 已确认会写 denied observation。
+- `Nex.Agent.Interface.Workbench.Permissions.check/3` 已确认会写 denied observation。
 - `ControlPlane.Store.query/2` 已支持 `trace_id`、`tool`、`tool_call_id`、`tool_name` filters。
 
 ### 这一步改哪里
@@ -450,7 +450,7 @@ NODE
 POST /api/workbench/bridge/:app_id/call
 ```
 
-- 新增 `Nex.Agent.Workbench.Bridge.call(app_id, request, snapshot_or_opts)`。
+- 新增 `Nex.Agent.Interface.Workbench.Bridge.call(app_id, request, snapshot_or_opts)`。
 - 规范化 request：
 
 ```elixir

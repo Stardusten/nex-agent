@@ -85,7 +85,7 @@
 新增 accessor：
 
 ```elixir
-@spec memory_model_runtime(Nex.Agent.Config.t()) :: Nex.Agent.Config.model_runtime() | nil
+@spec memory_model_runtime(Nex.Agent.Runtime.Config.t()) :: Nex.Agent.Runtime.Config.model_runtime() | nil
 def memory_model_runtime(config)
 ```
 

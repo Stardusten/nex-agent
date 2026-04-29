@@ -6,12 +6,14 @@ defmodule Nex.Agent.Runtime.Watcher do
   use GenServer
   require Logger
 
-  alias Nex.Agent.{Config, Runtime, Skills, Workspace}
-  alias Nex.Agent.Tool.Registry, as: ToolRegistry
+  alias Nex.Agent.{Runtime.Config, Runtime, Capability.Skills, Runtime.Workspace}
+  alias Nex.Agent.Capability.Tool.Registry, as: ToolRegistry
 
   defstruct [
     :workspace,
     :config_path,
+    :builtin_plugins_dir,
+    :project_plugins_dir,
     :poll_interval_ms,
     :runtime_reload_fun,
     :skills_reload_fun,
@@ -36,6 +38,9 @@ defmodule Nex.Agent.Runtime.Watcher do
     state = %__MODULE__{
       workspace: workspace,
       config_path: config_path,
+      builtin_plugins_dir:
+        Keyword.get(opts, :builtin_plugins_dir, Path.expand("priv/plugins/builtin")),
+      project_plugins_dir: Keyword.get(opts, :project_plugins_dir),
       poll_interval_ms: Keyword.get(opts, :poll_interval_ms, @default_poll_interval_ms),
       runtime_reload_fun: Keyword.get(opts, :runtime_reload_fun, &Runtime.reload/1),
       skills_reload_fun: Keyword.get(opts, :skills_reload_fun, &Skills.reload/0),
@@ -63,9 +68,14 @@ defmodule Nex.Agent.Runtime.Watcher do
 
   defp reload_runtime(state, changed_paths) do
     if Enum.any?(changed_paths, &skills_path?/1), do: state.skills_reload_fun.()
-    if Enum.any?(changed_paths, &tools_path?/1), do: state.tools_reload_fun.()
 
-    case state.runtime_reload_fun.(workspace: state.workspace, changed_paths: changed_paths) do
+    if Enum.any?(
+         changed_paths,
+         &(tools_path?(&1) or plugins_path?(&1) or plugin_manifest_path?(&1))
+       ),
+       do: state.tools_reload_fun.()
+
+    case state.runtime_reload_fun.(runtime_reload_opts(state, changed_paths)) do
       {:ok, _snapshot} ->
         :ok
 
@@ -95,7 +105,14 @@ defmodule Nex.Agent.Runtime.Watcher do
       [state.config_path] ++ Enum.map(@workspace_files, &Path.join(state.workspace, &1))
 
     recursive_paths =
-      [Path.join(state.workspace, "skills"), Path.join(state.workspace, "tools")]
+      [
+        Path.join(state.workspace, "skills"),
+        Path.join(state.workspace, "tools"),
+        Path.join(state.workspace, "plugins"),
+        state.builtin_plugins_dir,
+        state.project_plugins_dir
+      ]
+      |> Enum.reject(&is_nil/1)
       |> Enum.flat_map(&recursive_files/1)
 
     (direct_paths ++ recursive_paths)
@@ -135,6 +152,17 @@ defmodule Nex.Agent.Runtime.Watcher do
 
   defp skills_path?(path), do: path_segment?(path, "skills")
   defp tools_path?(path), do: path_segment?(path, "tools")
+  defp plugins_path?(path), do: path_segment?(path, "plugins")
+  defp plugin_manifest_path?(path), do: Path.basename(path) == "nex.plugin.json"
+
+  defp runtime_reload_opts(state, changed_paths) do
+    [workspace: state.workspace, changed_paths: changed_paths]
+    |> maybe_put(:builtin_plugins_dir, state.builtin_plugins_dir)
+    |> maybe_put(:project_plugins_dir, state.project_plugins_dir)
+  end
+
+  defp maybe_put(opts, _key, nil), do: opts
+  defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
 
   defp path_segment?(path, segment) do
     path

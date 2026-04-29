@@ -65,7 +65,7 @@ edit/write non-.ex file -> file changed on disk, period
 
 不区分 CODE 层和非 CODE 层。所有编辑行为统一为“只写磁盘”。Hot reload 完全由 `self_update deploy` 或用户手动 `recompile` 触发。
 
-3. CODE 层文件判定唯一真相源放在 `Nex.Agent.CodeUpgrade.code_layer_file?/1`，只覆盖 repo 内 framework code。
+3. CODE 层文件判定唯一真相源放在 `Nex.Agent.Self.CodeUpgrade.code_layer_file?/1`，只覆盖 repo 内 framework code。
 
 ```elixir
 @spec code_layer_file?(String.t()) :: boolean()
@@ -81,18 +81,18 @@ end
 
 `test/` 不是 CODE 层。workspace custom tool 不属于本 phase deploy 面，不通过 `self_update deploy` 激活。
 
-4. Protected modules 唯一真相源放在 `Nex.Agent.CodeUpgrade.protected_module?/1`，必须覆盖新的 self_update 控制链。
+4. Protected modules 唯一真相源放在 `Nex.Agent.Self.CodeUpgrade.protected_module?/1`，必须覆盖新的 self_update 控制链。
 
 ```elixir
 @protected_modules [
-  Nex.Agent.Security,
-  Nex.Agent.CodeUpgrade,
-  Nex.Agent.HotReload,
-  Nex.Agent.Tool.Registry,
-  Nex.Agent.Tool.SelfUpdate,
-  Nex.Agent.SelfUpdate.Planner,
-  Nex.Agent.SelfUpdate.Deployer,
-  Nex.Agent.SelfUpdate.ReleaseStore
+  Nex.Agent.Sandbox.Security,
+  Nex.Agent.Self.CodeUpgrade,
+  Nex.Agent.Self.HotReload,
+  Nex.Agent.Capability.Tool.Registry,
+  Nex.Agent.Capability.Tool.Core.SelfUpdate,
+  Nex.Agent.Self.Update.Planner,
+  Nex.Agent.Self.Update.Deployer,
+  Nex.Agent.Self.Update.ReleaseStore
 ]
 
 @spec protected_module?(atom()) :: boolean()
@@ -237,7 +237,7 @@ Surface 归属冻结为：
 14. `CodeUpgrade` 瘦身后保留的公共 API：
 
 ```elixir
-defmodule Nex.Agent.CodeUpgrade do
+defmodule Nex.Agent.Self.CodeUpgrade do
   @spec source_path(atom()) :: String.t()
   @spec can_upgrade?(atom()) :: boolean()
   @spec list_upgradable_modules() :: [atom()]

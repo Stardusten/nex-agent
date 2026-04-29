@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-- `read` / `write` / `edit` / `list_dir` 通过 `Nex.Agent.Security.validate_path/1` 做静态 allowed roots 校验。
+- `read` / `write` / `edit` / `list_dir` 通过 `Nex.Agent.Sandbox.Security.validate_path/1` 做静态 allowed roots 校验。
 - allowed roots 来自 `NEX_ALLOWED_ROOTS` 或 `Security.default_allowed_roots/0`，越界路径直接返回 `Security: Path not within allowed roots`。
 - `bash` 只通过 `Security.validate_command/1` 做命令黑名单和危险 pattern 拦截，不走文件路径授权。
 - `InboundWorker` 在 session busy 时会把普通消息排队；如果直接把 `/approve` / `/deny` 当普通消息处理，会造成 agent 等批准、批准消息进队列的死锁。
@@ -179,7 +179,7 @@ Stage 5 依赖 Stage 2、Stage 3、Stage 4。
 
 ### 前置检查
 
-- 确认 `Nex.Agent.Bus` 已启动且 channel outbound topic 可用。
+- 确认 `Nex.Agent.App.Bus` 已启动且 channel outbound topic 可用。
 - 确认 `Workspace.ensure!/1` 创建目录时不会覆盖未知目录。
 - 确认 `Application` supervision tree 里新增 GenServer 的位置。
 

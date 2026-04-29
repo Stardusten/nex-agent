@@ -1,8 +1,8 @@
 defmodule Nex.Agent.HookToolTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{Hooks, Runtime}
-  alias Nex.Agent.Tool.Hook
+  alias Nex.Agent.{Capability.Hooks, Runtime}
+  alias Nex.Agent.Capability.Tool.Core.Hook
 
   setup do
     workspace =

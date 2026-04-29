@@ -14,7 +14,7 @@ self_update.deploy.failed
 
 - Runner run / LLM call / tool batch lifecycle 主要还是 `Logger.*` 文本输出。
 - `Tool.Registry.execute/3` 内部 task crash、timeout、cancel 的生命周期没有进入统一 observation。
-- `Nex.Agent.HTTP.run_request/3` 会把内部 opts 直接传给 `Req`，例如 `:cancel_ref`，导致后台 task crash 只进入人类日志。
+- `Nex.Agent.Interface.HTTP.run_request/3` 会把内部 opts 直接传给 `Req`，例如 `:cancel_ref`，导致后台 task crash 只进入人类日志。
 - HTTP failure / timeout / cancellation 没有成为 agent 可查询的结构化事实。
 - SelfUpdate deploy 只有失败 observation，缺少 started/finished lifecycle，无法从 ControlPlane 还原一次 deploy 的闭环。
 
@@ -25,7 +25,7 @@ self_update.deploy.failed
 1. Runner 的 run / LLM call / tool batch / tool call 主生命周期写入 ControlPlane observation。
 2. Tool.Registry 的 deterministic execution 边界写入 ControlPlane observation，task crash/timeout/cancel 必须可查。
 3. HTTP request started/finished/failed/timeout/cancelled 写入 ControlPlane observation。
-4. `Nex.Agent.HTTP` 内部 opts 不再泄漏给 `Req`，尤其 `:cancel_ref` 不允许进入 `Req.get/2` / `Req.post/2`。
+4. `Nex.Agent.Interface.HTTP` 内部 opts 不再泄漏给 `Req`，尤其 `:cancel_ref` 不允许进入 `Req.get/2` / `Req.post/2`。
 5. HTTP task exception 不只进入 `/tmp/nex-agent-gateway.log`，必须转换成结构化返回并写 `http.request.failed`。
 6. SelfUpdate deploy started/finished/failed 形成同一 run/deploy context 下的完整链路。
 7. 13B 触碰范围内的语义 `Logger.*` 不再作为机器真相源；人类日志只来自 ControlPlane projection 或底层兜底 warning。
@@ -184,7 +184,7 @@ internal_opts = [
 ]
 ```
 
-`Nex.Agent.HTTP` 必须在调用 `Req` 前剥离内部 opts。`Req` 只能收到 Req 支持的 options。
+`Nex.Agent.Interface.HTTP` 必须在调用 `Req` 前剥离内部 opts。`Req` 只能收到 Req 支持的 options。
 
 8. HTTP task exception contract：
 
@@ -401,7 +401,7 @@ Stage 6 依赖 Stage 1、Stage 2、Stage 3、Stage 4、Stage 5。
 ### 前置检查
 
 - Stage 0 通过。
-- 已读 `Nex.Agent.HTTP.run_request/3` 和所有调用方，确认哪些 opts 是 Req opts，哪些是 Nex internal opts。
+- 已读 `Nex.Agent.Interface.HTTP.run_request/3` 和所有调用方，确认哪些 opts 是 Req opts，哪些是 Nex internal opts。
 
 ### 这一步改哪里
 

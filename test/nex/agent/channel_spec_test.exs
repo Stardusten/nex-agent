@@ -1,14 +1,23 @@
 defmodule Nex.Agent.ChannelSpecTest do
   use ExUnit.Case, async: true
 
-  alias Nex.Agent.Channel.Catalog
-  alias Nex.Agent.Channel.Specs.{Discord, Feishu}
+  alias Nex.Agent.Interface.Channel.Catalog
+  alias Nex.Agent.Interface.Channel.Specs.{Discord, Feishu}
+  alias Nex.Agent.Runtime.Config
 
   test "catalog exposes only implemented channel specs" do
     assert Catalog.types() == ["feishu", "discord"]
     assert Catalog.fetch(:feishu) == {:ok, Feishu}
     assert Catalog.fetch("discord") == {:ok, Discord}
     assert {:error, {:unknown_channel_type, "telegram"}} = Catalog.fetch("telegram")
+  end
+
+  test "disabled channel plugin removes the channel type from catalog projection" do
+    config = Config.from_map(%{"plugins" => %{"disabled" => ["builtin:channel.discord"]}})
+
+    assert Catalog.types(config: config) == ["feishu"]
+    assert Catalog.fetch("feishu", config: config) == {:ok, Feishu}
+    assert {:error, {:unknown_channel_type, "discord"}} = Catalog.fetch("discord", config: config)
   end
 
   test "fetch bang raises a clear unknown channel error" do
@@ -26,7 +35,7 @@ defmodule Nex.Agent.ChannelSpecTest do
     refute Map.has_key?(Feishu.runtime(instance), "app_secret")
     assert Feishu.gateway_module() == Nex.Agent.Channel.Feishu
     assert Feishu.im_profile().name == :feishu
-    assert Feishu.renderer() == Nex.Agent.IMIR.Renderers.Feishu
+    assert Feishu.renderer() == Nex.Agent.Interface.IMIR.Renderers.Feishu
 
     prompt = Feishu.format_prompt(Feishu.runtime(instance), [])
     assert prompt =~ "## Feishu Output Contract"
@@ -59,12 +68,13 @@ defmodule Nex.Agent.ChannelSpecTest do
     refute Map.has_key?(Discord.runtime(instance), "token")
     assert Discord.gateway_module() == Nex.Agent.Channel.Discord
     assert Discord.im_profile().name == :discord
-    assert Discord.renderer() == Nex.Agent.IMIR.Renderers.Discord
+    assert Discord.renderer() == Nex.Agent.Interface.IMIR.Renderers.Discord
 
     prompt = Discord.format_prompt(Discord.runtime(instance), [])
     assert prompt =~ "## Discord Output Contract"
     assert prompt =~ "bold standalone labels"
     assert prompt =~ "####"
+    assert prompt =~ "Never output separator or horizontal-rule lines"
     assert prompt =~ "Markdown tables render as embed"
 
     contract = Discord.config_contract()

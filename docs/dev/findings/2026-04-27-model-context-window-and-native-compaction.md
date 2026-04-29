@@ -8,11 +8,11 @@ Context-window policy is model runtime metadata, not a global runtime setting. E
 - `auto_compact_token_limit`
 - `context_strategy`
 
-These fields are consumed by `Nex.Agent.ContextWindow`, which is the single projection boundary for both local history trimming and provider-native compaction.
+These fields are consumed by `Nex.Agent.Turn.ContextWindow`, which is the single projection boundary for both local history trimming and provider-native compaction.
 
 ## Architecture Contract
 
-- `Nex.Agent.Config` resolves model context metadata beside `provider`, `id`, and provider request options.
+- `Nex.Agent.Runtime.Config` resolves model context metadata beside `provider`, `id`, and provider request options.
 - `Runner` asks `ContextWindow` to select history before building the first LLM request.
 - `Runner` asks `ContextWindow` to prepare provider options for that same projected history.
 - Provider adapters only translate projected context metadata into provider-specific request payload fields.

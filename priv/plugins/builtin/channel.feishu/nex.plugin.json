@@ -1,0 +1,17 @@
+{
+  "id": "builtin:channel.feishu",
+  "title": "Feishu Channel",
+  "version": "0.1.0",
+  "enabled": true,
+  "source": "builtin",
+  "description": "Built-in Feishu gateway, channel spec, renderer, and config contract.",
+  "contributes": {
+    "channels": [
+      {
+        "type": "feishu",
+        "order": 10,
+        "spec_module": "Nex.Agent.Interface.Channel.Specs.Feishu"
+      }
+    ]
+  }
+}

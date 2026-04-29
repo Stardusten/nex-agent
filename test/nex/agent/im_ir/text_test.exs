@@ -1,7 +1,7 @@
-defmodule Nex.Agent.IMIR.TextTest do
+defmodule Nex.Agent.Interface.IMIR.TextTest do
   use ExUnit.Case, async: true
 
-  alias Nex.Agent.IMIR.Text
+  alias Nex.Agent.Interface.IMIR.Text
 
   test "chunk_message prefers the boundary before a fenced code block" do
     text = String.duplicate("x", 24) <> "\n\n```text\nhello\n```"

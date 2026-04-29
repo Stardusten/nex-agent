@@ -1,7 +1,7 @@
-defmodule Nex.Agent.SessionManagerTest do
+defmodule Nex.Agent.Conversation.SessionManagerTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{Session, SessionManager}
+  alias Nex.Agent.{Conversation.Session, Conversation.SessionManager}
 
   setup do
     if Process.whereis(SessionManager) == nil do

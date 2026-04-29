@@ -1,0 +1,17 @@
+{
+  "id": "builtin:tool.image-generation",
+  "title": "Image Generation Tool",
+  "version": "0.1.0",
+  "enabled": true,
+  "source": "builtin",
+  "description": "Built-in local image generation tool.",
+  "contributes": {
+    "tools": [
+      {
+        "name": "image_generation",
+        "module": "Nex.Agent.Tool.ImageGeneration",
+        "surfaces": ["all", "base"]
+      }
+    ]
+  }
+}

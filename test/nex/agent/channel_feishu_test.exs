@@ -1,11 +1,11 @@
 defmodule Nex.Agent.Channel.FeishuTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{Bus, Config}
+  alias Nex.Agent.{App.Bus, Runtime.Config}
   alias Nex.Agent.Channel.Feishu
   alias Nex.Agent.Channel.Feishu.StreamConverter
-  alias Nex.Agent.Inbound.Envelope
-  alias Nex.Agent.Media.Attachment
+  alias Nex.Agent.Interface.Inbound.Envelope
+  alias Nex.Agent.Interface.Media.Attachment
 
   @instance_id "feishu_test"
 
@@ -15,7 +15,7 @@ defmodule Nex.Agent.Channel.FeishuTest do
     end
 
     if Process.whereis(Nex.Agent.ChannelRegistry) == nil do
-      start_supervised!(Nex.Agent.Channel.Registry)
+      start_supervised!(Nex.Agent.Interface.Channel.Registry)
     end
 
     parent = self()
@@ -339,7 +339,7 @@ defmodule Nex.Agent.Channel.FeishuTest do
     on_exit(fn -> File.rm(path) end)
 
     assert {:ok, ["image"]} =
-             Feishu.deliver_outbound(%Nex.Agent.Outbound.Message{
+             Feishu.deliver_outbound(%Nex.Agent.Interface.Outbound.Message{
                channel: @instance_id,
                chat_id: "oc_chat_target",
                attachments: [
@@ -402,7 +402,7 @@ defmodule Nex.Agent.Channel.FeishuTest do
       }
 
       assert {:ok, [returned_kind]} =
-               Feishu.deliver_outbound(%Nex.Agent.Outbound.Message{
+               Feishu.deliver_outbound(%Nex.Agent.Interface.Outbound.Message{
                  channel: @instance_id,
                  chat_id: "ou_media",
                  attachments: [attachment],

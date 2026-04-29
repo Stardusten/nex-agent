@@ -1,7 +1,7 @@
-defmodule Nex.Agent.OnboardingMigrationTest do
+defmodule Nex.Agent.App.OnboardingMigrationTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{Onboarding, PersonalSummary}
+  alias Nex.Agent.App.Onboarding
 
   setup do
     base_dir =
@@ -122,7 +122,8 @@ defmodule Nex.Agent.OnboardingMigrationTest do
     assert Enum.any?(cron_jobs, &(&1["name"] == "current-weekly-summary"))
 
     legacy_job = Enum.find(cron_jobs, &(&1["name"] == "legacy-daily-summary"))
-    assert legacy_job["message"] == PersonalSummary.default_message("daily")
+    assert legacy_job["message"] =~ "Create a daily personal summary"
+    assert legacy_job["message"] =~ "action=`summary`"
 
     memory_template = File.read!(Path.join(workspace, "memory/MEMORY.md"))
     assert memory_template =~ "## Environment Facts"

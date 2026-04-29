@@ -4,8 +4,8 @@ defmodule Nex.Agent.UserUpdateTest do
   Code.require_file("layer_contract_helper.exs", __DIR__)
 
   alias Nex.Agent.LayerContractHelper
-  alias Nex.Agent.Memory
-  alias Nex.Agent.Tool.UserUpdate
+  alias Nex.Agent.Knowledge.Memory
+  alias Nex.Agent.Capability.Tool.Core.UserUpdate
 
   setup do
     workspace =

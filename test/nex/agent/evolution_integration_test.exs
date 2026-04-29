@@ -1,10 +1,11 @@
-defmodule Nex.Agent.EvolutionIntegrationTest do
+defmodule Nex.Agent.Self.EvolutionIntegrationTest do
   @moduledoc false
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{Bus, Evolution, Runner, Session, Skills}
-  alias Nex.Agent.ControlPlane.{Log, Query, Store}
-  alias Nex.Agent.Tool.{EvolutionCandidate, Reflect}
+  alias Nex.Agent.{App.Bus, Self.Evolution, Turn.Runner, Conversation.Session, Capability.Skills}
+  alias Nex.Agent.Observe.ControlPlane.{Log, Query, Store}
+  alias Nex.Agent.Capability.Tool.Core.Reflect
+  alias Nex.Agent.Tool.EvolutionCandidate
   require Log
 
   setup do
@@ -25,7 +26,7 @@ defmodule Nex.Agent.EvolutionIntegrationTest do
     for {mod, name} <- [
           {Task.Supervisor, Nex.Agent.TaskSupervisor},
           {Bus, Bus},
-          {Nex.Agent.Tool.Registry, Nex.Agent.Tool.Registry}
+          {Nex.Agent.Capability.Tool.Registry, Nex.Agent.Capability.Tool.Registry}
         ] do
       if Process.whereis(name) == nil do
         start_supervised!({mod, name: name})

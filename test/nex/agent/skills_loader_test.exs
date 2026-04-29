@@ -1,7 +1,7 @@
-defmodule Nex.Agent.SkillsLoaderTest do
+defmodule Nex.Agent.Capability.SkillsLoaderTest do
   use ExUnit.Case, async: true
 
-  alias Nex.Agent.Skills.Loader
+  alias Nex.Agent.Capability.Skills.Loader
 
   test "parses literal block scalar descriptions" do
     dir = temp_dir("skills-loader-literal")

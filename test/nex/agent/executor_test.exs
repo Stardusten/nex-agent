@@ -1,14 +1,15 @@
-defmodule Nex.Agent.ExecutorTest do
+defmodule Nex.Agent.Capability.ExecutorTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{Executor, ProjectMemory}
+  alias Nex.Agent.Capability.Executor
+  alias Nex.Agent.Knowledge.ProjectMemory, as: ProjectMemory
 
   setup do
     workspace =
       Path.join(System.tmp_dir!(), "nex-agent-executor-#{System.unique_integer([:positive])}")
 
-    Nex.Agent.Onboarding.ensure_initialized()
-    Nex.Agent.Workspace.ensure!(workspace: workspace)
+    Nex.Agent.App.Onboarding.ensure_initialized()
+    Nex.Agent.Runtime.Workspace.ensure!(workspace: workspace)
 
     File.write!(
       Path.join(workspace, "executors/codex_cli.json"),

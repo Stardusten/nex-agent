@@ -20,3 +20,4 @@ Findings are settled architecture or technical conclusions. Draft design notes a
 - [2026-04-27 Model Context Window And Native Compaction](./2026-04-27-model-context-window-and-native-compaction.md)
 - [2026-04-28 Workbench App Artifact Reload Contract](./2026-04-28-workbench-app-artifact-reload-contract.md)
 - [2026-04-28 Skill Progressive Disclosure Catalog](./2026-04-28-skill-progressive-disclosure-catalog.md)
+- [2026-04-29 Plugin Runtime Boundary](./2026-04-29-plugin-runtime-boundary.md)

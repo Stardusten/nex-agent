@@ -1,9 +1,9 @@
 defmodule Nex.Agent.CodeLayerBoundaryTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.CodeUpgrade
-  alias Nex.Agent.SelfUpdate.Planner
-  alias Nex.Agent.Tool.Reflect
+  alias Nex.Agent.Self.CodeUpgrade
+  alias Nex.Agent.Self.Update.Planner
+  alias Nex.Agent.Capability.Tool.Core.Reflect
 
   test "code_layer_file excludes workspace custom tool paths" do
     refute CodeUpgrade.code_layer_file?("/tmp/workspace/tools/weather_shenzhen/tool.ex")
@@ -33,13 +33,16 @@ defmodule Nex.Agent.CodeLayerBoundaryTest do
 
   test "reflect introspect reports source path, public API, dependencies, and dependents" do
     assert {:ok, report} =
-             Reflect.execute(%{"action" => "introspect", "module" => "Nex.Agent.Runner"}, %{})
+             Reflect.execute(
+               %{"action" => "introspect", "module" => "Nex.Agent.Turn.Runner"},
+               %{}
+             )
 
-    assert report =~ "## Module Introspection: Nex.Agent.Runner"
+    assert report =~ "## Module Introspection: Nex.Agent.Turn.Runner"
     assert report =~ "lib/nex/agent/runner.ex"
     assert report =~ "- run/3"
-    assert report =~ "- Nex.Agent.ContextBuilder"
-    assert report =~ "- Nex.Agent.Session"
+    assert report =~ "- Nex.Agent.Turn.ContextBuilder"
+    assert report =~ "- Nex.Agent.Conversation.Session"
     assert report =~ "- Nex.Agent"
     assert report =~ "Hot-loaded code affects future calls"
   end
@@ -62,9 +65,9 @@ defmodule Nex.Agent.CodeLayerBoundaryTest do
       modules
       |> Enum.filter(
         &(&1.module in [
-            "Nex.Agent.Tool.SelfUpdate",
-            "Nex.Agent.SelfUpdate.Planner",
-            "Nex.Agent.SelfUpdate.Deployer"
+            "Nex.Agent.Capability.Tool.Core.SelfUpdate",
+            "Nex.Agent.Self.Update.Planner",
+            "Nex.Agent.Self.Update.Deployer"
           ])
       )
 

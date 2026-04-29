@@ -97,7 +97,7 @@ context:
 - 只放 workspace/run/session/channel/chat/tool_call/trace 身份
 - 不放 error reason、duration、tool args、provider、status
 - `opts[:workspace]` 必须规范化进 `context["workspace"]`
-- 缺省 workspace 使用 `Nex.Agent.Workspace.root/0`
+- 缺省 workspace 使用 `Nex.Agent.Runtime.Workspace.root/0`
 - workspace 不允许放在顶层字段或 `attrs`
 
 attrs:

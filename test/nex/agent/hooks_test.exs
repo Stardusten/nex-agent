@@ -1,7 +1,7 @@
-defmodule Nex.Agent.HooksTest do
+defmodule Nex.Agent.Capability.HooksTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{ContextBuilder, Hooks, Runner, Session}
+  alias Nex.Agent.{Turn.ContextBuilder, Capability.Hooks, Turn.Runner, Conversation.Session}
   alias Nex.Agent.Runtime.Snapshot
 
   setup do

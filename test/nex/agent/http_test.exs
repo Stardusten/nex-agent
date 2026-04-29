@@ -1,8 +1,8 @@
-defmodule Nex.Agent.HTTPTest do
+defmodule Nex.Agent.Interface.HTTPTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{HTTP, RunControl}
-  alias Nex.Agent.ControlPlane.Query, as: ControlPlaneQuery
+  alias Nex.Agent.{Interface.HTTP, Conversation.RunControl}
+  alias Nex.Agent.Observe.ControlPlane.Query, as: ControlPlaneQuery
 
   @proxy_keys [
     "HTTP_PROXY",

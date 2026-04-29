@@ -1,10 +1,10 @@
 defmodule Nex.Agent.SelfModifyPipelineTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{CodeUpgrade, HotReload}
-  alias Nex.Agent.ControlPlane.Query, as: ControlPlaneQuery
-  alias Nex.Agent.SelfUpdate.{Deployer, ReleaseStore}
-  alias Nex.Agent.Tool.Registry
+  alias Nex.Agent.{Self.CodeUpgrade, Self.HotReload}
+  alias Nex.Agent.Observe.ControlPlane.Query, as: ControlPlaneQuery
+  alias Nex.Agent.Self.Update.{Deployer, ReleaseStore}
+  alias Nex.Agent.Capability.Tool.Registry
 
   @tmp_prefix "nex-selfmod-test"
   @repo_root File.cwd!()
@@ -448,7 +448,7 @@ defmodule Nex.Agent.SelfModifyPipelineTest do
   defp fresh_tool_code(module_suffix, tool_name, return_value) do
     """
     defmodule Nex.Agent.Tool.#{module_suffix} do
-      @behaviour Nex.Agent.Tool.Behaviour
+      @behaviour Nex.Agent.Capability.Tool.Behaviour
       def name, do: "#{tool_name}"
       def description, do: "test tool"
       def category, do: :base
@@ -523,7 +523,7 @@ defmodule Nex.Agent.SelfModifyPipelineTest do
   end
 
   defp tracked_target_spec(base) do
-    module_name = "Nex.Agent.Test.#{base}"
+    module_name = "Nex.Agent.Self.Update.TestTargets.#{base}"
 
     %{
       module: Module.concat([module_name]),
@@ -536,7 +536,7 @@ defmodule Nex.Agent.SelfModifyPipelineTest do
   end
 
   defp untracked_target_spec(base) do
-    module_name = "Nex.Agent.Test.#{base}"
+    module_name = "Nex.Agent.Self.Update.TestTargets.#{base}"
 
     %{
       module: Module.concat([module_name]),
@@ -587,11 +587,14 @@ defmodule Nex.Agent.SelfModifyPipelineTest do
   end
 
   defp tracked_source_path(base) do
-    Path.join(@repo_root, "lib/nex/agent/test/#{Macro.underscore(base)}.ex")
+    Path.join(@repo_root, "lib/nex/agent/self/update/test_targets/#{Macro.underscore(base)}.ex")
   end
 
   defp tracked_test_path(base) do
-    Path.join(@repo_root, "test/nex/agent/test/#{Macro.underscore(base)}_test.exs")
+    Path.join(
+      @repo_root,
+      "test/nex/agent/self/update/test_targets/#{Macro.underscore(base)}_test.exs"
+    )
   end
 
   defp module_name(module) do

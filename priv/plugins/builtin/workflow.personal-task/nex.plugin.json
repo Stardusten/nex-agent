@@ -1,0 +1,17 @@
+{
+  "id": "builtin:workflow.personal-task",
+  "title": "Personal Task Workflow",
+  "version": "0.1.0",
+  "enabled": true,
+  "source": "builtin",
+  "description": "Built-in personal task, reminder, follow-up, and summary workflow.",
+  "contributes": {
+    "tools": [
+      {
+        "name": "task",
+        "module": "Nex.Agent.Tool.Task",
+        "surfaces": ["all", "base", "cron"]
+      }
+    ]
+  }
+}

@@ -13,10 +13,10 @@ slash command 必须是独立于 tool/skill 的用户控制层。
 
 新增统一 command catalog：
 
-- `Nex.Agent.Command.Catalog`
-- `Nex.Agent.Command.Parser`
-- `Nex.Agent.Command.Invocation`
-- `Nex.Agent.Command`
+- `Nex.Agent.Conversation.Command.Catalog`
+- `Nex.Agent.Conversation.Command.Parser`
+- `Nex.Agent.Conversation.Command.Invocation`
+- `Nex.Agent.Conversation.Command`
 
 runtime snapshot 新增 `commands` 字段，command definitions 进入统一 runtime 真相源。
 

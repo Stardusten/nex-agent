@@ -21,7 +21,7 @@ defmodule NexAgent.MixProject do
     [
       extra_applications: [:logger, :inets, :ssl, :crypto],
       env: [supervise_workbench_server?: Mix.env() != :test],
-      mod: {Nex.Agent.Application, []}
+      mod: {Nex.Agent.App.Application, []}
     ]
   end
 
@@ -37,5 +37,7 @@ defmodule NexAgent.MixProject do
     ]
   end
 
-  defp elixirc_paths(_env), do: ["lib/nex", "lib/mix"]
+  defp elixirc_paths(_env) do
+    ["lib/nex", "lib/mix"] ++ Path.wildcard("priv/plugins/builtin/*/lib")
+  end
 end

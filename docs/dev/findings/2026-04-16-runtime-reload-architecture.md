@@ -16,17 +16,17 @@ The reload scope includes three groups:
    - `TOOLS.md`
    - `memory/MEMORY.md`
 3. Runtime capability registries
-   - `Nex.Agent.Tool.Registry`
-   - `Nex.Agent.Skills`
+   - `Nex.Agent.Capability.Tool.Registry`
+   - `Nex.Agent.Capability.Skills`
 
 ## Current Behavior
 
-- `Nex.Agent.Config.load/0` reads config directly from disk each time it is called.
-- `Nex.Agent.ContextBuilder.build_system_prompt/1` reads bootstrap files on each prompt build.
-- `Nex.Agent.Runner` fetches tool definitions from `Tool.Registry` on each LLM call.
+- `Nex.Agent.Runtime.Config.load/0` reads config directly from disk each time it is called.
+- `Nex.Agent.Turn.ContextBuilder.build_system_prompt/1` reads bootstrap files on each prompt build.
+- `Nex.Agent.Turn.Runner` fetches tool definitions from `Tool.Registry` on each LLM call.
 - Channel processes load config at `init/1` and then keep long-lived state locally.
-- `Nex.Agent.SystemPrompt` is not a real prompt cache right now; `invalidate_cache/1` is a no-op.
-- `Nex.Agent.InboundWorker` keeps agent structs in memory, so an existing session can continue running with stale runtime options even when prompt layers are rebuilt per turn.
+- `Nex.Agent.Runtime.Prompt` is not a real prompt cache right now; `invalidate_cache/1` is a no-op.
+- `Nex.Agent.Conversation.InboundWorker` keeps agent structs in memory, so an existing session can continue running with stale runtime options even when prompt layers are rebuilt per turn.
 
 ## Decided Architecture
 
@@ -54,10 +54,10 @@ Runtime startup order is frozen.
 
 `Nex.Agent.Runtime` must start:
 
-- after `Nex.Agent.Skills`
-- after `Nex.Agent.InfrastructureSupervisor` has started `Nex.Agent.Tool.Registry`
-- before `Nex.Agent.WorkerSupervisor`
-- before `Nex.Agent.Gateway`
+- after `Nex.Agent.Capability.Skills`
+- after `Nex.Agent.App.InfrastructureSupervisor` has started `Nex.Agent.Capability.Tool.Registry`
+- before `Nex.Agent.App.WorkerSupervisor`
+- before `Nex.Agent.Interface.Gateway`
 
 Reason:
 
@@ -75,9 +75,9 @@ Phase 1 initial boot behavior is also frozen:
 
 The runtime workspace resolver is frozen to:
 
-- `Keyword.get(opts, :workspace) || Nex.Agent.Workspace.root(opts)`
+- `Keyword.get(opts, :workspace) || Nex.Agent.Runtime.Workspace.root(opts)`
 
-`Nex.Agent.SystemPrompt` still contains an older hard-coded workspace constant, but it is not authoritative for runtime reload work and must not be used as the workspace truth source.
+`Nex.Agent.Runtime.Prompt` still contains an older hard-coded workspace constant, but it is not authoritative for runtime reload work and must not be used as the workspace truth source.
 
 ## Snapshot Build Order
 
@@ -89,14 +89,14 @@ Snapshot build order is frozen.
 2. load config from authoritative config path
 3. build prompt layers from workspace files
 4. build tool definitions from the current `Tool.Registry` state
-5. build skills `always_instructions` from the current `Nex.Agent.Skills` state
+5. build skills `always_instructions` from the current `Nex.Agent.Capability.Skills` state
 6. assemble snapshot candidate
 7. validate snapshot candidate
 8. publish new version only after the candidate is complete
 
 This order means:
 
-- `Runtime.reload/1` does not mutate `Tool.Registry` or `Nex.Agent.Skills`
+- `Runtime.reload/1` does not mutate `Tool.Registry` or `Nex.Agent.Capability.Skills`
 - registry or skills refresh must happen before calling `Runtime.reload/1` when file changes affect them
 - `Runtime.Reconciler` must not reload registry/skills after a version is already published, because that would create a false-consistent snapshot
 
@@ -109,7 +109,7 @@ The snapshot should include at least:
 ```elixir
 %Nex.Agent.Runtime.Snapshot{
   version: pos_integer(),
-  config: %Nex.Agent.Config{},
+  config: %Nex.Agent.Runtime.Config{},
   workspace: String.t(),
   prompt: %{
     system_prompt: String.t(),
@@ -165,12 +165,12 @@ The concrete field is frozen to `runtime_version` on `%Nex.Agent{}`.
 Required write points:
 
 - `Nex.Agent.start/1`
-- `Nex.Agent.InboundWorker.ensure_agent/4`
+- `Nex.Agent.Conversation.InboundWorker.ensure_agent/4`
 - cache write-back after `Nex.Agent.prompt/3`
 
 ## Channel Reload Rule
 
-Do not restart `Nex.Agent.Gateway` for config changes.
+Do not restart `Nex.Agent.Interface.Gateway` for config changes.
 
 Reload by child process:
 

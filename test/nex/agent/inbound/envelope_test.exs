@@ -1,7 +1,7 @@
-defmodule Nex.Agent.Inbound.EnvelopeTest do
+defmodule Nex.Agent.Interface.Inbound.EnvelopeTest do
   use ExUnit.Case, async: true
 
-  alias Nex.Agent.Inbound.Envelope
+  alias Nex.Agent.Interface.Inbound.Envelope
 
   test "envelope keeps canonical inbound fields" do
     envelope = %Envelope{

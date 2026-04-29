@@ -1,8 +1,8 @@
 defmodule Nex.Agent.SelfUpdateTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.SelfUpdate.ReleaseStore
-  alias Nex.Agent.Tool.SelfUpdate
+  alias Nex.Agent.Self.Update.ReleaseStore
+  alias Nex.Agent.Capability.Tool.Core.SelfUpdate
 
   setup do
     repo_root =

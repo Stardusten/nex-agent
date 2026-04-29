@@ -1,7 +1,7 @@
 defmodule Nex.Agent.SelfHealingAggregatorTest do
   use ExUnit.Case, async: true
 
-  alias Nex.Agent.SelfHealing.Aggregator
+  alias Nex.Agent.Self.Healing.Aggregator
 
   test "summarize detects repeated same event and actor" do
     old_event = event("evt_1", "tool.call.failed", %{"tool" => "bash"})

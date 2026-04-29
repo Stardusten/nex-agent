@@ -1,8 +1,8 @@
 defmodule Nex.Agent.FindToolTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.Config
-  alias Nex.Agent.Tool.Find
+  alias Nex.Agent.Runtime.Config
+  alias Nex.Agent.Capability.Tool.Core.Find
 
   test "find returns structured matches and truncation metadata" do
     root = Path.join("/tmp", "nex-agent-find-#{System.unique_integer([:positive])}")

@@ -322,12 +322,183 @@
       overflow: hidden;
     }
 
+    .scheduled-workspace {
+      min-height: 0;
+      padding: 18px 22px 20px;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      gap: 16px;
+      overflow: hidden;
+    }
+
+    .skills-workspace {
+      min-height: 0;
+      padding: 18px 22px 20px;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      gap: 16px;
+      overflow: hidden;
+    }
+
     .session-board {
       min-height: 0;
       background: rgba(255, 254, 249, 0.92);
       border: 1px solid var(--line);
       display: grid;
       grid-template-rows: auto minmax(0, 1fr);
+    }
+
+    .scheduled-board {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(320px, 0.92fr) minmax(460px, 1.08fr);
+      gap: 14px;
+    }
+
+    .skills-board {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(320px, 0.92fr) minmax(460px, 1.08fr);
+      gap: 14px;
+    }
+
+    .scheduled-list-shell,
+    .scheduled-editor-shell,
+    .skills-list-shell,
+    .skills-editor-shell {
+      min-height: 0;
+      background: rgba(255, 254, 249, 0.92);
+      border: 1px solid var(--line);
+      display: grid;
+    }
+
+    .scheduled-list-shell,
+    .skills-list-shell {
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+
+    .scheduled-editor-shell,
+    .skills-editor-shell {
+      grid-template-rows: minmax(0, 1fr);
+    }
+
+    .scheduled-list,
+    .skill-list {
+      min-height: 0;
+      overflow: auto;
+      padding: 8px 0;
+    }
+
+    .scheduled-item,
+    .skill-item {
+      width: 100%;
+      border: 0;
+      border-left: 4px solid var(--accent);
+      border-bottom: 1px solid rgba(201, 211, 196, 0.72);
+      background: transparent;
+      padding: 12px 14px 12px 12px;
+      text-align: left;
+      display: grid;
+      gap: 8px;
+    }
+
+    .skill-item[data-status="draft"] {
+      border-left-color: var(--warning);
+    }
+
+    .skill-item[data-status="model-hidden"],
+    .skill-item[data-status="unavailable"] {
+      border-left-color: var(--danger);
+      background: rgba(232, 238, 228, 0.32);
+    }
+
+    .scheduled-item[data-enabled="false"] {
+      border-left-color: var(--line-strong);
+      background: rgba(232, 238, 228, 0.32);
+    }
+
+    .scheduled-item:hover,
+    .scheduled-item[aria-selected="true"],
+    .skill-item:hover,
+    .skill-item[aria-selected="true"] {
+      background: rgba(232, 238, 228, 0.68);
+    }
+
+    .scheduled-main,
+    .skill-main {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: baseline;
+    }
+
+    .scheduled-name,
+    .skill-name {
+      font-weight: var(--weight-strong);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .scheduled-status,
+    .skill-status {
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .scheduled-preview,
+    .skill-preview {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+
+    .scheduled-editor,
+    .skills-editor {
+      min-height: 0;
+      overflow: auto;
+      padding: 14px;
+      display: grid;
+      align-content: start;
+      gap: 14px;
+    }
+
+    .scheduled-schedule-box {
+      border: 1px solid var(--line);
+      background: rgba(232, 238, 228, 0.42);
+      padding: 12px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .scheduled-segments {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .scheduled-segment {
+      min-height: 34px;
+      border: 1px solid var(--line-strong);
+      background: rgba(255, 254, 249, 0.72);
+      padding: 7px 12px;
+      font-weight: var(--weight-semibold);
+    }
+
+    .scheduled-segment[aria-pressed="true"] {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: var(--accent-ink);
+    }
+
+    .scheduled-filter-grid {
+      grid-template-columns: minmax(0, 1fr) 120px 104px;
+    }
+
+    .skills-filter-grid {
+      grid-template-columns: minmax(0, 1fr) 128px 140px 104px;
     }
 
     .session-list {
@@ -1253,6 +1424,26 @@
         overflow: visible;
       }
 
+      .scheduled-workspace {
+        overflow: visible;
+      }
+
+      .skills-workspace {
+        overflow: visible;
+      }
+
+      .scheduled-board,
+      .skills-board {
+        grid-template-columns: 1fr;
+      }
+
+      .scheduled-list-shell,
+      .scheduled-editor-shell,
+      .skills-list-shell,
+      .skills-editor-shell {
+        min-height: 420px;
+      }
+
       .timeline-shell {
         min-height: 560px;
       }
@@ -1326,10 +1517,24 @@
       .action,
       .panel-toggle,
       .permission button,
+      .scheduled-segment,
       .level-button,
       input,
       select {
         min-height: 44px;
+      }
+
+      .scheduled-workspace {
+        padding: 14px;
+      }
+
+      .skills-workspace {
+        padding: 14px;
+      }
+
+      .scheduled-main,
+      .skill-main {
+        grid-template-columns: 1fr;
       }
 
       .toast-region {
@@ -1604,6 +1809,14 @@
           <span class="app-title">Sessions</span>
           <span class="app-id">Runs / Models</span>
         </button>
+        <button class="system-button" id="scheduled-nav" type="button" aria-selected="false">
+          <span class="app-title">Scheduled Tasks</span>
+          <span class="app-id">Cron / Reminders</span>
+        </button>
+        <button class="system-button" id="skills-nav" type="button" aria-selected="false">
+          <span class="app-title">Skills</span>
+          <span class="app-id">Builtin / Workspace / Project</span>
+        </button>
         <button class="system-button" id="config-nav" type="button" aria-selected="false">
           <span class="app-title">Configuration</span>
           <span class="app-id">Providers / Models / Channels</span>
@@ -1810,6 +2023,185 @@
       </div>
     </section>
 
+    <section id="scheduled-view" class="stage" aria-label="Scheduled Tasks" hidden>
+      <div class="stage-bar">
+        <div>
+          <h2 class="stage-title">Scheduled Tasks</h2>
+          <p id="scheduled-state" class="subtle" role="status" aria-live="polite">syncing</p>
+        </div>
+        <div class="stage-actions">
+          <button class="panel-toggle sidebar-toggle" type="button" aria-controls="workbench-sidebar" aria-expanded="false">Menu</button>
+          <button class="panel-toggle inspector-toggle" type="button" aria-controls="workbench-inspector" aria-expanded="false">Detail</button>
+          <button class="refresh" id="refresh-scheduled" type="button">Refresh</button>
+        </div>
+      </div>
+
+      <div class="scheduled-workspace">
+        <section class="metric-band" aria-label="Scheduled task summary">
+          <div class="metric-panel">
+            <div class="metric-title">
+              <span>Jobs</span>
+              <span id="scheduled-total">0 total</span>
+            </div>
+            <div class="budget-value">
+              <span id="scheduled-enabled">0</span>
+              <span>enabled</span>
+            </div>
+            <div class="subtle" id="scheduled-disabled">0 disabled</div>
+          </div>
+          <div class="metric-panel">
+            <div class="metric-title">
+              <span>Next Wakeup</span>
+              <span id="scheduled-next-in">-</span>
+            </div>
+            <div class="gauge-grid">
+              <div class="gauge">
+                <div class="name">Selected</div>
+                <div class="value" id="scheduled-selected-name">new task</div>
+              </div>
+              <div class="gauge">
+                <div class="name">Schedule</div>
+                <div class="value" id="scheduled-selected-schedule">every 1m</div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="scheduled-board">
+          <div class="scheduled-list-shell">
+            <form id="scheduled-filters" class="filter-panel">
+              <div class="filter-grid scheduled-filter-grid">
+                <label>Search
+                  <input id="scheduled-query" name="query" autocomplete="off" placeholder="job, message, channel">
+                </label>
+                <label>Status
+                  <select id="scheduled-status-filter" name="status">
+                    <option value="all">All</option>
+                    <option value="enabled">Enabled</option>
+                    <option value="disabled">Disabled</option>
+                  </select>
+                </label>
+                <label>Limit
+                  <select id="scheduled-limit" name="limit">
+                    <option value="100">100</option>
+                    <option value="200" selected>200</option>
+                    <option value="500">500</option>
+                  </select>
+                </label>
+              </div>
+              <div class="filter-actions">
+                <span id="scheduled-count" class="subtle">0 jobs</span>
+                <div class="level-row">
+                  <button class="action secondary" id="scheduled-new" type="button">New</button>
+                  <button class="action" type="submit">Apply</button>
+                </div>
+              </div>
+            </form>
+            <div id="scheduled-list" class="scheduled-list"></div>
+          </div>
+
+          <div class="scheduled-editor-shell">
+            <form id="scheduled-editor" class="scheduled-editor"></form>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <section id="skills-view" class="stage" aria-label="Skills" hidden>
+      <div class="stage-bar">
+        <div>
+          <h2 class="stage-title">Skills</h2>
+          <p id="skills-state" class="subtle" role="status" aria-live="polite">syncing</p>
+        </div>
+        <div class="stage-actions">
+          <button class="panel-toggle sidebar-toggle" type="button" aria-controls="workbench-sidebar" aria-expanded="false">Menu</button>
+          <button class="panel-toggle inspector-toggle" type="button" aria-controls="workbench-inspector" aria-expanded="false">Detail</button>
+          <button class="refresh" id="refresh-skills" type="button">Refresh</button>
+        </div>
+      </div>
+
+      <div class="skills-workspace">
+        <section class="metric-band" aria-label="Skill summary">
+          <div class="metric-panel">
+            <div class="metric-title">
+              <span>Catalog</span>
+              <span id="skills-total">0 total</span>
+            </div>
+            <div class="budget-value">
+              <span id="skills-model-visible">0</span>
+              <span>model visible</span>
+            </div>
+            <div class="subtle" id="skills-workspace-count">0 workspace editable</div>
+          </div>
+          <div class="metric-panel">
+            <div class="metric-title">
+              <span>Selected</span>
+              <span id="skills-selected-source">none</span>
+            </div>
+            <div class="gauge-grid">
+              <div class="gauge">
+                <div class="name">Status</div>
+                <div class="value" id="skills-selected-status">none</div>
+              </div>
+              <div class="gauge">
+                <div class="name">Type</div>
+                <div class="value" id="skills-selected-type">none</div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="skills-board">
+          <div class="skills-list-shell">
+            <form id="skills-filters" class="filter-panel">
+              <div class="filter-grid skills-filter-grid">
+                <label>Search
+                  <input id="skills-query" name="query" autocomplete="off" placeholder="skill id, description">
+                </label>
+                <label>Type
+                  <select id="skills-source-filter" name="source">
+                    <option value="all">All</option>
+                    <option value="builtin">Builtin</option>
+                    <option value="workspace">Workspace</option>
+                    <option value="project">Project</option>
+                  </select>
+                </label>
+                <label>Status
+                  <select id="skills-status-filter" name="status">
+                    <option value="all">All</option>
+                    <option value="active">Active</option>
+                    <option value="model-only">Model only</option>
+                    <option value="draft">Draft</option>
+                    <option value="model-hidden">Model hidden</option>
+                    <option value="unavailable">Unavailable</option>
+                  </select>
+                </label>
+                <label>Limit
+                  <select id="skills-limit" name="limit">
+                    <option value="100">100</option>
+                    <option value="200" selected>200</option>
+                    <option value="500">500</option>
+                  </select>
+                </label>
+              </div>
+              <div class="filter-actions">
+                <span id="skills-count" class="subtle">0 skills</span>
+                <div class="level-row">
+                  <button class="action secondary" id="skills-new" type="button">New</button>
+                  <button class="action" type="submit">Apply</button>
+                </div>
+              </div>
+            </form>
+            <div id="skills-list" class="skill-list"></div>
+          </div>
+
+          <div class="skills-editor-shell">
+            <form id="skills-editor" class="skills-editor"></form>
+          </div>
+        </section>
+      </div>
+    </section>
+
     <section id="config-view" class="stage" aria-label="Configuration" hidden>
       <div class="stage-bar">
         <div>
@@ -1906,6 +2298,36 @@
         </section>
       </div>
 
+      <div id="scheduled-inspector" class="inspector-mode" hidden>
+        <section class="section">
+          <h2>Scheduled Task Detail</h2>
+          <div id="scheduled-detail" class="detail-block"></div>
+        </section>
+        <section class="section">
+          <h2>Actions</h2>
+          <div id="scheduled-actions" class="action-stack"></div>
+        </section>
+        <section class="section">
+          <h2>Message</h2>
+          <pre id="scheduled-message-preview"></pre>
+        </section>
+      </div>
+
+      <div id="skills-inspector" class="inspector-mode" hidden>
+        <section class="section">
+          <h2>Skill Detail</h2>
+          <div id="skills-detail" class="detail-block"></div>
+        </section>
+        <section class="section">
+          <h2>Actions</h2>
+          <div id="skills-actions" class="action-stack"></div>
+        </section>
+        <section class="section">
+          <h2>Resources</h2>
+          <div id="skills-resources" class="events"></div>
+        </section>
+      </div>
+
       <div id="config-inspector" class="inspector-mode" hidden>
         <section class="section">
           <h2>Selection</h2>
@@ -1960,6 +2382,20 @@
         selectedKey: null,
         detail: null
       },
+      scheduled: {
+        items: [],
+        summary: {},
+        selectedId: null,
+        creating: true
+      },
+      skills: {
+        items: [],
+        summary: {},
+        sourceTypes: {},
+        selectedId: null,
+        creating: false,
+        detail: null
+      },
       config: {
         data: null,
         section: "providers",
@@ -1988,11 +2424,13 @@
     const $ = (id) => document.getElementById(id);
     const compactLayout = window.matchMedia("(max-width: 1500px)");
     const shellViewKey = "nex.workbench.shell.view.v1";
-    const shellViews = new Set(["observe", "evolution", "sessions", "config", "app"]);
+    const shellViews = new Set(["observe", "evolution", "sessions", "scheduled", "skills", "config", "app"]);
     const stageIds = {
       observe: "observe-view",
       evolution: "evolution-view",
       sessions: "sessions-view",
+      scheduled: "scheduled-view",
+      skills: "skills-view",
       config: "config-view",
       app: "app-view"
     };
@@ -2000,6 +2438,8 @@
       observe: "observe-inspector",
       evolution: "evolution-inspector",
       sessions: "sessions-inspector",
+      scheduled: "scheduled-inspector",
+      skills: "skills-inspector",
       config: "config-inspector",
       app: "app-inspector"
     };
@@ -2007,6 +2447,8 @@
       observe: "observe-nav",
       evolution: "evolution-nav",
       sessions: "sessions-nav",
+      scheduled: "scheduled-nav",
+      skills: "skills-nav",
       config: "config-nav"
     };
     let appChromeHideTimer = null;
@@ -2383,6 +2825,18 @@
       if (stored?.view === "sessions") {
         switchView("sessions");
         await loadSessions();
+        return;
+      }
+
+      if (stored?.view === "scheduled") {
+        switchView("scheduled");
+        await loadScheduledTasks();
+        return;
+      }
+
+      if (stored?.view === "skills") {
+        switchView("skills");
+        await loadSkills();
         return;
       }
 
@@ -3331,6 +3785,930 @@
         state.sessions.detail = payload.session;
         await loadSessions();
       });
+    }
+
+    function scheduledParams() {
+      const params = new URLSearchParams();
+      const query = $("scheduled-query").value.trim();
+      const status = $("scheduled-status-filter").value || "all";
+      const limit = $("scheduled-limit").value || "200";
+
+      if (query) params.set("query", query);
+      params.set("status", status);
+      params.set("limit", limit);
+      return params;
+    }
+
+    async function loadScheduledTasks() {
+      setStatus("scheduled-state", "syncing", "warning");
+      const payload = await api(`/api/workbench/scheduled-tasks?${scheduledParams().toString()}`);
+      state.scheduled.items = payload.jobs || [];
+      state.scheduled.summary = payload.status || {};
+      state.scheduled.total = payload.total ?? state.scheduled.items.length;
+
+      if (!state.scheduled.creating && !state.scheduled.items.some((job) => job.id === state.scheduled.selectedId)) {
+        state.scheduled.selectedId = state.scheduled.items[0]?.id || null;
+        state.scheduled.creating = !state.scheduled.selectedId;
+      }
+
+      renderScheduled();
+      setStatus("scheduled-state", "local state");
+    }
+
+    function selectedScheduledTask() {
+      if (state.scheduled.creating) return null;
+      return state.scheduled.items.find((job) => job.id === state.scheduled.selectedId) || null;
+    }
+
+    function renderScheduled() {
+      renderScheduledMetrics();
+      renderScheduledList();
+      renderScheduledEditor();
+      renderScheduledDetail();
+    }
+
+    function renderScheduledMetrics() {
+      const summary = state.scheduled.summary || {};
+      const selected = selectedScheduledTask();
+      const total = summary.total ?? state.scheduled.total ?? state.scheduled.items.length;
+
+      $("scheduled-total").textContent = `${total} total`;
+      $("scheduled-enabled").textContent = String(summary.enabled ?? 0);
+      $("scheduled-disabled").textContent = `${summary.disabled ?? 0} disabled`;
+      $("scheduled-next-in").textContent = summary.next_wakeup_in === null || summary.next_wakeup_in === undefined
+        ? "-"
+        : `in ${durationLabel(summary.next_wakeup_in)}`;
+      $("scheduled-next-in").title = summary.next_wakeup_at ? formatTime(summary.next_wakeup_at) : "";
+      $("scheduled-selected-name").textContent = selected?.name || (state.scheduled.creating ? "new task" : "none");
+      $("scheduled-selected-schedule").textContent = selected ? scheduledScheduleLabel(selected) : "every 1h";
+    }
+
+    function renderScheduledList() {
+      const root = $("scheduled-list");
+      const jobs = state.scheduled.items || [];
+      root.innerHTML = "";
+      $("scheduled-count").textContent = `${state.scheduled.total ?? jobs.length} jobs`;
+
+      if (!jobs.length) {
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = "No scheduled tasks match the current filters.";
+        root.appendChild(empty);
+        return;
+      }
+
+      for (const job of jobs) {
+        const row = document.createElement("button");
+        row.type = "button";
+        row.className = "scheduled-item";
+        row.dataset.enabled = job.enabled === false ? "false" : "true";
+        row.setAttribute("aria-selected", !state.scheduled.creating && job.id === state.scheduled.selectedId ? "true" : "false");
+        row.innerHTML = `
+          <div class="scheduled-main">
+            <span class="scheduled-name"></span>
+            <span class="scheduled-status"></span>
+          </div>
+          <div class="chips"></div>
+          <div class="scheduled-preview"></div>
+        `;
+        row.querySelector(".scheduled-name").textContent = job.name || job.id || "";
+        row.querySelector(".scheduled-status").textContent = scheduledStatusLabel(job);
+        renderScheduledChips(row.querySelector(".chips"), job);
+        row.querySelector(".scheduled-preview").textContent = job.message || "";
+        row.addEventListener("click", () => selectScheduledTask(job.id));
+        root.appendChild(row);
+      }
+    }
+
+    function renderScheduledChips(root, job) {
+      root.innerHTML = "";
+      const chips = [
+        ["schedule", scheduledScheduleLabel(job)],
+        ["source", scheduledSourceLabel(job.source)],
+        ["channel", job.channel],
+        ["last", job.last_status]
+      ];
+
+      for (const [key, value] of chips) {
+        if (value === undefined || value === null || value === "") continue;
+        const chip = document.createElement("span");
+        chip.className = "chip";
+        chip.textContent = `${key}:${value}`;
+        root.appendChild(chip);
+      }
+    }
+
+    function renderScheduledEditor() {
+      const form = $("scheduled-editor");
+      const job = selectedScheduledTask();
+      const creating = state.scheduled.creating || !job;
+      const schedule = job?.schedule || { type: "every", seconds: 3600 };
+      const scheduleType = ["every", "cron", "at"].includes(schedule.type) ? schedule.type : "every";
+      const every = everyParts(schedule.seconds || 3600);
+
+      form.innerHTML = `
+        <div class="form-grid">
+          <label class="field-wide">Name
+            <input id="scheduled-name" autocomplete="off" maxlength="120" required>
+          </label>
+          <label>Channel
+            <input id="scheduled-channel" autocomplete="off" maxlength="160" placeholder="cron">
+          </label>
+          <label>Chat ID
+            <input id="scheduled-chat-id" autocomplete="off" maxlength="240">
+          </label>
+        </div>
+        <section class="scheduled-schedule-box">
+          <div class="scheduled-segments" role="group" aria-label="Schedule type">
+            <button class="scheduled-segment" type="button" data-scheduled-type="every" aria-pressed="false">Every</button>
+            <button class="scheduled-segment" type="button" data-scheduled-type="cron" aria-pressed="false">Cron</button>
+            <button class="scheduled-segment" type="button" data-scheduled-type="at" aria-pressed="false">Once</button>
+          </div>
+          <div id="scheduled-every-fields" class="form-grid">
+            <label>Interval
+              <input id="scheduled-every-amount" type="number" min="1" step="1">
+            </label>
+            <label>Unit
+              <select id="scheduled-every-unit">
+                <option value="seconds">seconds</option>
+                <option value="minutes">minutes</option>
+                <option value="hours">hours</option>
+                <option value="days">days</option>
+              </select>
+            </label>
+          </div>
+          <div id="scheduled-cron-fields" class="form-grid">
+            <label class="field-wide">Cron expression
+              <input id="scheduled-cron-expr" autocomplete="off" placeholder="0 9 * * *">
+            </label>
+          </div>
+          <div id="scheduled-at-fields" class="form-grid">
+            <label class="field-wide">Run at
+              <input id="scheduled-run-at" type="datetime-local">
+            </label>
+          </div>
+        </section>
+        <label class="field-wide">Message
+          <textarea id="scheduled-message" maxlength="8000" required></textarea>
+        </label>
+        <div class="form-grid">
+          <label class="checkbox-row"><input id="scheduled-enabled-input" type="checkbox">Enabled</label>
+          <label class="checkbox-row"><input id="scheduled-delete-after-run" type="checkbox">Delete after one-shot run</label>
+        </div>
+        <div class="button-row">
+          <button class="action" type="submit">${creating ? "Create task" : "Save task"}</button>
+        </div>
+      `;
+
+      $("scheduled-name").value = job?.name || "";
+      $("scheduled-channel").value = job?.channel || "";
+      $("scheduled-chat-id").value = job?.chat_id || "";
+      $("scheduled-every-amount").value = String(every.amount);
+      $("scheduled-every-unit").value = every.unit;
+      $("scheduled-cron-expr").value = schedule.expr || "0 9 * * *";
+      $("scheduled-run-at").value = toDateTimeLocalValue(schedule.at || schedule.timestamp);
+      $("scheduled-message").value = job?.message || "";
+      $("scheduled-enabled-input").checked = creating ? true : job.enabled !== false;
+      $("scheduled-delete-after-run").checked = job?.delete_after_run === true || (creating && scheduleType === "at");
+
+      for (const button of form.querySelectorAll("[data-scheduled-type]")) {
+        button.addEventListener("click", () => setScheduledScheduleType(button.dataset.scheduledType));
+      }
+
+      setScheduledScheduleType(scheduleType);
+      form.onsubmit = saveScheduledTask;
+    }
+
+    function setScheduledScheduleType(type) {
+      const normalized = ["every", "cron", "at"].includes(type) ? type : "every";
+
+      for (const button of document.querySelectorAll("[data-scheduled-type]")) {
+        button.setAttribute("aria-pressed", button.dataset.scheduledType === normalized ? "true" : "false");
+      }
+
+      $("scheduled-every-fields").hidden = normalized !== "every";
+      $("scheduled-cron-fields").hidden = normalized !== "cron";
+      $("scheduled-at-fields").hidden = normalized !== "at";
+    }
+
+    function scheduledFormPayload() {
+      const name = $("scheduled-name").value.trim();
+      const message = $("scheduled-message").value.trim();
+      const activeType = document.querySelector("[data-scheduled-type][aria-pressed=\"true\"]")?.dataset.scheduledType || "every";
+
+      if (!name) throw new Error("Name is required");
+      if (!message) throw new Error("Message is required");
+
+      const payload = {
+        name,
+        message,
+        enabled: $("scheduled-enabled-input").checked,
+        channel: $("scheduled-channel").value.trim(),
+        chat_id: $("scheduled-chat-id").value.trim(),
+        delete_after_run: $("scheduled-delete-after-run").checked
+      };
+
+      if (activeType === "every") {
+        const amount = Number.parseInt($("scheduled-every-amount").value, 10);
+        const unit = $("scheduled-every-unit").value;
+        const seconds = amount * scheduledUnitSeconds(unit);
+        if (!Number.isFinite(seconds) || seconds <= 0) throw new Error("Interval must be a positive number");
+        payload.schedule = { type: "every", seconds };
+      } else if (activeType === "cron") {
+        const expr = $("scheduled-cron-expr").value.trim();
+        if (!expr) throw new Error("Cron expression is required");
+        payload.schedule = { type: "cron", expr };
+      } else {
+        const value = $("scheduled-run-at").value;
+        const date = value ? new Date(value) : null;
+        if (!date || Number.isNaN(date.getTime())) throw new Error("Run at must be a valid date and time");
+        payload.schedule = { type: "at", at: date.toISOString() };
+      }
+
+      return payload;
+    }
+
+    async function saveScheduledTask(event) {
+      event.preventDefault();
+      const button = event.submitter;
+      const creating = state.scheduled.creating || !selectedScheduledTask();
+      let payload;
+
+      try {
+        payload = scheduledFormPayload();
+      } catch (error) {
+        notify("Scheduled task form is incomplete", "error", boundedMessage(error));
+        return;
+      }
+
+      const confirmed = await confirmAction({
+        title: creating ? `Create ${payload.name}?` : `Save ${payload.name}?`,
+        message: "This writes the system scheduled task registry used by the long-running agent runtime.",
+        confirmText: creating ? "Create task" : "Save task"
+      });
+
+      if (!confirmed) return;
+
+      const jobId = state.scheduled.selectedId;
+      await runMutation(`scheduled:save:${creating ? "new" : jobId}`, {
+        button,
+        statusId: "scheduled-state",
+        pendingLabel: "Saving...",
+        pendingStatus: "saving task",
+        successTitle: creating ? "Scheduled task created" : "Scheduled task saved",
+        successStatus: "task saved",
+        errorTitle: "Scheduled task was not saved"
+      }, async () => {
+        const result = await api(creating ? "/api/workbench/scheduled-tasks" : `/api/workbench/scheduled-tasks/${encodeURIComponent(jobId)}`, {
+          method: creating ? "POST" : "PUT",
+          body: JSON.stringify(payload)
+        });
+        state.scheduled.selectedId = result.job?.id || jobId;
+        state.scheduled.creating = false;
+        await loadScheduledTasks();
+      });
+    }
+
+    function selectScheduledTask(jobId) {
+      state.scheduled.creating = false;
+      state.scheduled.selectedId = jobId;
+      renderScheduled();
+      openInspectorPanel();
+    }
+
+    function newScheduledTask() {
+      state.scheduled.creating = true;
+      state.scheduled.selectedId = null;
+      renderScheduled();
+    }
+
+    function renderScheduledDetail() {
+      const job = selectedScheduledTask();
+      const root = $("scheduled-detail");
+      const preview = $("scheduled-message-preview");
+      root.innerHTML = "";
+      preview.textContent = job?.message || "";
+      renderScheduledActions(job);
+
+      if (!job) {
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = state.scheduled.creating ? "New scheduled task" : "Select a scheduled task";
+        root.appendChild(empty);
+        return;
+      }
+
+      const rows = document.createElement("div");
+      rows.className = "kv";
+      for (const [key, value] of [
+        ["ID", job.id],
+        ["Source", scheduledSourceLabel(job.source)],
+        ["Enabled", job.enabled === false ? "no" : "yes"],
+        ["Schedule", scheduledScheduleLabel(job)],
+        ["Next run", formatTime(job.next_run)],
+        ["Last run", formatTime(job.last_run)],
+        ["Last status", job.last_status || ""],
+        ["Channel", job.channel || "cron"],
+        ["Chat ID", job.chat_id || ""],
+        ["Delete after run", job.delete_after_run ? "yes" : "no"],
+        ["Updated", formatTime(job.updated_at)]
+      ]) {
+        const row = document.createElement("div");
+        row.innerHTML = `<span></span><span></span>`;
+        row.children[0].textContent = key;
+        row.children[1].textContent = value || "";
+        rows.appendChild(row);
+      }
+      root.appendChild(rows);
+
+      if (job.last_error) {
+        const error = document.createElement("div");
+        error.className = "diag";
+        error.textContent = job.last_error;
+        root.appendChild(error);
+      }
+    }
+
+    function renderScheduledActions(job) {
+      const root = $("scheduled-actions");
+      root.innerHTML = "";
+      if (!job) return;
+
+      const row = document.createElement("div");
+      row.className = "button-row";
+      const actions = [
+        ["run", "Run now", "secondary"],
+        [job.enabled === false ? "enable" : "disable", job.enabled === false ? "Enable" : "Disable", job.enabled === false ? "" : "secondary"],
+        ["delete", "Delete", "danger"]
+      ];
+
+      for (const [action, label, style] of actions) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = ["action", style].filter(Boolean).join(" ");
+        button.textContent = label;
+        button.addEventListener("click", (event) => performScheduledAction(action, job, event.currentTarget));
+        row.appendChild(button);
+      }
+
+      root.appendChild(row);
+    }
+
+    async function performScheduledAction(action, job, button) {
+      const copy = scheduledActionCopy(action, job);
+      const confirmed = await confirmAction(copy);
+      if (!confirmed) return;
+
+      await runMutation(`scheduled:${job.id}:${action}`, {
+        button,
+        statusId: "scheduled-state",
+        pendingLabel: "Working...",
+        pendingStatus: copy.pending,
+        successTitle: copy.success,
+        successStatus: copy.successStatus,
+        errorTitle: "Scheduled task action failed"
+      }, async () => {
+        if (action === "delete") {
+          await api(`/api/workbench/scheduled-tasks/${encodeURIComponent(job.id)}`, { method: "DELETE" });
+          state.scheduled.creating = true;
+          state.scheduled.selectedId = null;
+        } else {
+          const result = await api(`/api/workbench/scheduled-tasks/${encodeURIComponent(job.id)}/${action}`, {
+            method: "POST",
+            body: JSON.stringify({})
+          });
+          state.scheduled.selectedId = result.job?.id || job.id;
+          state.scheduled.creating = false;
+        }
+
+        await loadScheduledTasks();
+      });
+    }
+
+    function scheduledActionCopy(action, job) {
+      if (action === "run") {
+        return {
+          title: `Run ${job.name}?`,
+          message: "This enqueues the scheduled task immediately through the agent runtime.",
+          confirmText: "Run now",
+          pending: "running task",
+          success: "Scheduled task queued",
+          successStatus: "task queued"
+        };
+      }
+
+      if (action === "enable") {
+        return {
+          title: `Enable ${job.name}?`,
+          message: "The task will resume waking the agent according to its schedule.",
+          confirmText: "Enable task",
+          pending: "enabling task",
+          success: "Scheduled task enabled",
+          successStatus: "task enabled"
+        };
+      }
+
+      if (action === "disable") {
+        return {
+          title: `Disable ${job.name}?`,
+          message: "The task remains in the registry but will stop waking the agent.",
+          confirmText: "Disable task",
+          danger: true,
+          pending: "disabling task",
+          success: "Scheduled task disabled",
+          successStatus: "task disabled"
+        };
+      }
+
+      return {
+        title: `Delete ${job.name}?`,
+        message: "This removes the scheduled task from the system registry.",
+        confirmText: "Delete task",
+        danger: true,
+        pending: "deleting task",
+        success: "Scheduled task deleted",
+        successStatus: "task deleted"
+      };
+    }
+
+    function scheduledStatusLabel(job) {
+      if (job.enabled === false) return "disabled";
+      return job.next_run ? `next ${formatTime(job.next_run)}` : "enabled";
+    }
+
+    function scheduledScheduleLabel(job) {
+      const schedule = job?.schedule || {};
+      return schedule.label || (
+        schedule.type === "every"
+          ? `every ${durationLabel(schedule.seconds || 0)}`
+          : schedule.type === "cron"
+            ? `cron ${schedule.expr || ""}`
+            : schedule.type === "at"
+              ? `once ${formatTime(schedule.at)}`
+              : "unknown"
+      );
+    }
+
+    function scheduledSourceLabel(source) {
+      if (!source) return "custom";
+      if (source.type === "personal_task") return `${source.kind || "task"} task`;
+      return source.kind || source.type || "custom";
+    }
+
+    function scheduledUnitSeconds(unit) {
+      if (unit === "days") return 86400;
+      if (unit === "hours") return 3600;
+      if (unit === "minutes") return 60;
+      return 1;
+    }
+
+    function everyParts(seconds) {
+      const value = Number.parseInt(seconds, 10) || 3600;
+      for (const [unit, unitSeconds] of [["days", 86400], ["hours", 3600], ["minutes", 60]]) {
+        if (value >= unitSeconds && value % unitSeconds === 0) {
+          return { amount: value / unitSeconds, unit };
+        }
+      }
+      return { amount: value, unit: "seconds" };
+    }
+
+    function durationLabel(seconds) {
+      const value = Number.parseInt(seconds, 10);
+      if (!Number.isFinite(value)) return "-";
+      if (value >= 86400) return `${Math.floor(value / 86400)}d ${Math.floor((value % 86400) / 3600)}h`;
+      if (value >= 3600) return `${Math.floor(value / 3600)}h ${Math.floor((value % 3600) / 60)}m`;
+      if (value >= 60) return `${Math.floor(value / 60)}m`;
+      return `${value}s`;
+    }
+
+    function toDateTimeLocalValue(value) {
+      if (!value) {
+        return toDateTimeLocalValue(new Date(Date.now() + 60 * 60 * 1000).toISOString());
+      }
+
+      const date = typeof value === "number"
+        ? new Date(value * 1000)
+        : new Date(value);
+
+      if (Number.isNaN(date.getTime())) return "";
+      const offset = date.getTimezoneOffset() * 60000;
+      return new Date(date.getTime() - offset).toISOString().slice(0, 16);
+    }
+
+    function skillsParams() {
+      const params = new URLSearchParams();
+      const query = $("skills-query").value.trim();
+      const source = $("skills-source-filter").value || "all";
+      const status = $("skills-status-filter").value || "all";
+      const limit = $("skills-limit").value || "200";
+
+      if (query) params.set("query", query);
+      params.set("source", source);
+      params.set("status", status);
+      params.set("limit", limit);
+      return params;
+    }
+
+    async function loadSkills() {
+      setStatus("skills-state", "syncing", "warning");
+      const payload = await api(`/api/workbench/skills?${skillsParams().toString()}`);
+      state.skills.items = payload.skills || [];
+      state.skills.summary = payload.summary || {};
+      state.skills.sourceTypes = payload.source_types || {};
+
+      if (!state.skills.creating && !state.skills.items.some((skill) => skill.id === state.skills.selectedId)) {
+        state.skills.selectedId = state.skills.items[0]?.id || null;
+      }
+
+      renderSkills();
+
+      if (!state.skills.creating && state.skills.selectedId) {
+        await loadSkillDetail(state.skills.selectedId, false);
+      } else {
+        state.skills.detail = null;
+        renderSkillDetail();
+      }
+
+      setStatus("skills-state", "local catalog");
+    }
+
+    async function loadSkillDetail(skillId, openDetail = true) {
+      const payload = await api(`/api/workbench/skills/${encodeURIComponent(skillId)}`);
+      state.skills.selectedId = skillId;
+      state.skills.creating = false;
+      state.skills.detail = payload.skill;
+      renderSkills();
+      renderSkillDetail();
+      if (openDetail) openInspectorPanel();
+    }
+
+    function selectedSkill() {
+      if (state.skills.creating) return null;
+      return state.skills.detail || state.skills.items.find((skill) => skill.id === state.skills.selectedId) || null;
+    }
+
+    function renderSkills() {
+      renderSkillMetrics();
+      renderSkillList();
+      renderSkillEditor();
+      renderSkillDetail();
+    }
+
+    function renderSkillMetrics() {
+      const summary = state.skills.summary || {};
+      const selected = selectedSkill();
+      const bySource = summary.by_source || {};
+
+      $("skills-total").textContent = `${summary.total || 0} total`;
+      $("skills-model-visible").textContent = String(summary.model_visible || 0);
+      $("skills-workspace-count").textContent = `${summary.workspace_writable || bySource.workspace || 0} workspace editable`;
+      $("skills-selected-source").textContent = selected?.source_label || selected?.source || (state.skills.creating ? "workspace" : "none");
+      $("skills-selected-status").textContent = selected ? skillStatusLabel(selected.status) : (state.skills.creating ? "draft" : "none");
+      $("skills-selected-type").textContent = selected?.type_kind || (state.skills.creating ? "durable workspace skill" : "none");
+    }
+
+    function renderSkillList() {
+      const root = $("skills-list");
+      const skills = state.skills.items || [];
+      root.innerHTML = "";
+      $("skills-count").textContent = `${skills.length} skills`;
+
+      if (!skills.length) {
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = "No skills match the current filters.";
+        root.appendChild(empty);
+        return;
+      }
+
+      for (const skill of skills) {
+        const row = document.createElement("button");
+        row.type = "button";
+        row.className = "skill-item";
+        row.dataset.status = skill.status || "active";
+        row.setAttribute("aria-selected", !state.skills.creating && skill.id === state.skills.selectedId ? "true" : "false");
+        row.innerHTML = `
+          <div class="skill-main">
+            <span class="skill-name"></span>
+            <span class="skill-status"></span>
+          </div>
+          <div class="chips"></div>
+          <div class="skill-preview"></div>
+        `;
+        row.querySelector(".skill-name").textContent = skill.id || "";
+        row.querySelector(".skill-status").textContent = skillStatusLabel(skill.status);
+        renderSkillChips(row.querySelector(".chips"), skill);
+        row.querySelector(".skill-preview").textContent = skill.description || "";
+        row.addEventListener("click", () => loadSkillDetail(skill.id));
+        root.appendChild(row);
+      }
+    }
+
+    function renderSkillChips(root, skill) {
+      root.innerHTML = "";
+      const chips = [
+        ["type", skill.source],
+        ["model", skill.model_visible ? "visible" : "hidden"],
+        ["user", skill.user_invocable ? "menu" : "not-menu"],
+        ["req", skill.available === false ? "missing" : "ok"]
+      ];
+
+      for (const [key, value] of chips) {
+        if (value === undefined || value === null || value === "") continue;
+        const chip = document.createElement("span");
+        chip.className = "chip";
+        chip.textContent = `${key}:${value}`;
+        root.appendChild(chip);
+      }
+    }
+
+    function renderSkillEditor() {
+      const form = $("skills-editor");
+      const skill = selectedSkill();
+      const creating = state.skills.creating || !skill;
+      const writable = creating || skill?.writable === true;
+      const source = creating ? "workspace" : skill?.source;
+      const content = creating ? "" : (skill?.content || "");
+
+      form.innerHTML = `
+        <div class="config-type-guide">
+          <strong></strong>
+          <span></span>
+        </div>
+        <div class="form-grid">
+          <label>Name
+            <input id="skill-name-input" autocomplete="off" maxlength="64" required>
+          </label>
+          <label>Type
+            <input id="skill-source-input" autocomplete="off" disabled>
+          </label>
+          <label class="field-wide">Description
+            <textarea id="skill-description-input" maxlength="1200" required></textarea>
+          </label>
+        </div>
+        <div class="form-grid">
+          <label class="checkbox-row"><input id="skill-draft-input" type="checkbox">Draft</label>
+          <label class="checkbox-row"><input id="skill-user-input" type="checkbox">User menu visible</label>
+          <label class="checkbox-row"><input id="skill-model-hidden-input" type="checkbox">Hide from model</label>
+          <label class="checkbox-row"><input id="skill-always-input" type="checkbox">Always flag</label>
+        </div>
+        <label class="field-wide">SKILL.md
+          <textarea id="skill-content-input" maxlength="120000"></textarea>
+        </label>
+        <div class="button-row" id="skill-editor-actions"></div>
+      `;
+
+      const guide = form.querySelector(".config-type-guide");
+      guide.querySelector("strong").textContent = creating ? "Workspace skill" : (skill?.type_kind || "Skill");
+      guide.querySelector("span").textContent = creating
+        ? "New skills are saved under the active workspace and can be edited here."
+        : (state.skills.sourceTypes?.[source]?.description || "This skill is shown from the current runtime catalog.");
+
+      $("skill-name-input").value = creating ? "" : (skill?.name || "");
+      $("skill-name-input").disabled = !creating;
+      $("skill-source-input").value = source || "workspace";
+      $("skill-description-input").value = creating ? "" : (skill?.description || "");
+      $("skill-content-input").value = content;
+      $("skill-draft-input").checked = creating ? true : skill?.draft === true;
+      $("skill-user-input").checked = creating ? false : skill?.user_invocable === true;
+      $("skill-model-hidden-input").checked = creating ? false : skill?.model_invocable === false;
+      $("skill-always-input").checked = creating ? false : skill?.always === true;
+
+      for (const input of form.querySelectorAll("input, textarea")) {
+        if (input.id === "skill-source-input") continue;
+        input.disabled = !writable;
+      }
+
+      const actions = $("skill-editor-actions");
+      actions.innerHTML = "";
+
+      if (writable) {
+        const save = document.createElement("button");
+        save.type = "submit";
+        save.className = "action";
+        save.textContent = creating ? "Create skill" : "Save skill";
+        actions.appendChild(save);
+      } else {
+        const note = document.createElement("div");
+        note.className = "subtle";
+        note.textContent = "Builtin and project skills are read-only from Workbench.";
+        actions.appendChild(note);
+      }
+
+      form.onsubmit = saveSkill;
+    }
+
+    function skillFormPayload() {
+      const name = $("skill-name-input").value.trim();
+      const description = $("skill-description-input").value.trim();
+
+      if (!name) throw new Error("Name is required");
+      if (!description) throw new Error("Description is required");
+
+      return {
+        name,
+        description,
+        content: $("skill-content-input").value,
+        draft: $("skill-draft-input").checked,
+        user_invocable: $("skill-user-input").checked,
+        disable_model_invocation: $("skill-model-hidden-input").checked,
+        always: $("skill-always-input").checked
+      };
+    }
+
+    async function saveSkill(event) {
+      event.preventDefault();
+      const button = event.submitter;
+      const creating = state.skills.creating || !selectedSkill();
+      const selected = selectedSkill();
+      let payload;
+
+      try {
+        payload = skillFormPayload();
+      } catch (error) {
+        notify("Skill form is incomplete", "error", boundedMessage(error));
+        return;
+      }
+
+      const confirmed = await confirmAction({
+        title: creating ? `Create ${payload.name}?` : `Save ${selected.id}?`,
+        message: "This writes a workspace SKILL.md file. Builtin and project skills remain read-only.",
+        confirmText: creating ? "Create skill" : "Save skill"
+      });
+
+      if (!confirmed) return;
+
+      await runMutation(`skill:save:${creating ? "new" : selected.id}`, {
+        button,
+        statusId: "skills-state",
+        pendingLabel: "Saving...",
+        pendingStatus: "saving skill",
+        successTitle: creating ? "Skill created" : "Skill saved",
+        successStatus: "skill saved",
+        errorTitle: "Skill was not saved"
+      }, async () => {
+        const result = await api(creating ? "/api/workbench/skills" : `/api/workbench/skills/${encodeURIComponent(selected.id)}`, {
+          method: creating ? "POST" : "PUT",
+          body: JSON.stringify(payload)
+        });
+        state.skills.selectedId = result.skill?.id || `workspace:${payload.name}`;
+        state.skills.detail = result.skill || null;
+        state.skills.creating = false;
+        await loadSkills();
+      });
+    }
+
+    function newSkill() {
+      state.skills.creating = true;
+      state.skills.selectedId = null;
+      state.skills.detail = null;
+      renderSkills();
+    }
+
+    function renderSkillDetail() {
+      const skill = selectedSkill();
+      const root = $("skills-detail");
+      const resources = $("skills-resources");
+      root.innerHTML = "";
+      resources.innerHTML = "";
+      renderSkillActions(skill);
+
+      if (!skill) {
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = state.skills.creating ? "New workspace skill" : "Select a skill";
+        root.appendChild(empty);
+        resources.appendChild(empty.cloneNode(true));
+        return;
+      }
+
+      const rows = document.createElement("div");
+      rows.className = "kv";
+      for (const [key, value] of [
+        ["ID", skill.id],
+        ["Type", skill.type_kind || skill.source],
+        ["Status", skillStatusLabel(skill.status)],
+        ["Model visible", skill.model_visible ? "yes" : "no"],
+        ["User menu", skill.user_invocable ? "yes" : "no"],
+        ["Always", skill.always ? "yes" : "no"],
+        ["Path", skill.path || ""],
+        ["Missing requirements", skill.missing_requirements || ""]
+      ]) {
+        const row = document.createElement("div");
+        row.innerHTML = `<span></span><span></span>`;
+        row.children[0].textContent = key;
+        row.children[1].textContent = value || "";
+        rows.appendChild(row);
+      }
+      root.appendChild(rows);
+
+      for (const resource of skill.resources || []) {
+        const node = document.createElement("div");
+        node.className = "mini-event";
+        node.innerHTML = `<span class="tag"></span>`;
+        node.querySelector(".tag").textContent = resource;
+        resources.appendChild(node);
+      }
+
+      if (!resources.children.length) {
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = "No bundled resources";
+        resources.appendChild(empty);
+      }
+    }
+
+    function renderSkillActions(skill) {
+      const root = $("skills-actions");
+      root.innerHTML = "";
+      if (!skill) return;
+
+      if (!skill.writable) {
+        const note = document.createElement("div");
+        note.className = "subtle";
+        note.textContent = "This skill type is read-only from Workbench.";
+        root.appendChild(note);
+        return;
+      }
+
+      const row = document.createElement("div");
+      row.className = "button-row";
+
+      if (skill.draft) {
+        const publish = document.createElement("button");
+        publish.type = "button";
+        publish.className = "action";
+        publish.textContent = "Publish draft";
+        publish.addEventListener("click", (event) => publishSkill(skill, event.currentTarget));
+        row.appendChild(publish);
+      }
+
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "action danger";
+      remove.textContent = "Delete";
+      remove.addEventListener("click", (event) => deleteSkill(skill, event.currentTarget));
+      row.appendChild(remove);
+      root.appendChild(row);
+    }
+
+    async function publishSkill(skill, button) {
+      const confirmed = await confirmAction({
+        title: `Publish ${skill.id}?`,
+        message: "This removes the draft marker and makes the workspace skill eligible for normal invocation.",
+        confirmText: "Publish skill"
+      });
+      if (!confirmed) return;
+
+      await runMutation(`skill:${skill.id}:publish`, {
+        button,
+        statusId: "skills-state",
+        pendingLabel: "Publishing...",
+        pendingStatus: "publishing skill",
+        successTitle: "Skill published",
+        successStatus: "skill published",
+        errorTitle: "Skill publish failed"
+      }, async () => {
+        const result = await api(`/api/workbench/skills/${encodeURIComponent(skill.id)}/publish`, {
+          method: "POST",
+          body: JSON.stringify({})
+        });
+        state.skills.selectedId = result.skill?.id || skill.id;
+        state.skills.detail = result.skill || null;
+        await loadSkills();
+      });
+    }
+
+    async function deleteSkill(skill, button) {
+      const confirmed = await confirmAction({
+        title: `Delete ${skill.id}?`,
+        message: "This removes the workspace skill directory. Builtin and project skills cannot be deleted here.",
+        confirmText: "Delete skill",
+        danger: true
+      });
+      if (!confirmed) return;
+
+      await runMutation(`skill:${skill.id}:delete`, {
+        button,
+        statusId: "skills-state",
+        pendingLabel: "Deleting...",
+        pendingStatus: "deleting skill",
+        successTitle: "Skill deleted",
+        successStatus: "skill deleted",
+        errorTitle: "Skill delete failed"
+      }, async () => {
+        await api(`/api/workbench/skills/${encodeURIComponent(skill.id)}`, { method: "DELETE" });
+        state.skills.selectedId = null;
+        state.skills.detail = null;
+        state.skills.creating = true;
+        await loadSkills();
+      });
+    }
+
+    function skillStatusLabel(status) {
+      if (status === "model-hidden") return "model hidden";
+      if (status === "model-only") return "model only";
+      return status || "active";
     }
 
     async function loadConfig() {
@@ -4426,6 +5804,18 @@
       safeLoad("Sessions", "sessions-state", loadSessions);
     });
 
+    $("scheduled-nav").addEventListener("click", async () => {
+      if (!(await ensureSafeToLeaveConfig("open Scheduled Tasks"))) return;
+      switchView("scheduled");
+      safeLoad("Scheduled Tasks", "scheduled-state", loadScheduledTasks);
+    });
+
+    $("skills-nav").addEventListener("click", async () => {
+      if (!(await ensureSafeToLeaveConfig("open Skills"))) return;
+      switchView("skills");
+      safeLoad("Skills", "skills-state", loadSkills);
+    });
+
     $("config-nav").addEventListener("click", async () => {
       if (!(await ensureSafeToLeaveConfig("reload Configuration"))) return;
       switchView("config");
@@ -4475,6 +5865,8 @@
     $("refresh-observe").addEventListener("click", () => safeLoad("Observability", "observe-state", loadObserve));
     $("refresh-evolution").addEventListener("click", () => safeLoad("Self Evolution", "evolution-state", loadEvolution));
     $("refresh-sessions").addEventListener("click", () => safeLoad("Sessions", "sessions-state", loadSessions));
+    $("refresh-scheduled").addEventListener("click", () => safeLoad("Scheduled Tasks", "scheduled-state", loadScheduledTasks));
+    $("refresh-skills").addEventListener("click", () => safeLoad("Skills", "skills-state", loadSkills));
     $("refresh-config").addEventListener("click", async () => {
       if (!(await ensureSafeToLeaveConfig("refresh configuration"))) return;
       safeLoad("Configuration", "config-state", loadConfig);
@@ -4486,6 +5878,16 @@
       state.config.creating = true;
       state.config.selectedKey = null;
       renderConfig();
+    });
+    $("scheduled-new").addEventListener("click", newScheduledTask);
+    $("skills-new").addEventListener("click", newSkill);
+    $("scheduled-filters").addEventListener("submit", (event) => {
+      event.preventDefault();
+      safeLoad("Scheduled Tasks", "scheduled-state", loadScheduledTasks);
+    });
+    $("skills-filters").addEventListener("submit", (event) => {
+      event.preventDefault();
+      safeLoad("Skills", "skills-state", loadSkills);
     });
     $("clear-filters").addEventListener("click", clearFilters);
     $("observe-filters").addEventListener("submit", (event) => {

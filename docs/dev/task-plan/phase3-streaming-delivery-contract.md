@@ -72,7 +72,7 @@
 3. 第一版 stream result struct 固定为：
 
 ```elixir
-%Nex.Agent.Stream.Result{
+%Nex.Agent.Turn.Stream.Result{
   handled?: boolean(),
   run_id: String.t(),
   status: :ok | :error,
@@ -92,8 +92,8 @@
 4. streaming 主路径返回 contract 固定为：
 
 ```elixir
-{:ok, %Nex.Agent.Stream.Result{handled?: true} = result, session}
-| {:error, %Nex.Agent.Stream.Result{handled?: true, status: :error} = result, session}
+{:ok, %Nex.Agent.Turn.Stream.Result{handled?: true} = result, session}
+| {:error, %Nex.Agent.Turn.Stream.Result{handled?: true, status: :error} = result, session}
 ```
 
 `Nex.Agent.prompt/3` 与 `agent_prompt_fun` 必须原样保留这个 result shape。不得把 streaming result 压平成 string 或普通 atom。
@@ -128,11 +128,11 @@
 13. streaming 主路径下，`Runner` / `Nex.Agent.prompt/3` / `agent_prompt_fun` 的最终返回值冻结为“内部收尾值”，不是默认用户可见最终回复。
 14. `InboundWorker.handle_info({:async_result, ...})` 在 streaming 主路径下不得再调用默认 final outbound。
     - 最终用户可见 closeout 由 transport session 在 `:message_end` 后负责
-    - 判定条件固定为 result match `%Nex.Agent.Stream.Result{handled?: true}`
+    - 判定条件固定为 result match `%Nex.Agent.Turn.Stream.Result{handled?: true}`
     - 不能依赖 payload metadata、自由 map、或 magic string 判断是否 suppress
 15. streaming 错误路径 contract 固定为：
     - `Runner` 或 transport 捕获到 streaming 错误时，必须先发送 `Nex.Agent.Stream.Event{type: :error}`。
-    - `Runner` 返回 `{:error, %Nex.Agent.Stream.Result{handled?: true, status: :error}, session}`。
+    - `Runner` 返回 `{:error, %Nex.Agent.Turn.Stream.Result{handled?: true, status: :error}, session}`。
     - `Nex.Agent.prompt/3` 和 `agent_prompt_fun` 不得把该 result 变成 `"Error: ..."` 字符串。
     - `InboundWorker.handle_info({:async_result, {:error, result, updated_agent}, payload})` 若 result 是 `%Stream.Result{handled?: true}`，不得默认 `publish_outbound(payload, "Error: ...")`。
     - `InboundWorker.handle_info({:async_result, {:error, result}, payload})` 若 result 是 `%Stream.Result{handled?: true}`，同样不得默认 `publish_outbound(payload, "Error: ...")`。
@@ -176,8 +176,8 @@ Stage 6 依赖 Stage 4 和 Stage 5。
 ### 这一步要做
 
 - 定义 `Nex.Agent.Stream.Event` struct。
-- 定义 `Nex.Agent.Stream.Result` struct。
-- 定义 `Nex.Agent.Stream.Sink` behaviour。
+- 定义 `Nex.Agent.Turn.Stream.Result` struct。
+- 定义 `Nex.Agent.Turn.Stream.Sink` behaviour。
 - 定义统一事件序号规则：
   - 同一 `run_id` 内严格递增
   - 不允许不同 event 复用同一 `seq`
@@ -192,17 +192,17 @@ Stage 6 依赖 Stage 4 和 Stage 5。
   - 失败发 `:error`
 - 把 `InboundWorker` 的进度接口升级为接收统一 event，而不是 `{:tool_hint, text}` / `{:thinking, text}` 这种 ad-hoc tuple。
 - 冻结 streaming 主路径下的返回值边界：
-  - `Runner` 最终返回 `%Nex.Agent.Stream.Result{handled?: true}` 用于 session/state 持久化和 outbound suppress 判定
+  - `Runner` 最终返回 `%Nex.Agent.Turn.Stream.Result{handled?: true}` 用于 session/state 持久化和 outbound suppress 判定
   - 但该结果不再自动等价于“应该发给用户的最终消息”
 - 冻结 `InboundWorker.handle_info({:async_result, ...})` 的分流规则：
   - 非 streaming 路径：保持现有 final outbound 语义
-  - streaming success 路径：如果 result match `%Nex.Agent.Stream.Result{handled?: true}`，不得默认 `publish_outbound(payload, result)`
-  - streaming error 路径：如果 reason/result match `%Nex.Agent.Stream.Result{handled?: true, status: :error}`，不得默认 `publish_outbound(payload, "Error: ...")`
+  - streaming success 路径：如果 result match `%Nex.Agent.Turn.Stream.Result{handled?: true}`，不得默认 `publish_outbound(payload, result)`
+  - streaming error 路径：如果 reason/result match `%Nex.Agent.Turn.Stream.Result{handled?: true, status: :error}`，不得默认 `publish_outbound(payload, "Error: ...")`
   - streaming 路径最终收尾由 transport session 在 `:message_end` 处理
 - 冻结 `InboundWorker` suppress helper：
 
 ```elixir
-suppress_outbound?(%Nex.Agent.Stream.Result{handled?: true}), do: true
+suppress_outbound?(%Nex.Agent.Turn.Stream.Result{handled?: true}), do: true
 suppress_outbound?(_), do: existing_non_streaming_rules
 ```
 
@@ -227,7 +227,7 @@ suppress_outbound?(_), do: existing_non_streaming_rules
 - `Runner` / `InboundWorker` 能在测试里用同一类 event 交互。
 - reviewer 能直接看到 stage 后续都围绕同一个 struct/behaviour 推进。
 - reviewer 能直接看到 streaming 路径不会在结尾再走一次默认 final outbound。
-- reviewer 能直接看到 `InboundWorker` 用 `%Nex.Agent.Stream.Result{handled?: true}` 判定 suppress，而不是现场发明 sentinel。
+- reviewer 能直接看到 `InboundWorker` 用 `%Nex.Agent.Turn.Stream.Result{handled?: true}` 判定 suppress，而不是现场发明 sentinel。
 - streaming error 已有明确 result contract，不会额外再发一条默认 error 文本。
 
 ### 本 stage 验证
@@ -291,8 +291,8 @@ suppress_outbound?(_), do: existing_non_streaming_rules
 ### 本 stage 验收
 
 - `Runner` 在测试里能持续产出 `Nex.Agent.Stream.Event`。
-- `Runner` 在 streaming success 时返回 `{:ok, %Nex.Agent.Stream.Result{handled?: true, status: :ok}, session}`。
-- `Runner` 在 streaming error 时先发送 `:error` event，再返回 `{:error, %Nex.Agent.Stream.Result{handled?: true, status: :error}, session}`。
+- `Runner` 在 streaming success 时返回 `{:ok, %Nex.Agent.Turn.Stream.Result{handled?: true, status: :ok}, session}`。
+- `Runner` 在 streaming error 时先发送 `:error` event，再返回 `{:error, %Nex.Agent.Turn.Stream.Result{handled?: true, status: :error}, session}`。
 - tool 调用轮次前后存在明确事件边界。
 - 不启用 stream sink 时，旧的最终回复路径仍然可用。
 - 启用 stream sink 时，不会在任务结束后再额外给用户发一整段重复答案。

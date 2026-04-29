@@ -1,8 +1,8 @@
-defmodule Nex.Agent.RunnerStreamTest do
+defmodule Nex.Agent.Turn.RunnerStreamTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{Runner, Session}
-  alias Nex.Agent.Stream.Result
+  alias Nex.Agent.{Turn.Runner, Conversation.Session}
+  alias Nex.Agent.Turn.Stream.Result
 
   defmodule TransportError do
     defexception [:message]

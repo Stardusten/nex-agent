@@ -1,7 +1,7 @@
-defmodule Nex.Agent.HeartbeatTest do
+defmodule Nex.Agent.App.HeartbeatTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.Heartbeat
+  alias Nex.Agent.App.Heartbeat
 
   setup do
     unique = System.unique_integer([:positive])

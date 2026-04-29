@@ -1,0 +1,17 @@
+{
+  "id": "builtin:tool.evolution",
+  "title": "Evolution Candidate Tool",
+  "version": "0.1.0",
+  "enabled": true,
+  "source": "builtin",
+  "description": "Built-in self-evolution candidate tool.",
+  "contributes": {
+    "tools": [
+      {
+        "name": "evolution_candidate",
+        "module": "Nex.Agent.Tool.EvolutionCandidate",
+        "surfaces": ["all", "base"]
+      }
+    ]
+  }
+}

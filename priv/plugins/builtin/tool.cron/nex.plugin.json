@@ -1,0 +1,17 @@
+{
+  "id": "builtin:tool.cron",
+  "title": "Cron Tool",
+  "version": "0.1.0",
+  "enabled": true,
+  "source": "builtin",
+  "description": "Built-in recurring task scheduling tool.",
+  "contributes": {
+    "tools": [
+      {
+        "name": "cron",
+        "module": "Nex.Agent.Tool.Cron",
+        "surfaces": ["all", "base"]
+      }
+    ]
+  }
+}

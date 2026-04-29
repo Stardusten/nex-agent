@@ -1,8 +1,8 @@
-defmodule Nex.Agent.RequestTraceTest do
+defmodule Nex.Agent.Observe.Compat.RequestTraceTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{RequestTrace, Workspace}
-  alias Nex.Agent.ControlPlane.Log
+  alias Nex.Agent.{Observe.Compat.RequestTrace, Runtime.Workspace}
+  alias Nex.Agent.Observe.ControlPlane.Log
   require Log
 
   setup do

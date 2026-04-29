@@ -1,0 +1,16 @@
+{
+  "id": "builtin:skill.workbench-app-authoring",
+  "title": "Workbench App Authoring Skill",
+  "version": "0.1.0",
+  "enabled": true,
+  "source": "builtin",
+  "description": "Builtin Workbench app and built-in Workbench web UI authoring workflow skill.",
+  "contributes": {
+    "skills": [
+      {
+        "id": "builtin:workbench-app-authoring",
+        "path": "skills/workbench-app-authoring/SKILL.md"
+      }
+    ]
+  }
+}

@@ -1,5 +1,5 @@
 defmodule Nex.Agent.Test.RegistryOkTool do
-  @behaviour Nex.Agent.Tool.Behaviour
+  @behaviour Nex.Agent.Capability.Tool.Behaviour
 
   def name, do: "registry_ok_test"
   def description, do: "Registry lifecycle ok test"
@@ -13,7 +13,7 @@ defmodule Nex.Agent.Test.RegistryOkTool do
 end
 
 defmodule Nex.Agent.Test.RegistryCrashTool do
-  @behaviour Nex.Agent.Tool.Behaviour
+  @behaviour Nex.Agent.Capability.Tool.Behaviour
 
   def name, do: "registry_crash_test"
   def description, do: "Registry lifecycle crash test"
@@ -27,7 +27,7 @@ defmodule Nex.Agent.Test.RegistryCrashTool do
 end
 
 defmodule Nex.Agent.Test.RegistrySlowTool do
-  @behaviour Nex.Agent.Tool.Behaviour
+  @behaviour Nex.Agent.Capability.Tool.Behaviour
 
   def name, do: "registry_slow_test"
   def description, do: "Registry lifecycle cancellation test"
@@ -46,8 +46,8 @@ end
 defmodule Nex.Agent.ToolRegistryTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.ControlPlane.Query, as: ControlPlaneQuery
-  alias Nex.Agent.Tool.Registry
+  alias Nex.Agent.Observe.ControlPlane.Query, as: ControlPlaneQuery
+  alias Nex.Agent.Capability.Tool.Registry
 
   setup do
     workspace =

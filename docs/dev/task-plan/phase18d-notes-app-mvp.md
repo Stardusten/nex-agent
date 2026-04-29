@@ -238,7 +238,7 @@ Stage 5 依赖 Stage 3、Stage 4。
 ### 前置检查
 
 - Stage 1 tests pass。
-- Bridge method allowlist 仍然集中在 `Nex.Agent.Workbench.Bridge`。
+- Bridge method allowlist 仍然集中在 `Nex.Agent.Interface.Workbench.Bridge`。
 
 ### 这一步改哪里
 

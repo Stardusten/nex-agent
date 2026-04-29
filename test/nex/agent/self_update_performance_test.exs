@@ -1,7 +1,7 @@
 defmodule Nex.Agent.SelfUpdatePerformanceTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.SelfUpdate.Deployer
+  alias Nex.Agent.Self.Update.Deployer
 
   setup do
     repo_root =

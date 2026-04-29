@@ -33,7 +33,7 @@ Phase 0 已验证（2026-04-23）：
 - 数据来源：BEAM runtime（`module_info`）+ 源码静态分析（grep alias/import）
 - 不需要维护额外文档，每次调用实时计算
 
-**验收**：agent 能通过 tool call 回答"Nex.Agent.Runner 依赖哪些模块？改它会影响什么？"
+**验收**：agent 能通过 tool call 回答"Nex.Agent.Turn.Runner 依赖哪些模块？改它会影响什么？"
 
 ### Phase 10b — 变更验证闭环
 

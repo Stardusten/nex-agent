@@ -74,7 +74,7 @@
 冻结 shape：
 
 ```elixir
-%Nex.Agent.RunControl.Run{
+%Nex.Agent.Conversation.RunControl.Run{
   id: String.t(),
   workspace: String.t(),
   session_key: String.t(),

@@ -1,8 +1,8 @@
-defmodule Nex.Agent.SecurityTest do
+defmodule Nex.Agent.Sandbox.SecurityTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.Config
-  alias Nex.Agent.Security
+  alias Nex.Agent.Runtime.Config
+  alias Nex.Agent.Sandbox.Security
 
   setup do
     previous_allowed_roots = System.get_env("NEX_ALLOWED_ROOTS")

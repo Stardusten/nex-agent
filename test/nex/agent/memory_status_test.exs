@@ -1,7 +1,7 @@
-defmodule Nex.Agent.MemoryStatusTest do
+defmodule Nex.Agent.Knowledge.MemoryStatusTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{Session, Skills}
+  alias Nex.Agent.{Conversation.Session, Capability.Skills}
   alias Nex.Agent.Tool.MemoryStatus
 
   setup do

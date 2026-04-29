@@ -3,9 +3,9 @@
 ## 当前状态
 
 - phase5 已落地新的媒体真相源：
-  - `Nex.Agent.Inbound.Envelope`
-  - `Nex.Agent.Media.Ref`
-  - `Nex.Agent.Media.Attachment`
+  - `Nex.Agent.Interface.Inbound.Envelope`
+  - `Nex.Agent.Interface.Media.Ref`
+  - `Nex.Agent.Interface.Media.Attachment`
 - 当前 Feishu 出站真实状态是：
   - 默认正文仍走 `interactive` message
   - `lib/nex/agent/channel/feishu.ex` 直接把字符串送进 `FeishuRenderer.render_card/1`
@@ -69,7 +69,7 @@ message/tool/runtime request
 
 本 phase6 固定以下边界。
 
-1. 继续复用 phase5 的 `Nex.Agent.Media.Attachment` 作为媒体真相源。
+1. 继续复用 phase5 的 `Nex.Agent.Interface.Media.Attachment` 作为媒体真相源。
    - 不重新发明 `local_image_path` / `local_file_path` 私有 map 作为长期主链
    - attachment 的真相字段仍是 `local_path`
 
@@ -101,7 +101,7 @@ message/tool/runtime request
 8. phase6 的统一出站 request 最小 shape 冻结为：
 
 ```elixir
-defmodule Nex.Agent.Outbound.Message do
+defmodule Nex.Agent.Interface.Outbound.Message do
   @enforce_keys [:channel, :chat_id]
   defstruct [
     :channel,
@@ -119,7 +119,7 @@ end
 
 - `text` 是默认正文输入
 - `native_type/native_payload` 只用于显式原生消息
-- `attachments :: [Nex.Agent.Media.Attachment.t()]`
+- `attachments :: [Nex.Agent.Interface.Media.Attachment.t()]`
 - 一个 request 可以是：
   - 纯文本
   - 纯 native payload
@@ -131,7 +131,7 @@ end
 ```elixir
 defmodule Nex.Agent.Channel.Feishu.OutboundMedia do
   @spec materialize(
-          [Nex.Agent.Media.Attachment.t()],
+          [Nex.Agent.Interface.Media.Attachment.t()],
           keyword()
         ) ::
           {:ok, [map()]} | {:error, term()}
@@ -145,7 +145,7 @@ end
   kind: :image | :file | :audio | :video,
   msg_type: "image" | "file" | "audio" | "media",
   payload: %{"image_key" => "..."} | %{"file_key" => "..."},
-  attachment: %Nex.Agent.Media.Attachment{}
+  attachment: %Nex.Agent.Interface.Media.Attachment{}
 }
 ```
 
@@ -208,7 +208,7 @@ Stage 6 依赖 Stage 2、3、4、5。
 
 ### 这一步要做
 
-- 落地 `%Nex.Agent.Outbound.Message{}`。
+- 落地 `%Nex.Agent.Interface.Outbound.Message{}`。
 - 冻结 `message` tool 输出到 channel 的最小内部形状。
 - 把当前 `content/msg_type/content_json/local_image_path` 的散装语义映射到统一 request。
 - 明确：
@@ -220,7 +220,7 @@ Stage 6 依赖 Stage 2、3、4、5。
 
 ```elixir
 @spec from_tool_args(map(), map()) ::
-        {:ok, Nex.Agent.Outbound.Message.t()} | {:error, term()}
+        {:ok, Nex.Agent.Interface.Outbound.Message.t()} | {:error, term()}
 ```
 
 ### 实施注意事项
@@ -243,7 +243,7 @@ Stage 6 依赖 Stage 2、3、4、5。
 ### 前置检查
 
 - Stage 1 的 outbound request 已冻结。
-- 读清 `Nex.Agent.IMIR.Renderers.Feishu.render_card/1`。
+- 读清 `Nex.Agent.Interface.IMIR.Renderers.Feishu.render_card/1`。
 - 读清 `Nex.Agent.Stream.FeishuSession` 目前怎样 send / patch card。
 
 ### 这一步改哪里

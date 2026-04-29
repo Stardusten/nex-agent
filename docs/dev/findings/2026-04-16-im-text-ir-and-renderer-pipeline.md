@@ -20,7 +20,7 @@
 
 ## Stage 1 Implementation Notes
 
-- `Nex.Agent.Config` 新增统一 channel runtime 读取入口，输出最小 `streaming` shape。
+- `Nex.Agent.Runtime.Config` 新增统一 channel runtime 读取入口，输出最小 `streaming` shape。
 - `Nex.Agent.Runtime.Snapshot` 暴露 `channels`，让 transport 与后续 prompt 读取同一份 runtime channel 配置。
 - `InboundWorker` 在打开 stream session 时传入：
   - `metadata`

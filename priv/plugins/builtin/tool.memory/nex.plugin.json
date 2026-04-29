@@ -1,0 +1,32 @@
+{
+  "id": "builtin:tool.memory",
+  "title": "Memory Tools",
+  "version": "0.1.0",
+  "enabled": true,
+  "source": "builtin",
+  "description": "Built-in memory maintenance tools.",
+  "contributes": {
+    "tools": [
+      {
+        "name": "memory_consolidate",
+        "module": "Nex.Agent.Tool.MemoryConsolidate",
+        "surfaces": ["all", "base"]
+      },
+      {
+        "name": "memory_status",
+        "module": "Nex.Agent.Tool.MemoryStatus",
+        "surfaces": ["all", "base", "follow_up", "subagent"]
+      },
+      {
+        "name": "memory_rebuild",
+        "module": "Nex.Agent.Tool.MemoryRebuild",
+        "surfaces": ["all", "base"]
+      },
+      {
+        "name": "memory_write",
+        "module": "Nex.Agent.Tool.MemoryWrite",
+        "surfaces": ["all", "base"]
+      }
+    ]
+  }
+}

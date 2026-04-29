@@ -103,10 +103,10 @@ Relevant current files:
 
 What exists now:
 
-- `Nex.Agent.Subagent` is a GenServer supervised under `WorkerSupervisor`.
+- `Nex.Agent.Capability.Subagent` is a GenServer supervised under `WorkerSupervisor`.
 - `spawn_task` is a tool that can create a background subagent task.
 - each subagent task creates an independent session key like `subagent:<task_id>`.
-- the task runs `Nex.Agent.Runner.run/3`.
+- the task runs `Nex.Agent.Turn.Runner.run/3`.
 - subagent runs use `tools_filter: :subagent`.
 - completion is announced back through the Bus as an inbound message with `_from_subagent` metadata.
 - owner run cancellation can cancel related subagent tasks.

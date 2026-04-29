@@ -1,9 +1,9 @@
 defmodule Nex.Agent.ControlPlaneMetricTest do
   use ExUnit.Case, async: true
 
-  require Nex.Agent.ControlPlane.Metric
+  require Nex.Agent.Observe.ControlPlane.Metric
 
-  alias Nex.Agent.ControlPlane.Query
+  alias Nex.Agent.Observe.ControlPlane.Query
 
   setup do
     workspace = tmp_workspace("metric")
@@ -13,7 +13,7 @@ defmodule Nex.Agent.ControlPlaneMetricTest do
 
   test "count and measure write info metric observations with source", %{workspace: workspace} do
     assert {:ok, count} =
-             Nex.Agent.ControlPlane.Metric.count(
+             Nex.Agent.Observe.ControlPlane.Metric.count(
                "control_plane.budget.spent",
                3,
                %{"action" => "hint_candidate"},
@@ -21,7 +21,7 @@ defmodule Nex.Agent.ControlPlaneMetricTest do
              )
 
     assert {:ok, measure} =
-             Nex.Agent.ControlPlane.Metric.measure(
+             Nex.Agent.Observe.ControlPlane.Metric.measure(
                "runner.llm.duration",
                123,
                %{"provider" => "test"},

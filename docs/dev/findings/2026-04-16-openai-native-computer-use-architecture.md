@@ -8,7 +8,7 @@ The current stack is built around one assumption:
 
 - model-visible tools are ordinary function tools
 - model outputs tool calls as function calls
-- runtime executes those calls through `Nex.Agent.Tool.Registry`
+- runtime executes those calls through `Nex.Agent.Capability.Tool.Registry`
 - tool results go back into the transcript as `"role" => "tool"`
 
 OpenAI native computer use breaks that assumption.
@@ -62,7 +62,7 @@ Introduce a two-lane capability model.
 Lane 1:
 
 - workspace/runtime function tools
-- current `Nex.Agent.Tool.Registry` model
+- current `Nex.Agent.Capability.Tool.Registry` model
 - skill-runtime ephemeral tools
 - normal `"tool"` transcript entries
 
@@ -137,7 +137,7 @@ This boundary lets `Runner` operate on typed items instead of pretending everyth
 
 ## ReqLLM Boundary Changes
 
-`Nex.Agent.LLM.ReqLLM` should stop exposing only the current simplified map response for the main agent loop.
+`Nex.Agent.Turn.LLM.ReqLLM` should stop exposing only the current simplified map response for the main agent loop.
 
 It should expose a richer normalized output that preserves item types and provider-native state.
 

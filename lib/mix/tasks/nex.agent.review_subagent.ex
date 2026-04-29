@@ -21,7 +21,7 @@ defmodule Mix.Tasks.Nex.Agent.ReviewSubagent do
 
   use Mix.Task
 
-  alias Nex.Agent.SubAgent.Review
+  alias Nex.Agent.Capability.Subagent.Review
 
   @impl true
   def run(args) do

@@ -1,10 +1,10 @@
 defmodule Nex.Agent.LLM.Providers.OpenAICodexTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.Config
-  alias Nex.Agent.LLM.ProviderProfile
+  alias Nex.Agent.Runtime.Config
+  alias Nex.Agent.Turn.LLM.ProviderProfile
   alias Nex.Agent.LLM.Providers.OpenAICodex.Stream
-  alias Nex.Agent.Tool.Registry
+  alias Nex.Agent.Capability.Tool.Registry
   alias ReqLLM.Message
 
   test "adapter selects Codex stream only for OAuth mode" do

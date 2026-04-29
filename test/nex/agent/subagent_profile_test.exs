@@ -1,9 +1,16 @@
-defmodule Nex.Agent.SubagentProfileTest do
+defmodule Nex.Agent.Capability.SubagentProfileTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{Bus, Config, Session, SessionManager, Subagent}
+  alias Nex.Agent.{
+    App.Bus,
+    Runtime.Config,
+    Conversation.Session,
+    Conversation.SessionManager,
+    Capability.Subagent
+  }
+
   alias Nex.Agent.Runtime.Snapshot
-  alias Nex.Agent.Subagent.Profile
+  alias Nex.Agent.Capability.Subagent.Profile
 
   setup do
     workspace =

@@ -1,0 +1,16 @@
+{
+  "id": "builtin:skill.memory-and-evolution-routing",
+  "title": "Memory And Evolution Routing Skill",
+  "version": "0.1.0",
+  "enabled": true,
+  "source": "builtin",
+  "description": "Builtin layer-routing workflow for memory, user, soul, skill, tool, and code updates.",
+  "contributes": {
+    "skills": [
+      {
+        "id": "builtin:memory-and-evolution-routing",
+        "path": "skills/memory-and-evolution-routing/SKILL.md"
+      }
+    ]
+  }
+}

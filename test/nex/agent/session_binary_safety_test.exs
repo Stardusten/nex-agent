@@ -1,7 +1,7 @@
-defmodule Nex.Agent.SessionBinarySafetyTest do
+defmodule Nex.Agent.Conversation.SessionBinarySafetyTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.Session
+  alias Nex.Agent.Conversation.Session
 
   test "session save handles binary content safely" do
     workspace =

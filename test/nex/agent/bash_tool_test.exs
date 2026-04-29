@@ -1,7 +1,7 @@
 defmodule Nex.Agent.BashToolTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.Tool.Bash
+  alias Nex.Agent.Capability.Tool.Core.Bash
 
   test "bash tool sanitizes non-utf8 command output" do
     assert {:ok, output} =

@@ -1,0 +1,180 @@
+defmodule Nex.Agent.Capability.Tool.Core.ToolList do
+  @moduledoc "List built-in and custom tools, and inspect details for one tool."
+
+  @behaviour Nex.Agent.Capability.Tool.Behaviour
+
+  alias Nex.Agent.Self.CodeUpgrade
+  alias Nex.Agent.Capability.Tool.CustomTools
+  alias Nex.Agent.Capability.Tool.Registry
+
+  def name, do: "tool_list"
+
+  def description,
+    do: "List built-in and custom tools in the TOOL layer, or inspect a specific tool."
+
+  def category, do: :evolution
+  def surfaces, do: [:all, :follow_up]
+
+  def definition do
+    %{
+      name: name(),
+      description: description(),
+      parameters: %{
+        type: "object",
+        properties: %{
+          scope: %{
+            type: "string",
+            enum: ["builtin", "custom", "all"],
+            description: "Which tool scope to list",
+            default: "all"
+          },
+          detail: %{type: "string", description: "Tool name to inspect"}
+        }
+      }
+    }
+  end
+
+  def execute(%{"detail" => tool_name}, _ctx) when is_binary(tool_name) and tool_name != "" do
+    case custom_detail(tool_name) || builtin_detail(tool_name) do
+      nil -> {:error, "Tool not found: #{tool_name}"}
+      detail -> {:ok, detail}
+    end
+  end
+
+  def execute(%{"scope" => scope}, _ctx) when scope in ["builtin", "custom", "all"] do
+    {:ok,
+     %{
+       scope: scope,
+       builtin: if(scope in ["builtin", "all"], do: builtin_list(), else: []),
+       custom: if(scope in ["custom", "all"], do: custom_list(), else: [])
+     }}
+  end
+
+  def execute(_args, ctx), do: execute(%{"scope" => "all"}, ctx)
+
+  defp builtin_list do
+    custom_names = MapSet.new(Enum.map(custom_list(), & &1["name"]))
+
+    Registry.list()
+    |> Enum.reject(&MapSet.member?(custom_names, &1))
+    |> Enum.sort()
+    |> Enum.map(fn name ->
+      module = Registry.get(name)
+
+      %{
+        "name" => name,
+        "scope" => "builtin",
+        "layers" => layers_for(module),
+        "module" => inspect(module),
+        "description" => description_for(module),
+        "source_path" => if(module, do: CodeUpgrade.source_path(module), else: nil)
+      }
+    end)
+  end
+
+  defp custom_list do
+    CustomTools.list()
+    |> Enum.map(fn tool ->
+      %{
+        "name" => tool["name"],
+        "scope" => tool["scope"],
+        "layers" => ["tool"],
+        "module" => tool["module"],
+        "description" => tool["description"],
+        "source_path" => tool.source_path,
+        "origin" => tool["origin"]
+      }
+    end)
+  end
+
+  defp builtin_detail(name) do
+    custom_names = MapSet.new(Enum.map(custom_list(), & &1["name"]))
+
+    if MapSet.member?(custom_names, name) do
+      nil
+    else
+      case Registry.get(name) do
+        nil ->
+          nil
+
+        module ->
+          %{
+            "name" => name,
+            "scope" => "builtin",
+            "layers" => layers_for(module),
+            "module" => inspect(module),
+            "description" => description_for(module),
+            "source_path" => CodeUpgrade.source_path(module),
+            "definition" => definition_for(module)
+          }
+      end
+    end
+  end
+
+  defp custom_detail(name) do
+    case CustomTools.detail(name) do
+      nil ->
+        nil
+
+      tool ->
+        %{
+          "name" => tool["name"],
+          "scope" => tool["scope"],
+          "layers" => ["tool"],
+          "module" => tool["module"],
+          "description" => tool["description"],
+          "source_path" => tool.source_path,
+          "metadata_path" => tool.metadata_path,
+          "definition" => tool.definition,
+          "created_by" => tool["created_by"],
+          "created_at" => tool["created_at"],
+          "updated_at" => tool["updated_at"],
+          "origin" => tool["origin"]
+        }
+    end
+  end
+
+  defp description_for(module) do
+    if is_atom(module) and function_exported?(module, :description, 0),
+      do: module.description(),
+      else: ""
+  end
+
+  defp definition_for(module) do
+    if is_atom(module) and function_exported?(module, :definition, 0),
+      do: module.definition(),
+      else: nil
+  end
+
+  defp layers_for(module) when is_atom(module) do
+    if function_exported?(module, :name, 0) do
+      case module.name() do
+        "memory_consolidate" -> ["memory"]
+        "soul_update" -> ["soul"]
+        "user_update" -> ["user"]
+        "memory_status" -> ["memory"]
+        "memory_rebuild" -> ["memory"]
+        "memory_write" -> ["memory"]
+        "hook" -> ["tool"]
+        "observe" -> ["tool"]
+        "skill_get" -> ["skill"]
+        "skill_capture" -> ["skill"]
+        "tool_create" -> ["tool"]
+        "tool_list" -> ["tool"]
+        "tool_delete" -> ["tool"]
+        "task" -> ["tool"]
+        "knowledge_capture" -> ["tool"]
+        "executor_dispatch" -> ["tool"]
+        "executor_status" -> ["tool"]
+        "reflect" -> ["code"]
+        "evolution_candidate" -> ["tool"]
+        "self_update" -> ["code"]
+        _ -> ["tool"]
+      end
+    else
+      ["tool"]
+    end
+  end
+
+  defp layers_for(_module), do: ["tool"]
+end

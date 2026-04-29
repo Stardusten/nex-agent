@@ -3,7 +3,7 @@
 ## 当前状态
 
 - phase3 主路径已经落地，至少 Feishu 已经能走用户可见流式输出。
-- `%Nex.Agent.Stream.Event{}` 和 `%Nex.Agent.Stream.Result{}` 已经存在，`InboundWorker` 也已经按 stream session 驱动 transport 收尾。
+- `%Nex.Agent.Stream.Event{}` 和 `%Nex.Agent.Turn.Stream.Result{}` 已经存在，`InboundWorker` 也已经按 stream session 驱动 transport 收尾。
 - 当前主要技术债不是“功能缺失”，而是 streaming 协议细节开始回流到 `Runner` 与中心化 `Transport` dispatcher。
 - reviewer 已指出 `Runner` 过重、`Transport` 不够自然、`MessageSession` 命名不准、consolidation 共用 streaming machinery 边界偏硬；这些判断已经在现代码中得到验证。
 - 对应架构结论见：
@@ -15,7 +15,7 @@
 - provider raw stream 累积逻辑被收敛到独立 assembler，conversation path 与 consolidation path 共用同一份 assembled state machinery。
 - `Transport` 不再直接持有 Feishu 之类的平台副作用分支；平台实现自己负责创建 carrier 与执行平台动作。
 - `MessageSession` 更名为能力导向命名 `MultiMessageSession`。
-- streaming transport 内部 finalize contract 收紧为 `%Nex.Agent.Stream.Result{}`，不再把旧 string / `:message_sent` 兼容继续扩散到新的 stream session 层。
+- streaming transport 内部 finalize contract 收紧为 `%Nex.Agent.Turn.Stream.Result{}`，不再把旧 string / `:message_sent` 兼容继续扩散到新的 stream session 层。
 - 阶段结束时仓库仍保持已存在的 Feishu 流式主路径行为，不得因为重构退回“一次性整段发完”。
 
 ## 开工前必须先看的代码路径
@@ -49,7 +49,7 @@
 | {:error, reason}
 ```
 
-2. `%Nex.Agent.Stream.Event{}` 与 `%Nex.Agent.Stream.Result{}` 的外部语义不改。
+2. `%Nex.Agent.Stream.Event{}` 与 `%Nex.Agent.Turn.Stream.Result{}` 的外部语义不改。
    - phase3a 是内部层次收敛，不是重新定义用户可见 streaming contract。
 3. 新增 assembler 后，职责冻结为：
    - 累积 raw provider stream state
@@ -89,10 +89,10 @@
 9. streaming transport finalize 内部 contract 冻结为：
 
 ```elixir
-@callback finalize_success(term(), Nex.Agent.Stream.Result.t()) ::
+@callback finalize_success(term(), Nex.Agent.Turn.Stream.Result.t()) ::
             {term(), [action()], boolean()}
 
-@callback finalize_error(term(), Nex.Agent.Stream.Result.t()) ::
+@callback finalize_error(term(), Nex.Agent.Turn.Stream.Result.t()) ::
             {term(), [action()], boolean()}
 ```
 

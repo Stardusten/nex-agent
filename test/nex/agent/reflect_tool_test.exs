@@ -1,8 +1,8 @@
 defmodule Nex.Agent.ReflectToolTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.SelfUpdate.ReleaseStore
-  alias Nex.Agent.Tool.Reflect
+  alias Nex.Agent.Self.Update.ReleaseStore
+  alias Nex.Agent.Capability.Tool.Core.Reflect
 
   @repo_root File.cwd!()
 
@@ -24,14 +24,15 @@ defmodule Nex.Agent.ReflectToolTest do
     assert {:ok,
             %{
               status: :ok,
-              module: "Nex.Agent.Runner",
+              module: "Nex.Agent.Turn.Runner",
               path: path,
               content: content,
               source_kind: :module
-            }} = Reflect.execute(%{"action" => "source", "module" => "Nex.Agent.Runner"}, %{})
+            }} =
+             Reflect.execute(%{"action" => "source", "module" => "Nex.Agent.Turn.Runner"}, %{})
 
     assert path == Path.join(@repo_root, "lib/nex/agent/runner.ex")
-    assert content =~ "defmodule Nex.Agent.Runner do"
+    assert content =~ "defmodule Nex.Agent.Turn.Runner do"
   end
 
   test "reflect source returns the same shape for path-first inspection" do
@@ -40,13 +41,13 @@ defmodule Nex.Agent.ReflectToolTest do
     assert {:ok,
             %{
               status: :ok,
-              module: "Nex.Agent.Runner",
+              module: "Nex.Agent.Turn.Runner",
               path: ^path,
               content: content,
               source_kind: :path
             }} = Reflect.execute(%{"action" => "source", "path" => path}, %{})
 
-    assert content =~ "defmodule Nex.Agent.Runner do"
+    assert content =~ "defmodule Nex.Agent.Turn.Runner do"
   end
 
   test "reflect source enforces exactly one of module or path" do
@@ -57,7 +58,7 @@ defmodule Nex.Agent.ReflectToolTest do
              Reflect.execute(
                %{
                  "action" => "source",
-                 "module" => "Nex.Agent.Runner",
+                 "module" => "Nex.Agent.Turn.Runner",
                  "path" => "lib/nex/agent/runner.ex"
                },
                %{}

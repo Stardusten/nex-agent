@@ -1,9 +1,9 @@
 defmodule Nex.Agent.RuntimeTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{Config, Runtime, Skills}
+  alias Nex.Agent.{Runtime.Config, Runtime, Capability.Skills}
   alias Nex.Agent.Runtime.Snapshot
-  alias Nex.Agent.Workbench.Store, as: WorkbenchStore
+  alias Nex.Agent.Interface.Workbench.Store, as: WorkbenchStore
 
   setup do
     workspace =
@@ -11,6 +11,7 @@ defmodule Nex.Agent.RuntimeTest do
 
     File.mkdir_p!(Path.join(workspace, "memory"))
     File.mkdir_p!(Path.join(workspace, "hooks"))
+    File.mkdir_p!(Path.join(workspace, "plugins/catalog-probe"))
     File.mkdir_p!(Path.join(workspace, "skills/catalog-guide"))
     File.write!(Path.join(workspace, "AGENTS.md"), "# AGENTS\nRuntime AGENTS layer.\n")
     File.write!(Path.join(workspace, "IDENTITY.md"), "# Identity\nRuntime identity layer.\n")
@@ -45,6 +46,16 @@ defmodule Nex.Agent.RuntimeTest do
 
       Runtime skill body should stay on demand.
       """
+    )
+
+    File.write!(
+      Path.join(workspace, "plugins/catalog-probe/nex.plugin.json"),
+      Jason.encode!(%{
+        "id" => "workspace:catalog-probe",
+        "title" => "Catalog Probe",
+        "source" => "workspace",
+        "contributes" => %{"skills" => [%{"id" => "workspace:catalog-guide"}]}
+      })
     )
 
     previous_workspace = Application.get_env(:nex_agent, :workspace_path)
@@ -118,6 +129,14 @@ defmodule Nex.Agent.RuntimeTest do
     assert snapshot.workbench.apps == []
     assert snapshot.workbench.diagnostics == []
     assert is_binary(snapshot.workbench.hash)
+
+    assert is_list(snapshot.plugins.manifests)
+    assert is_list(snapshot.plugins.diagnostics)
+    assert is_binary(snapshot.plugins.hash)
+
+    assert Enum.any?(snapshot.plugins.manifests, &(&1["id"] == "builtin:channel.feishu"))
+    assert Enum.any?(snapshot.plugins.contributions.channels, &(&1["id"] == "feishu"))
+    assert Enum.any?(snapshot.plugins.contributions.providers, &(&1["id"] == "openai-codex"))
   end
 
   test "snapshot loads workbench app catalog and diagnostics without failing reload", %{
@@ -166,6 +185,58 @@ defmodule Nex.Agent.RuntimeTest do
     assert updated.workbench.hash != old_hash
   end
 
+  test "snapshot loads enabled workspace plugins and tracks hash changes", %{workspace: workspace} do
+    config = runtime_config(workspace)
+
+    config = %{
+      config
+      | plugins: Map.put(config.plugins, "enabled", %{"workspace:catalog-probe" => true})
+    }
+
+    assert {:ok, %Snapshot{} = snapshot} =
+             Runtime.reload(workspace: workspace, config_loader: fn _opts -> config end)
+
+    assert Enum.any?(snapshot.plugins.manifests, &(&1["id"] == "workspace:catalog-probe"))
+    assert "workspace:catalog-probe" in snapshot.plugins.enabled
+
+    assert Enum.any?(snapshot.plugins.contributions.skills, fn contribution ->
+             contribution["plugin_id"] == "workspace:catalog-probe" and
+               contribution["id"] == "workspace:catalog-guide"
+           end)
+
+    old_hash = snapshot.plugins.hash
+
+    File.write!(
+      Path.join(workspace, "plugins/catalog-probe/nex.plugin.json"),
+      Jason.encode!(%{
+        "id" => "workspace:catalog-probe",
+        "title" => "Catalog Probe Updated",
+        "source" => "workspace",
+        "contributes" => %{"skills" => [%{"id" => "workspace:catalog-guide"}]}
+      })
+    )
+
+    assert :ok = Runtime.subscribe()
+
+    assert {:ok, %Snapshot{} = updated} =
+             Runtime.reload(
+               workspace: workspace,
+               config_loader: fn _opts -> config end,
+               changed_paths: [Path.join(workspace, "plugins/catalog-probe/nex.plugin.json")]
+             )
+
+    assert updated.plugins.hash != old_hash
+
+    assert_receive {:runtime_updated,
+                    %{
+                      new_version: version,
+                      changed_paths: [changed_path]
+                    }}
+
+    assert version == updated.version
+    assert String.ends_with?(changed_path, "plugins/catalog-probe/nex.plugin.json")
+  end
+
   test "snapshot channels are keyed by channel instance id", %{workspace: workspace} do
     config = runtime_config(workspace)
 
@@ -180,6 +251,59 @@ defmodule Nex.Agent.RuntimeTest do
                "show_table_as" => "ascii"
              }
            }
+  end
+
+  test "disabled channel and provider plugins affect one runtime snapshot consistently", %{
+    workspace: workspace
+  } do
+    config = runtime_config(workspace)
+
+    config = %{
+      config
+      | plugins:
+          Map.put(config.plugins, "disabled", [
+            "builtin:channel.discord",
+            "builtin:provider.openai-compatible"
+          ])
+    }
+
+    assert {:ok, %Snapshot{} = snapshot} =
+             Runtime.reload(workspace: workspace, config_loader: fn _opts -> config end)
+
+    refute Map.has_key?(snapshot.channels, "discord_kai")
+    assert Map.has_key?(snapshot.channels, "feishu_kai")
+    refute Enum.any?(snapshot.plugins.contributions.channels, &(&1["id"] == "discord"))
+    refute Enum.any?(snapshot.plugins.contributions.providers, &(&1["id"] == "openai-compatible"))
+    assert Config.default_model_runtime(snapshot.config, plugin_data: snapshot.plugins) == nil
+
+    assert Enum.any?(snapshot.plugins.diagnostics, fn diagnostic ->
+             diagnostic["kind"] == "provider" and
+               diagnostic["code"] == :disabled_provider_type and
+               diagnostic["provider_key"] == "hy3-tencent"
+           end)
+  end
+
+  test "disabled optional tool plugin is absent from definitions and execution", %{
+    workspace: workspace
+  } do
+    config = runtime_config(workspace)
+
+    config = %{
+      config
+      | plugins: Map.put(config.plugins, "disabled", ["builtin:tool.image-generation"])
+    }
+
+    assert {:ok, %Snapshot{} = snapshot} =
+             Runtime.reload(workspace: workspace, config_loader: fn _opts -> config end)
+
+    refute Enum.any?(snapshot.tools.definitions_all, &(&1["name"] == "image_generation"))
+
+    assert {:error, reason} =
+             Nex.Agent.Capability.Tool.Registry.execute("image_generation", %{}, %{
+               runtime_snapshot: snapshot
+             })
+
+    assert reason =~ "Unknown tool: image_generation"
   end
 
   test "tool definition builder receives resolved default model runtime", %{workspace: workspace} do

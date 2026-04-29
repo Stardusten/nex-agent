@@ -1,8 +1,8 @@
 defmodule Nex.Agent.ReadToolTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.Config
-  alias Nex.Agent.Tool.Read
+  alias Nex.Agent.Runtime.Config
+  alias Nex.Agent.Capability.Tool.Core.Read
 
   test "read returns structured file pagination metadata" do
     path = Path.join("/tmp", "nex-agent-read-#{System.unique_integer([:positive])}.txt")

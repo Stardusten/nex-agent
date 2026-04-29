@@ -1,0 +1,17 @@
+{
+  "id": "builtin:channel.discord",
+  "title": "Discord Channel",
+  "version": "0.1.0",
+  "enabled": true,
+  "source": "builtin",
+  "description": "Built-in Discord gateway, channel spec, renderer, and config contract.",
+  "contributes": {
+    "channels": [
+      {
+        "type": "discord",
+        "order": 20,
+        "spec_module": "Nex.Agent.Interface.Channel.Specs.Discord"
+      }
+    ]
+  }
+}

@@ -6,8 +6,8 @@ Phase 13A/13B 建立了 ControlPlane observation substrate，并把 Runner / Too
 
 13D 是 ControlPlane 成为唯一机器真相源前的最后收口阶段，当前还有这些平行入口：
 
-- `Nex.Agent.Audit` 写 workspace `audit/events.jsonl`，Admin 和 Evolution 仍可能把它当 recent event truth。
-- `Nex.Agent.RequestTrace` 写 `audit/request_traces/*.jsonl`，Runner 仍有独立 trace append/read/list path。
+- `Nex.Agent.Observe.Compat.Audit` 写 workspace `audit/events.jsonl`，Admin 和 Evolution 仍可能把它当 recent event truth。
+- `Nex.Agent.Observe.Compat.RequestTrace` 写 `audit/request_traces/*.jsonl`，Runner 仍有独立 trace append/read/list path。
 - `Admin` 组合自己的 recent events / request trace view，没有保证和 `observe` 看到同一批 observations。
 - 仓库里仍有大量语义 `Logger.*` 调用；其中一部分已经被 13B 的 ControlPlane observations 覆盖，但仍可能作为唯一机器证据存在。
 - 13E 需要消费一个已经收口的 ControlPlane；如果 13D 不完成，Evolution 会面对 Audit、RequestTrace、Logger、ControlPlane 四套半真相源。

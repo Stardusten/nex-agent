@@ -1,7 +1,7 @@
-defmodule Nex.Agent.CronWorkspaceTest do
+defmodule Nex.Agent.Capability.CronWorkspaceTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.{Bus, Cron, Workspace}
+  alias Nex.Agent.{App.Bus, Capability.Cron, Runtime.Workspace}
 
   setup do
     workspace_a =

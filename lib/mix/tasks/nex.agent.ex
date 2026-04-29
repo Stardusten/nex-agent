@@ -5,7 +5,7 @@ defmodule Mix.Tasks.Nex.Agent do
 
   use Mix.Task
 
-  alias Nex.Agent.{Config, Gateway, Onboarding, Workspace}
+  alias Nex.Agent.{Runtime.Config, Interface.Gateway, App.Onboarding, Runtime.Workspace}
 
   @shortdoc "Nex Agent CLI"
 
@@ -187,7 +187,7 @@ defmodule Mix.Tasks.Nex.Agent do
     Mix.shell().info("")
 
     # Show pre-evolution state
-    signals = Nex.Agent.Evolution.recent_signals(workspace: target.workspace)
+    signals = Nex.Agent.Self.Evolution.recent_signals(workspace: target.workspace)
     Mix.shell().info("Recent signal observations: #{length(signals)}")
 
     Enum.each(signals, fn s ->
@@ -205,7 +205,7 @@ defmodule Mix.Tasks.Nex.Agent do
     Mix.shell().info("Running evolution cycle...")
     Mix.shell().info("")
 
-    case Nex.Agent.Evolution.run_evolution_cycle(
+    case Nex.Agent.Self.Evolution.run_evolution_cycle(
            workspace: target.workspace,
            trigger: :manual,
            config_path: target.config_path
@@ -229,7 +229,7 @@ defmodule Mix.Tasks.Nex.Agent do
         Mix.shell().info("")
 
         # Show latest audit events
-        events = Nex.Agent.Evolution.recent_events(workspace: target.workspace)
+        events = Nex.Agent.Self.Evolution.recent_events(workspace: target.workspace)
 
         if events != [] do
           Mix.shell().info("Recent evolution events:")
@@ -265,7 +265,7 @@ defmodule Mix.Tasks.Nex.Agent do
     Mix.shell().info("Gateway: #{if(gateway_running, do: "running", else: "stopped")}")
     Mix.shell().info("Enabled channels: #{enabled_channels(config) |> format_list()}")
 
-    if Process.whereis(Nex.Agent.Gateway) do
+    if Process.whereis(Nex.Agent.Interface.Gateway) do
       services = Gateway.status().services
 
       Mix.shell().info("Core services:")
@@ -589,7 +589,7 @@ defmodule Mix.Tasks.Nex.Agent do
     :ok = Onboarding.ensure_workspace_initialized(target.workspace)
   end
 
-  defp render_prompt_result(%Nex.Agent.Stream.Result{} = result), do: to_string(result)
+  defp render_prompt_result(%Nex.Agent.Turn.Stream.Result{} = result), do: to_string(result)
   defp render_prompt_result(result), do: result
 
   defp with_cli_targeting(opts, fun) do
