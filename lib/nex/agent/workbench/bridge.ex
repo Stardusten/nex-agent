@@ -3,7 +3,7 @@ defmodule Nex.Agent.Workbench.Bridge do
 
   alias Nex.Agent.ControlPlane.{Log, Query}
   alias Nex.Agent.Runtime.Snapshot
-  alias Nex.Agent.Workbench.Permissions
+  alias Nex.Agent.Workbench.{Notes, Permissions}
   require Log
 
   @message_limit 500
@@ -12,12 +12,22 @@ defmodule Nex.Agent.Workbench.Bridge do
   @methods %{
     "permissions.current" => "permissions:read",
     "observe.summary" => "observe:read",
-    "observe.query" => "observe:read"
+    "observe.query" => "observe:read",
+    "notes.roots.list" => "notes:read",
+    "notes.files.list" => "notes:read",
+    "notes.file.read" => "notes:read",
+    "notes.file.write" => "notes:write",
+    "notes.file.delete" => "notes:write",
+    "notes.search" => "notes:read"
   }
 
   @spec call(String.t(), map(), Snapshot.t() | keyword()) :: map()
   def call(app_id, request, %Snapshot{} = snapshot) when is_binary(app_id) and is_map(request) do
-    call(app_id, request, workspace: snapshot.workspace)
+    call(app_id, request,
+      workspace: snapshot.workspace,
+      config: snapshot.config,
+      runtime_snapshot: snapshot
+    )
   end
 
   def call(app_id, request, opts) when is_binary(app_id) and is_map(request) and is_list(opts) do
@@ -131,6 +141,13 @@ defmodule Nex.Agent.Workbench.Bridge do
       {:error, reason} -> {:error, "bad_params", reason}
     end
   end
+
+  defp execute("notes.roots.list", params, opts), do: Notes.roots_list(params, opts)
+  defp execute("notes.files.list", params, opts), do: Notes.files_list(params, opts)
+  defp execute("notes.file.read", params, opts), do: Notes.file_read(params, opts)
+  defp execute("notes.file.write", params, opts), do: Notes.file_write(params, opts)
+  defp execute("notes.file.delete", params, opts), do: Notes.file_delete(params, opts)
+  defp execute("notes.search", params, opts), do: Notes.search(params, opts)
 
   defp execute(_method, _params, _opts),
     do: {:error, "unknown_method", "bridge method is not allowed"}

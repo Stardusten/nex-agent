@@ -88,8 +88,16 @@ defmodule Nex.Agent.RuntimeTest do
     assert Enum.any?(snapshot.subagents.definitions, &(&1["name"] == "code_reviewer"))
     assert is_binary(snapshot.subagents.hash)
     assert Enum.any?(snapshot.skills.cards, &(&1["id"] == "builtin:workbench-app-authoring"))
+    assert Enum.any?(snapshot.skills.cards, &(&1["id"] == "builtin:nex-code-maintenance"))
+    assert Enum.any?(snapshot.skills.cards, &(&1["id"] == "builtin:runtime-observability"))
+    assert Enum.any?(snapshot.skills.cards, &(&1["id"] == "builtin:memory-and-evolution-routing"))
+    assert Enum.any?(snapshot.skills.cards, &(&1["id"] == "builtin:lark-feishu-ops"))
     assert Enum.any?(snapshot.skills.cards, &(&1["id"] == "workspace:catalog-guide"))
     assert snapshot.skills.catalog_prompt =~ ~s(<skill id="builtin:workbench-app-authoring">)
+    assert snapshot.skills.catalog_prompt =~ ~s(<skill id="builtin:nex-code-maintenance">)
+    assert snapshot.skills.catalog_prompt =~ ~s(<skill id="builtin:runtime-observability">)
+    assert snapshot.skills.catalog_prompt =~ ~s(<skill id="builtin:memory-and-evolution-routing">)
+    assert snapshot.skills.catalog_prompt =~ ~s(<skill id="builtin:lark-feishu-ops">)
     assert snapshot.skills.catalog_prompt =~ ~s(<skill id="workspace:catalog-guide">)
     assert snapshot.skills.catalog_prompt =~ "<description>"
     refute snapshot.prompt.system_prompt =~ "Runtime skill body should stay on demand."
@@ -103,7 +111,8 @@ defmodule Nex.Agent.RuntimeTest do
     assert snapshot.workbench.runtime == %{
              "enabled" => false,
              "host" => "127.0.0.1",
-             "port" => 50_051
+             "port" => 50_051,
+             "apps" => %{}
            }
 
     assert snapshot.workbench.apps == []
@@ -333,6 +342,10 @@ defmodule Nex.Agent.RuntimeTest do
 
     snapshot = :sys.get_state(pid).snapshot
     assert Enum.any?(snapshot.skills.cards, &(&1["id"] == "builtin:workbench-app-authoring"))
+    assert Enum.any?(snapshot.skills.cards, &(&1["id"] == "builtin:nex-code-maintenance"))
+    assert Enum.any?(snapshot.skills.cards, &(&1["id"] == "builtin:runtime-observability"))
+    assert Enum.any?(snapshot.skills.cards, &(&1["id"] == "builtin:memory-and-evolution-routing"))
+    assert Enum.any?(snapshot.skills.cards, &(&1["id"] == "builtin:lark-feishu-ops"))
     assert Enum.any?(snapshot.skills.cards, &(&1["id"] == "workspace:catalog-guide"))
     assert Enum.any?(snapshot.tools.definitions_all, &(&1["name"] == "read"))
 

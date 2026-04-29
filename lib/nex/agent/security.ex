@@ -253,7 +253,10 @@ defmodule Nex.Agent.Security do
   end
 
   defp configured_allowed_roots(ctx) do
-    default_allowed_roots() ++ workspace_roots(ctx) ++ config_allowed_roots(ctx)
+    default_allowed_roots() ++
+      workspace_roots(ctx) ++
+      config_allowed_roots(ctx) ++
+      explicit_allowed_roots(ctx)
   end
 
   defp workspace_roots(ctx) do
@@ -265,6 +268,12 @@ defmodule Nex.Agent.Security do
   end
 
   defp config_allowed_roots(ctx), do: Config.file_access_allowed_roots(config_from_ctx(ctx))
+
+  defp explicit_allowed_roots(ctx) do
+    ctx
+    |> ctx_value(:extra_allowed_roots)
+    |> List.wrap()
+  end
 
   defp config_from_ctx(%Config{} = config), do: config
 

@@ -240,15 +240,42 @@ Phase 18 is now opened for the Workbench App Runtime:
   - the shell has a manual app `Reload` button and reloads iframes with cache-busting URLs on app switch/reload
   - `POST /api/workbench/bridge/:app_id/call` is implemented through `Nex.Agent.Workbench.Bridge` with fixed methods `permissions.current`, `observe.summary`, and `observe.query`
   - bridge calls are app-bound by the host shell, require both manifest declaration and owner grant through `Permissions.check/3`, and write started/finished/failed/denied ControlPlane observations
-  - app artifact authoring remains `find -> read -> apply_patch -> Reload`; no `workbench_app`/write-file tool, Vite/build/HMR, or domain app schema is part of 18B
+  - app artifact authoring remains `find -> read -> apply_patch -> iframe Reload`; no `workbench_app`/write-file tool, Vite/build/HMR, or domain app schema is part of 18B
+- Workbench app artifact reload contract is now documented as the next design direction:
+  - Workbench runtime serves static artifacts from each app directory; source layout is app-owned
+  - simple apps can directly edit `index.html` / `app.js` / `style.css`
+  - buildable apps may define optional app-local `reload.sh` to materialize runnable artifacts such as `dist/index.html`
+  - future controlled runner should execute only that app's `reload.sh`, with cwd fixed to app dir, timeout/output limits, ControlPlane observations, and no iframe SDK exposure
+  - app artifact lane is `find/read -> apply_patch -> controlled reload.sh runner -> iframe reload`; Workbench core CODE remains `find/read/reflect -> apply_patch -> self_update deploy`
 - Phase 18C is now implemented as the skill progressive-disclosure correction:
   - external docs/source review confirms the expected model is steady skill cards plus on-demand `SKILL.md` body loading
   - runtime snapshot now carries skill `cards`, `catalog_prompt`, `diagnostics`, and `hash`
   - every runtime prompt build injects the same catalog prompt so steady cards are reintroduced on each LLM request rather than relying on session history
   - prompt-visible skill cards contain only `id` and trigger-oriented `description`; skill bodies and path/source/name/root metadata stay out of the steady prompt
   - `skill_get` now resolves builtin/workspace/project skills by `id` only; `name`/`source` activation and the old `skill_id` alias are rejected
-  - builtin `workbench-app-authoring` is available as `builtin:workbench-app-authoring`, loads body on demand, and keeps Workbench app authoring on `find` / `read` / `apply_patch`
+  - builtin `workbench-app-authoring` is available as `builtin:workbench-app-authoring`, loads body on demand, and keeps Workbench app authoring on `find` / `read` / `apply_patch` with optional `reload.sh` artifact refresh guidance
   - old SkillRuntime modules, package tests/fixtures, discovery/import/sync/list/read tools, prepare-run injection, and ephemeral skill tools are deleted
+  - constant runtime/onboarding prompt guidance has been slimmed to short scenario routes; detailed low-frequency workflows now live in builtin skills
+  - new builtin prompt-extraction skills are available:
+    - `builtin:nex-code-maintenance` for CODE edits, self-update deploy/rollback, ReqLLM/provider work, and CODE tests
+    - `builtin:runtime-observability` for ControlPlane/observe/status/failure/stuck-run/background evidence work
+    - `builtin:memory-and-evolution-routing` for memory refresh/status/rebuild, durable corrections, layer routing, and evolution candidates
+    - `builtin:lark-feishu-ops` for Feishu/Lark native payloads, media, `lark-cli`, and business operations
+  - runtime prompt/onboarding now include a concise `Runtime Capability Map` so the agent keeps a stable self-model without loading long workflow manuals
+  - the capability map gives the stable default Workbench URL (`http://127.0.0.1:50051/workbench`) and clarifies that empty `workspace/workbench/apps/` is not evidence that the Workbench Server is absent
+  - KV cache boundary: Workbench enabled/app count/diagnostics are not injected into steady prompt or per-turn runtime context; query dynamic runtime/config/Workbench state on demand
+  - `skill_get` stream notices render as `📚 Skill - <id>` so users can see on-demand skill loading
+- Phase 18D Notes App MVP is now implemented:
+  - notes root config is normalized under `gateway.workbench.apps.notes.root`
+  - `Config.workbench_runtime/1` now projects `"apps"` and `Config.workbench_app_config/2` returns per-app config
+  - `Nex.Agent.Workbench.Notes` provides bounded root/list/read/write/search over a configured Markdown vault
+  - `Workbench.Bridge` exposes `notes.roots.list`, `notes.files.list`, `notes.file.read`, `notes.file.write`, and `notes.search`
+  - notes calls require manifest-declared and owner-granted `notes:read` / `notes:write`
+  - iframe SDK bootstrap exposes `window.Nex.notes.*`
+  - file access stays `root_id` + vault-relative path; absolute path, traversal, root escape, symlink escape, non-Markdown write, and stale `base_revision` are rejected
+  - notes list/read/write/search write `workbench.notes.*` ControlPlane observations
+  - the default runtime workspace now has a `workbench/apps/notes` app artifact using React + TypeScript + Vite + CodeMirror 6 + ProseMark, built to `dist/index.html`
+  - 2026-04-29 follow-up: `/app-assets/:id/*` now sends static-asset CORS headers so sandboxed iframe ES modules/CSS can load without adding `allow-same-origin`
 
 Phase 17 is now implemented as the first memory-system polish step:
 
@@ -310,6 +337,7 @@ Docs/dev workflow is split into four lanes:
 - [Phase 18 Workbench App Runtime](../task-plan/phase18-workbench-app-runtime.md)
 - [Phase 18B Workbench Static Iframe Apps](../task-plan/phase18b-workbench-sdk-bridge-and-app-authoring.md)
 - [Phase 18C Skill Progressive Disclosure Catalog](../task-plan/phase18c-skill-progressive-disclosure-catalog.md)
+- [Phase 18D Workbench Notes App MVP](../task-plan/phase18d-notes-app-mvp.md)
 - [2026-04-16 IM Inbound Media Architecture](../findings/2026-04-16-im-inbound-media-architecture.md)
 - [2026-04-16 IM Streaming Capabilities And Delivery Contract](../findings/2026-04-16-im-streaming-capabilities.md)
 - [2026-04-16 Streaming Architecture Convergence](../findings/2026-04-16-streaming-architecture-convergence.md)
@@ -320,16 +348,19 @@ Docs/dev workflow is split into four lanes:
 - [2026-04-25 Local Tool Backend Selection](../findings/2026-04-25-local-tool-backend-selection.md)
 - [2026-04-25 Memory System Cost, Visibility, And Triggering](../findings/2026-04-25-memory-system-cost-visibility-and-triggering.md)
 - [2026-04-27 File Access Allowed Roots](../findings/2026-04-27-file-access-allowed-roots.md)
+- [2026-04-28 Workbench App Artifact Reload Contract](../findings/2026-04-28-workbench-app-artifact-reload-contract.md)
 - [2026-04-28 Skill Progressive Disclosure Catalog](../findings/2026-04-28-skill-progressive-disclosure-catalog.md)
 
 ## Immediate Next Steps
 
-1. Phase 18 Workbench：用一个临时 workspace 手动 seed `workbench/apps/<id>/nex.app.json` + `index.html`，启用 `gateway.workbench` 后打开 `http://127.0.0.1:50051/workbench` 验证真实 gateway 下的 shell/reload/permission/observe/SDK bridge 回路。
-2. 用真实 `~/.nex/agent/config.json` 手动改成新 config shape 后重启 gateway，验证多个 Feishu/Discord instance 可以同时注册、收消息、发消息。
-3. 真实 gateway/manual 场景检查 runtime reload 后 channel add/remove/change 是否只影响对应 instance。
-4. 用真实 gateway/manual 场景检查 busy 普通消息 follow-up、`/btw`、`/status`、`/stop`、可选 interrupt tool，以及 follow-up 使用 `observe summary` 的实际交互时序。
-5. Phase 7 留存问题仍需后续处理：Finch 连接池泄漏、飞书 `close_streaming_mode` 404、LLM 空返回兜底。
-6. 用真实 gateway/manual 场景检查 Phase 17 memory notice：普通 owner run 后台 refresh 应在最终回复之后发送 `🧠 Memory - <summary>`；cron、follow-up、subagent 不应发送。
+1. Phase 18D Notes manual review：在真实 config 中配置 `gateway.workbench.apps.notes.root`，授权 notes app 的 `notes:read` / `notes:write`，打开 Workbench 验证真实 vault list/read/write/search/conflict。
+2. Phase 18 Workbench app artifact reload：把 `reload.sh` contract 落成受控 runner/tool 或 owner lane，并补 ControlPlane observations 和权限边界测试。
+3. Phase 18 Workbench：用一个临时 workspace 手动 seed `workbench/apps/<id>/nex.app.json` + `index.html`，启用 `gateway.workbench` 后打开 `http://127.0.0.1:50051/workbench` 验证真实 gateway 下的 shell/reload/permission/observe/SDK bridge 回路。
+4. 用真实 `~/.nex/agent/config.json` 手动改成新 config shape 后重启 gateway，验证多个 Feishu/Discord instance 可以同时注册、收消息、发消息。
+5. 真实 gateway/manual 场景检查 runtime reload 后 channel add/remove/change 是否只影响对应 instance。
+6. 用真实 gateway/manual 场景检查 busy 普通消息 follow-up、`/btw`、`/status`、`/stop`、可选 interrupt tool，以及 follow-up 使用 `observe summary` 的实际交互时序。
+7. Phase 7 留存问题仍需后续处理：Finch 连接池泄漏、飞书 `close_streaming_mode` 404、LLM 空返回兜底。
+8. 用真实 gateway/manual 场景检查 Phase 17 memory notice：普通 owner run 后台 refresh 应在最终回复之后发送 `🧠 Memory - <summary>`；cron、follow-up、subagent 不应发送。
 
 ## Reviewer Verification
 
@@ -340,6 +371,7 @@ Docs/dev workflow is split into four lanes:
 - `mix test test/nex/agent/message_tool_test.exs`
 - `mix test test/nex/agent/config_test.exs`
 - `mix test test/nex/agent/runtime_test.exs`
+- `mix test test/nex/agent/workbench/notes_test.exs`
 - `mix test test/nex/agent/runtime_reconciler_test.exs`
 - `mix test test/nex/agent/run_control_test.exs`
 - `mix test test/nex/agent/bash_tool_test.exs`

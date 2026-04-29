@@ -161,12 +161,21 @@ defmodule Nex.Agent.OnboardingMigrationTest do
 
     assert agents_content =~ "Identity: `workspace/IDENTITY.md`"
     assert agents_content =~ "`AGENTS.md`, `IDENTITY.md`, `SOUL.md`, `USER.md`, `TOOLS.md`"
+    assert agents_content =~ "## Runtime Capability Map"
+    assert agents_content =~ "Workbench is the built-in local web UI and app host"
+    assert agents_content =~ "http://127.0.0.1:50051/workbench"
     assert agents_content =~ "## Concept Discipline"
+    assert agents_content =~ "## Scenario Skills"
+    assert agents_content =~ "builtin:nex-code-maintenance"
+    assert agents_content =~ "builtin:runtime-observability"
+    assert agents_content =~ "builtin:memory-and-evolution-routing"
+    assert agents_content =~ "builtin:lark-feishu-ops"
+    assert agents_content =~ "builtin:workbench-app-authoring"
     assert agents_content =~ "Six-Layer Evolution"
+    assert agents_content =~ "IDENTITY: durable self-model"
     assert agents_content =~ "SOUL: values, personality"
-    assert agents_content =~ "memory_consolidate"
-    assert agents_content =~ "trigger memory refresh now"
-    assert agents_content =~ "重建记忆"
+    refute agents_content =~ "Strict ship checks"
+    refute agents_content =~ "trigger memory refresh now"
 
     assert identity_content =~ "long-lived NexAgent personal agent instance"
     assert identity_content =~ "What I Am Not"
@@ -184,7 +193,12 @@ defmodule Nex.Agent.OnboardingMigrationTest do
     assert tools_content =~ "memory_consolidate"
     assert tools_content =~ "memory_status"
     assert tools_content =~ "memory_rebuild"
-    assert tools_content =~ "立即刷新记忆"
+    assert tools_content =~ "builtin:nex-code-maintenance"
+    assert tools_content =~ "builtin:runtime-observability"
+    assert tools_content =~ "builtin:memory-and-evolution-routing"
+    assert tools_content =~ "builtin:lark-feishu-ops"
+    assert tools_content =~ "builtin:workbench-app-authoring"
+    refute tools_content =~ "立即刷新记忆"
   end
 
   test "existing customized user files are preserved during initialization", %{

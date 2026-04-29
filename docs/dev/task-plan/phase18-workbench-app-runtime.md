@@ -1,5 +1,14 @@
 # Phase 18 Workbench App Runtime
 
+> 2026-04-28 update: this original phase plan contains early ideas such as
+> `runtime.kind`, `workspace/workbench/builds/`, Vite shell upgrade, and a
+> `workbench_app` tool. Those app-runtime parts are superseded by Phase 18B and
+> the Workbench app artifact reload finding. Current contract: app manifests do
+> not require `runtime`, Workbench runtime serves static app artifacts,
+> app source edits use `find` / `read` / `apply_patch`, and buildable apps may
+> use app-local `reload.sh` through a future controlled runner. Do not implement
+> `workbench_app` or a parallel file editing lane from this old plan.
+
 ## 当前状态
 
 NexAgent 当前已有：
@@ -65,6 +74,7 @@ Phase 18 结束时仓库必须满足：
   },
   "entry" => String.t(),
   "permissions" => [String.t()],
+  "chrome" => %{"topbar" => "auto" | "hidden"},
   "metadata" => map()
 }
 ```

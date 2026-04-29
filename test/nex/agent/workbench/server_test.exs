@@ -57,7 +57,8 @@ defmodule Nex.Agent.Workbench.ServerTest do
                  "id" => "notes",
                  "title" => "Notes",
                  "entry" => "src/App.tsx",
-                 "permissions" => ["notes:read", "notes:write"]
+                 "permissions" => ["notes:read", "notes:write"],
+                 "chrome" => %{"topbar" => "hidden"}
                },
                workspace: workspace
              )
@@ -68,10 +69,21 @@ defmodule Nex.Agent.Workbench.ServerTest do
 
     assert port > 0
 
-    assert {200, %{"apps" => [%{"id" => "notes"}], "diagnostics" => []}} =
+    assert {200,
+            %{
+              "apps" => [%{"id" => "notes", "chrome" => %{"topbar" => "hidden"}}],
+              "diagnostics" => []
+            }} =
              get_json(port, "/api/workbench/apps")
 
-    assert {200, %{"app" => %{"id" => "notes", "title" => "Notes"}}} =
+    assert {200,
+            %{
+              "app" => %{
+                "id" => "notes",
+                "title" => "Notes",
+                "chrome" => %{"topbar" => "hidden"}
+              }
+            }} =
              get_json(port, "/api/workbench/apps/notes")
 
     assert {200, %{"permissions" => %{"granted_permissions" => []}}} =
@@ -184,6 +196,15 @@ defmodule Nex.Agent.Workbench.ServerTest do
     assert shell =~ "Sessions"
     assert shell =~ "sandbox = \"allow-scripts\""
     assert shell =~ "id=\"reload-app\""
+    assert shell =~ "nex.workbench.shell.view.v1"
+    assert shell =~ "restoreInitialView"
+    assert shell =~ "app-immersive"
+    assert shell =~ "app-topbar-hidden"
+    assert shell =~ "app-chrome-hotzone"
+    assert shell =~ "appTopbarMode"
+    assert shell =~ "id=\"sidebar-edge\""
+    assert shell =~ "#app-view .stage-bar"
+    assert shell =~ "grid-template-rows: minmax(0, 1fr);"
     assert shell =~ "id=\"toast-region\""
     assert shell =~ "id=\"confirm-modal\""
     assert shell =~ "Discard unsaved configuration changes?"
@@ -202,7 +223,9 @@ defmodule Nex.Agent.Workbench.ServerTest do
     assert frame =~ "window.Nex"
     assert frame =~ "workbench.bridge.request"
 
-    assert {200, js} = get_raw(port, "/app-assets/notes/app.js")
+    assert {200, js_headers, js} = get_raw_with_headers(port, "/app-assets/notes/app.js")
+    assert header_value(js_headers, "access-control-allow-origin") == "*"
+    assert header_value(js_headers, "cross-origin-resource-policy") == "cross-origin"
     assert js =~ "notesLoaded"
 
     assert {400, %{"error" => "nex.app.json is not served" <> _}} =
@@ -714,6 +737,15 @@ defmodule Nex.Agent.Workbench.ServerTest do
     {status, body}
   end
 
+  defp get_raw_with_headers(port, path) do
+    url = "http://127.0.0.1:#{port}#{path}" |> String.to_charlist()
+
+    {:ok, {{_version, status, _reason}, headers, body}} =
+      :httpc.request(:get, {url, []}, [], body_format: :binary)
+
+    {status, normalize_headers(headers), body}
+  end
+
   defp post_json(port, path, payload) do
     url = "http://127.0.0.1:#{port}#{path}" |> String.to_charlist()
     body = Jason.encode!(payload)
@@ -755,6 +787,14 @@ defmodule Nex.Agent.Workbench.ServerTest do
 
     {String.to_integer(status), body}
   end
+
+  defp normalize_headers(headers) do
+    Map.new(headers, fn {key, value} ->
+      {key |> to_string() |> String.downcase(), to_string(value)}
+    end)
+  end
+
+  defp header_value(headers, key), do: Map.get(headers, String.downcase(key))
 
   defp model_config do
     %Config{

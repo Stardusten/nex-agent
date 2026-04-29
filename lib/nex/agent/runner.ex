@@ -899,6 +899,14 @@ defmodule Nex.Agent.Runner do
     |> String.slice(0, 120)
   end
 
+  defp render_tool_call_notice_args("skill_get", %{"id" => id}) when is_binary(id) do
+    id
+    |> String.replace("\n", " ")
+    |> String.trim()
+    |> String.slice(0, 120)
+    |> escape_markdown_notice_value()
+  end
+
   defp render_tool_call_notice_args(_tool_name, args) when is_map(args) do
     args
     |> Enum.sort_by(fn {k, _v} -> to_string(k) end)
@@ -925,6 +933,8 @@ defmodule Nex.Agent.Runner do
     Regex.replace(~r/[`*_\[\]()<>#|]/, value, fn marker -> "\\" <> marker end)
   end
 
+  defp tool_notice_label("skill_get"), do: "Skill"
+
   defp tool_notice_label(tool_name) do
     tool_name
     |> to_string()
@@ -939,6 +949,7 @@ defmodule Nex.Agent.Runner do
   defp tool_notice_emoji("memory_write"), do: "🧠"
   defp tool_notice_emoji("memory_rebuild"), do: "🧠"
   defp tool_notice_emoji("memory_consolidate"), do: "🧠"
+  defp tool_notice_emoji("skill_get"), do: "📚"
   defp tool_notice_emoji("read"), do: "📖"
   defp tool_notice_emoji("find"), do: "🔍"
   defp tool_notice_emoji("write"), do: "✍️"

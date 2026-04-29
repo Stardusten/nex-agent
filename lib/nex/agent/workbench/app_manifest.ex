@@ -12,11 +12,12 @@ defmodule Nex.Agent.Workbench.AppManifest do
           version: String.t(),
           entry: String.t(),
           permissions: [String.t()],
-          metadata: map()
+          metadata: map(),
+          chrome: map()
         }
 
-  @enforce_keys [:id, :title, :version, :entry, :permissions, :metadata]
-  defstruct [:id, :title, :version, :entry, :permissions, :metadata]
+  @enforce_keys [:id, :title, :version, :entry, :permissions, :metadata, :chrome]
+  defstruct [:id, :title, :version, :entry, :permissions, :metadata, :chrome]
 
   @spec normalize(map()) :: {:ok, t()} | {:error, String.t()}
   def normalize(attrs) when is_map(attrs) do
@@ -27,7 +28,8 @@ defmodule Nex.Agent.Workbench.AppManifest do
          {:ok, version} <- normalize_version(Map.get(attrs, "version", "0.1.0")),
          {:ok, entry} <- normalize_entry(Map.get(attrs, "entry", "index.html")),
          {:ok, permissions} <- normalize_permissions(Map.get(attrs, "permissions", [])),
-         {:ok, metadata} <- normalize_metadata(Map.get(attrs, "metadata", %{})) do
+         {:ok, metadata} <- normalize_metadata(Map.get(attrs, "metadata", %{})),
+         {:ok, chrome} <- normalize_chrome(Map.get(attrs, "chrome", %{})) do
       {:ok,
        %__MODULE__{
          id: id,
@@ -35,7 +37,8 @@ defmodule Nex.Agent.Workbench.AppManifest do
          version: version,
          entry: entry,
          permissions: permissions,
-         metadata: metadata
+         metadata: metadata,
+         chrome: chrome
        }}
     end
   end
@@ -50,7 +53,8 @@ defmodule Nex.Agent.Workbench.AppManifest do
       "version" => manifest.version,
       "entry" => manifest.entry,
       "permissions" => manifest.permissions,
-      "metadata" => manifest.metadata
+      "metadata" => manifest.metadata,
+      "chrome" => manifest.chrome
     }
   end
 
@@ -150,6 +154,28 @@ defmodule Nex.Agent.Workbench.AppManifest do
 
   defp normalize_metadata(metadata) when is_map(metadata), do: {:ok, stringify_keys(metadata)}
   defp normalize_metadata(_), do: {:error, "metadata must be an object"}
+
+  defp normalize_chrome(chrome) when is_map(chrome) do
+    chrome = stringify_keys(chrome)
+
+    with {:ok, topbar} <- normalize_topbar(Map.get(chrome, "topbar", "auto")) do
+      {:ok, %{"topbar" => topbar}}
+    end
+  end
+
+  defp normalize_chrome(_), do: {:error, "chrome must be an object"}
+
+  defp normalize_topbar(topbar) when is_binary(topbar) do
+    topbar = topbar |> String.trim() |> String.downcase()
+
+    if topbar in ["auto", "hidden"] do
+      {:ok, topbar}
+    else
+      {:error, "chrome.topbar must be auto or hidden"}
+    end
+  end
+
+  defp normalize_topbar(_), do: {:error, "chrome.topbar must be a string"}
 
   defp stringify_keys(map) when is_map(map) do
     Map.new(map, fn

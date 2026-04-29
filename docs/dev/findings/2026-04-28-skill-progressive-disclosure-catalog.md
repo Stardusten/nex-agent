@@ -24,6 +24,18 @@ runtime reload / each LLM request
 
 Workbench app authoring 是 CODE-layer builtin skill：`builtin:workbench-app-authoring`。它的 card 常驻，正文只通过 `skill_get(id)` 加载；Workbench app 文件开发继续走 `find` / `read` / `apply_patch`，不新增平行文件编辑 tool，也不把 notes、stocks 等领域 app schema 放进核心 Workbench 或 builtin skill。
 
+同一原则也适用于已有常驻 system prompt 中的长篇、低频操作指导。凡是“只在特定场景才用、内容较长、触发语义清楚”的 prompt，都应抽成 builtin skill；常驻 prompt 只留下短路由和 `skill_get(id)` 规则。
+
+本轮抽取后的 builtin 分组不是一段 prompt 对应一个 skill，而是按稳定工作流边界合并：
+
+- `builtin:nex-code-maintenance`: CODE self-update/deploy/rollback、owner/subagent CODE 边界、ReqLLM/provider adapter、Anthropic `tool_choice` 和 CODE 验证策略。
+- `builtin:runtime-observability`: ControlPlane/`observe`/`/status`、run gauge、follow-up、incident、budget、background evidence。
+- `builtin:memory-and-evolution-routing`: six-layer routing、memory refresh/status/rebuild、用户纠正沉淀、owner-approved `evolution_candidate` lane。
+- `builtin:lark-feishu-ops`: Feishu native message/media、`lark-cli` business operations、旧 `feishu_*` tool 边界。
+- `builtin:workbench-app-authoring`: Workbench app artifact authoring、manifest/permissions/static assets、app-local `reload.sh` refresh contract。
+
+这些 skill 的 description 是触发面，正文是按需加载的操作手册。不要把这些正文重新塞回 `ContextBuilder`、onboarding `AGENTS.md`、或 `TOOLS.md` 模板里。
+
 ## 外部证据
 
 - Agent Skills specification defines progressive disclosure as startup metadata, activated `SKILL.md`, then extra resources on demand. Source: https://agentskills.io/specification

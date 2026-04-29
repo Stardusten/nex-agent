@@ -338,6 +338,7 @@ defmodule Nex.Agent.Workbench.Server do
       "HTTP/1.1 #{status} #{reason(status)}\r\n",
       "Content-Type: #{content_type}\r\n",
       common_headers(),
+      app_asset_cors_headers(),
       "Content-Length: #{byte_size(body)}\r\n",
       "\r\n",
       body
@@ -372,6 +373,14 @@ defmodule Nex.Agent.Workbench.Server do
       "Access-Control-Allow-Origin: http://127.0.0.1\r\n",
       "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n",
       "Access-Control-Allow-Headers: content-type\r\n"
+    ]
+  end
+
+  defp app_asset_cors_headers do
+    [
+      "Access-Control-Allow-Origin: *\r\n",
+      "Access-Control-Allow-Methods: GET, OPTIONS\r\n",
+      "Cross-Origin-Resource-Policy: cross-origin\r\n"
     ]
   end
 

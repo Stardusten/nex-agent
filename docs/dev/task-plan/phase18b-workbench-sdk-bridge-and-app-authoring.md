@@ -88,6 +88,7 @@ Only `nex.app.json` is required for catalog visibility. `entry` defaults to `ind
   optional("version") => String.t(),
   optional("entry") => String.t(),
   optional("permissions") => [String.t()],
+  optional("chrome") => %{"topbar" => "auto" | "hidden"},
   optional("metadata") => map()
 }
 ```

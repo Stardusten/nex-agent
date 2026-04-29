@@ -104,12 +104,20 @@ defmodule Nex.Agent.SkillsTest do
     cards = Skills.catalog(workspace: workspace)
 
     assert Enum.any?(cards, &(&1["id"] == "builtin:workbench-app-authoring"))
+    assert Enum.any?(cards, &(&1["id"] == "builtin:nex-code-maintenance"))
+    assert Enum.any?(cards, &(&1["id"] == "builtin:runtime-observability"))
+    assert Enum.any?(cards, &(&1["id"] == "builtin:memory-and-evolution-routing"))
+    assert Enum.any?(cards, &(&1["id"] == "builtin:lark-feishu-ops"))
     assert Enum.any?(cards, &(&1["id"] == "workspace:user-hidden"))
     assert Enum.any?(cards, &(&1["id"] == "workspace:normal-guide"))
     refute Enum.any?(cards, &(&1["id"] == "workspace:model-hidden"))
 
     prompt = Skills.catalog_prompt(workspace: workspace)
 
+    assert prompt =~ ~s(<skill id="builtin:nex-code-maintenance">)
+    assert prompt =~ ~s(<skill id="builtin:runtime-observability">)
+    assert prompt =~ ~s(<skill id="builtin:memory-and-evolution-routing">)
+    assert prompt =~ ~s(<skill id="builtin:lark-feishu-ops">)
     assert prompt =~ ~s(<skill id="workspace:normal-guide">)
     assert prompt =~ "<description>Use for ordinary skill catalog tests.</description>"
     refute prompt =~ "Body should load only after skill_get."
@@ -127,6 +135,9 @@ defmodule Nex.Agent.SkillsTest do
     assert {:ok, loaded} = Skills.read_catalog_skill(card)
 
     assert loaded["content"] =~ "workspace/workbench/apps/<id>/"
+    assert loaded["content"] =~ "Workbench Server"
+    assert loaded["content"] =~ "http://127.0.0.1:<port>/workbench"
+    assert loaded["content"] =~ "empty `workspace/workbench/apps/` directory"
     assert loaded["content"] =~ "`find`"
     assert loaded["content"] =~ "`read`"
     assert loaded["content"] =~ "`apply_patch`"
@@ -135,5 +146,41 @@ defmodule Nex.Agent.SkillsTest do
     refute loaded["content"] =~ "save_manifest"
     refute loaded["content"] =~ "stock schema"
     refute loaded["content"] =~ "notes schema"
+  end
+
+  test "prompt extraction builtin skills are loadable by id", %{
+    workspace: workspace
+  } do
+    assert {:ok, code_card} =
+             Skills.resolve_catalog_skill("builtin:nex-code-maintenance", workspace: workspace)
+
+    assert {:ok, code_skill} = Skills.read_catalog_skill(code_card)
+    assert code_skill["content"] =~ "self_update deploy"
+    assert code_skill["content"] =~ "ReqLLM"
+    assert code_skill["content"] =~ ~s(%{type: "tool", name: "tool_name"})
+
+    assert {:ok, observe_card} =
+             Skills.resolve_catalog_skill("builtin:runtime-observability", workspace: workspace)
+
+    assert {:ok, observe_skill} = Skills.read_catalog_skill(observe_card)
+    assert observe_skill["content"] =~ "ControlPlane observations"
+    assert observe_skill["content"] =~ "observe summary"
+
+    assert {:ok, memory_card} =
+             Skills.resolve_catalog_skill(
+               "builtin:memory-and-evolution-routing",
+               workspace: workspace
+             )
+
+    assert {:ok, memory_skill} = Skills.read_catalog_skill(memory_card)
+    assert memory_skill["content"] =~ "memory_consolidate"
+    assert memory_skill["content"] =~ "evolution_candidate"
+
+    assert {:ok, feishu_card} =
+             Skills.resolve_catalog_skill("builtin:lark-feishu-ops", workspace: workspace)
+
+    assert {:ok, feishu_skill} = Skills.read_catalog_skill(feishu_card)
+    assert feishu_skill["content"] =~ "lark-cli"
+    assert feishu_skill["content"] =~ "local_image_path"
   end
 end

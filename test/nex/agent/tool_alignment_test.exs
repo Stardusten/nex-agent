@@ -538,6 +538,15 @@ defmodule Nex.Agent.ToolAlignmentTest do
 
     assert builtin["content"] =~ "Workbench App Authoring"
 
+    assert {:ok, code_skill} =
+             SkillGet.execute(
+               %{"id" => "builtin:nex-code-maintenance"},
+               %{workspace: workspace, cwd: workspace}
+             )
+
+    assert code_skill["content"] =~ "Nex CODE Maintenance"
+    assert code_skill["content"] =~ "self_update deploy"
+
     assert {:ok, local} =
              SkillGet.execute(
                %{"id" => "workspace:local-workflow"},

@@ -24,7 +24,8 @@ defmodule Nex.Agent.ConfigTest do
     assert Config.workbench_runtime(config) == %{
              "enabled" => false,
              "host" => "127.0.0.1",
-             "port" => 50_051
+             "port" => 50_051,
+             "apps" => %{}
            }
 
     assert %{
@@ -231,20 +232,32 @@ defmodule Nex.Agent.ConfigTest do
             "workbench" => %{
               "enabled" => true,
               "host" => "0.0.0.0",
-              "port" => "50052"
+              "port" => "50052",
+              "apps" => %{
+                "notes" => %{"root" => " ./notes "},
+                "Bad.App" => %{"root" => "/tmp/bad"},
+                "broken" => "not a map"
+              }
             }
           }
       })
 
+    notes_root = Path.expand("./notes")
+
     assert Config.workbench_runtime(config) == %{
              "enabled" => true,
              "host" => "127.0.0.1",
-             "port" => 50_052
+             "port" => 50_052,
+             "apps" => %{"notes" => %{"root" => notes_root}}
            }
+
+    assert Config.workbench_app_config(config, "notes") == %{"root" => notes_root}
+    assert Config.workbench_app_config(config, :missing) == %{}
 
     updated = Config.set(config, :workbench_port, 50_053)
 
     assert Config.workbench_runtime(updated)["port"] == 50_053
+    assert Config.workbench_app_config(updated, "notes") == %{"root" => notes_root}
   end
 
   test "openai-codex provider resolves access token from codex auth file" do

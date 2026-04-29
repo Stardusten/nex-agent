@@ -18,4 +18,5 @@ Findings are settled architecture or technical conclusions. Draft design notes a
 - [2026-04-25 Memory System Cost, Visibility, And Triggering](./2026-04-25-memory-system-cost-visibility-and-triggering.md)
 - [2026-04-27 File Access Allowed Roots](./2026-04-27-file-access-allowed-roots.md)
 - [2026-04-27 Model Context Window And Native Compaction](./2026-04-27-model-context-window-and-native-compaction.md)
+- [2026-04-28 Workbench App Artifact Reload Contract](./2026-04-28-workbench-app-artifact-reload-contract.md)
 - [2026-04-28 Skill Progressive Disclosure Catalog](./2026-04-28-skill-progressive-disclosure-catalog.md)

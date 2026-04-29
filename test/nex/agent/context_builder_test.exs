@@ -31,6 +31,11 @@ defmodule Nex.Agent.ContextBuilderTest do
     prompt = ContextBuilder.build_system_prompt(workspace: workspace)
 
     assert prompt =~ "## Runtime Evolution"
+    assert prompt =~ "## Runtime Capability Map"
+    assert prompt =~ "long-running NexAgent personal agent runtime instance"
+    assert prompt =~ "Workbench is the built-in local web UI and app host"
+    assert prompt =~ "http://127.0.0.1:50051/workbench"
+    assert prompt =~ "an empty app directory does not mean the Workbench Server is absent"
     assert prompt =~ "Route long-term changes into the correct layer"
     assert prompt =~ "- IDENTITY: durable self-model"
 
@@ -38,26 +43,18 @@ defmodule Nex.Agent.ContextBuilderTest do
              "- USER: user profile, preferences, timezone, communication style, collaboration expectations"
 
     assert prompt =~ "- SKILL: reusable multi-step workflows and procedural knowledge"
-    assert prompt =~ "use `memory_consolidate` directly"
-    assert prompt =~ "inspect MEMORY.md and the current session state before answering"
-    assert prompt =~ "do not inspect implementation with `read` or `bash` first"
-    assert prompt =~ "Use `self_update status` as the deploy preflight entrypoint."
-    assert prompt =~ "`self_update deploy` is the quick deploy verification path"
-    assert prompt =~ "Strict ship checks such as `format`, `credo`, or `dialyzer`"
-    assert prompt =~ "Use `observe` to answer questions like"
-    assert prompt =~ "`spawn_task` creates a task-scoped child run"
-    assert prompt =~ "an empty `run.owner.current` gauge only means no active owner run"
-    assert prompt =~ "ControlPlane observations are the self-observation source of truth"
-    assert prompt =~ "Budget only controls review/candidate signals"
-    assert prompt =~ "single `evolution_candidate` lane"
-    assert prompt =~ "Use `evolution_candidate list` / `show`"
+    assert prompt =~ "## Scenario Skills"
+    assert prompt =~ "`builtin:nex-code-maintenance`"
+    assert prompt =~ "`builtin:runtime-observability`"
+    assert prompt =~ "`builtin:memory-and-evolution-routing`"
+    assert prompt =~ "`builtin:lark-feishu-ops`"
+    assert prompt =~ "`builtin:workbench-app-authoring`"
+    assert prompt =~ "load `builtin:memory-and-evolution-routing` before acting"
     assert prompt =~ "Use `ask_advisor` when you need an internal second opinion"
 
-    assert prompt =~
-             "only the owner run may use `self_update status`, `self_update deploy`, or `self_update rollback`"
-
-    assert prompt =~
-             "Empty `MEMORY.md` does not imply this is the first conversation or that no prior session history exists."
+    refute prompt =~ "Strict ship checks such as `format`, `credo`, or `dialyzer`"
+    refute prompt =~ "ControlPlane observations are the self-observation source of truth"
+    refute prompt =~ "Empty `MEMORY.md` does not imply this is the first conversation"
   end
 
   test "system prompt includes channel output rules and newmsg guidance", %{workspace: workspace} do
@@ -476,13 +473,20 @@ defmodule Nex.Agent.ContextBuilderTest do
     assert prompt =~ "<description>Debug production issues carefully.</description>"
     assert prompt =~ "skill_get"
     assert prompt =~ "builtin:workbench-app-authoring"
+    assert prompt =~ "builtin:nex-code-maintenance"
+    assert prompt =~ "builtin:runtime-observability"
+    assert prompt =~ "builtin:memory-and-evolution-routing"
+    assert prompt =~ "builtin:lark-feishu-ops"
     assert prompt =~ "skill_capture"
     assert prompt =~ "lark-cli"
-    assert prompt =~ "not built-in tools anymore"
     refute prompt =~ Path.join(skill_dir, "SKILL.md")
     refute prompt =~ ~s(source="workspace")
     refute prompt =~ "<name>debug-playbook</name>"
     refute prompt =~ "Never show stack traces to the user."
+    refute prompt =~ "ControlPlane observations are the machine truth source"
+
+    refute prompt =~
+             "find/read/reflect -> apply_patch -> self_update status -> self_update deploy"
   end
 
   test "always frontmatter no longer preloads skill bodies", %{

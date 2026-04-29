@@ -17,6 +17,7 @@ defmodule Nex.Agent.Config do
     "ollama" => :ollama
   }
   @discord_table_modes ~w(raw ascii embed)
+  @workbench_app_id_re ~r/^[a-z][a-z0-9_-]{1,63}$/
 
   defstruct max_iterations: 40,
             workspace: nil,
@@ -332,6 +333,14 @@ defmodule Nex.Agent.Config do
     (config.gateway || %{})
     |> Map.get("workbench", default_workbench())
     |> normalize_workbench()
+  end
+
+  @spec workbench_app_config(t(), String.t() | atom()) :: map()
+  def workbench_app_config(%__MODULE__{} = config, app_id) do
+    config
+    |> workbench_runtime()
+    |> Map.get("apps", %{})
+    |> Map.get(to_string(app_id), %{})
   end
 
   @spec get_max_iterations(t()) :: pos_integer()
@@ -684,11 +693,39 @@ defmodule Nex.Agent.Config do
     %{
       "enabled" => Map.get(workbench, "enabled", false) == true,
       "host" => normalize_workbench_host(Map.get(workbench, "host")),
-      "port" => normalize_port(Map.get(workbench, "port"), 50_051)
+      "port" => normalize_port(Map.get(workbench, "port"), 50_051),
+      "apps" => normalize_workbench_apps(Map.get(workbench, "apps"))
     }
   end
 
   defp normalize_workbench(_workbench), do: default_workbench()
+
+  defp normalize_workbench_apps(apps) when is_map(apps) do
+    apps
+    |> stringify_map_keys()
+    |> Enum.reduce(%{}, fn
+      {app_id, %{} = config}, acc ->
+        if Regex.match?(@workbench_app_id_re, app_id) do
+          Map.put(acc, app_id, normalize_workbench_app_config(config))
+        else
+          acc
+        end
+
+      {_app_id, _config}, acc ->
+        acc
+    end)
+  end
+
+  defp normalize_workbench_apps(_apps), do: %{}
+
+  defp normalize_workbench_app_config(%{} = config) do
+    config = stringify_map_keys(config)
+
+    case normalize_path_string(Map.get(config, "root")) do
+      nil -> Map.delete(config, "root")
+      root -> Map.put(config, "root", root)
+    end
+  end
 
   defp normalize_provider_root(%{} = provider) do
     providers =
@@ -942,10 +979,17 @@ defmodule Nex.Agent.Config do
 
   defp normalize_optional_string(_value), do: nil
 
+  defp normalize_path_string(value) do
+    case normalize_optional_string(value) do
+      nil -> nil
+      path -> Path.expand(path)
+    end
+  end
+
   defp default_gateway, do: %{"port" => 18_790, "workbench" => default_workbench()}
 
   defp default_workbench do
-    %{"enabled" => false, "host" => "127.0.0.1", "port" => 50_051}
+    %{"enabled" => false, "host" => "127.0.0.1", "port" => 50_051, "apps" => %{}}
   end
 
   defp normalize_workbench_host(value) do

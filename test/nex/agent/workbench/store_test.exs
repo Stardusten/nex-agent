@@ -32,7 +32,8 @@ defmodule Nex.Agent.Workbench.StoreTest do
                    "tools:call:stock_quote",
                    "observe:read",
                    "observe:read"
-                 ]
+                 ],
+                 "chrome" => %{"topbar" => "hidden"}
                },
                workspace: workspace
              )
@@ -41,13 +42,35 @@ defmodule Nex.Agent.Workbench.StoreTest do
     assert manifest.version == "0.1.0"
     assert manifest.entry == "index.html"
     assert manifest.permissions == ["tools:call:stock_quote", "observe:read"]
+    assert manifest.chrome == %{"topbar" => "hidden"}
     assert File.exists?(Store.manifest_path("stock-dashboard", workspace: workspace))
 
     assert [%AppManifest{id: "stock-dashboard", title: "Stocks"}] =
              Store.list(workspace: workspace)
 
+    assert %{"chrome" => %{"topbar" => "hidden"}} = AppManifest.to_map(manifest)
+
     assert {:ok, %AppManifest{entry: "index.html"}} =
              Store.get("stock-dashboard", workspace: workspace)
+  end
+
+  test "defaults app chrome and rejects invalid chrome options", %{workspace: workspace} do
+    assert {:ok, manifest} =
+             Store.save(%{"id" => "plain-app", "title" => "Plain"}, workspace: workspace)
+
+    assert manifest.chrome == %{"topbar" => "auto"}
+
+    assert {:error, "chrome.topbar must be auto or hidden"} =
+             Store.save(
+               %{"id" => "bad-app", "title" => "Bad", "chrome" => %{"topbar" => "always"}},
+               workspace: workspace
+             )
+
+    assert {:error, "chrome must be an object"} =
+             Store.save(
+               %{"id" => "bad-app", "title" => "Bad", "chrome" => "hidden"},
+               workspace: workspace
+             )
   end
 
   test "ignores legacy runtime fields without requiring them", %{workspace: workspace} do

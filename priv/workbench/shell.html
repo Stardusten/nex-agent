@@ -1338,10 +1338,236 @@
         width: calc(100vw - 24px);
       }
     }
+
+    .app-chrome-hotzone,
+    .edge-handle {
+      display: none;
+    }
+
+    body.app-immersive {
+      overflow: hidden;
+    }
+
+    body.app-immersive .shell {
+      grid-template-columns: minmax(0, 1fr);
+      border-top: 0;
+    }
+
+    body.app-immersive .sidebar,
+    body.app-immersive .inspector {
+      position: fixed;
+      top: 0;
+      bottom: 0;
+      z-index: 70;
+      box-shadow: 0 20px 60px rgba(32, 37, 31, 0.22);
+      transition: transform 180ms ease-out;
+      overflow: auto;
+    }
+
+    body.app-immersive .sidebar {
+      left: 0;
+      width: min(320px, calc(100vw - 42px));
+      border-right: 1px solid var(--line);
+      transform: translateX(-105%);
+    }
+
+    body.app-immersive .inspector {
+      right: 0;
+      width: min(420px, calc(100vw - 42px));
+      border-left: 1px solid var(--line);
+      transform: translateX(105%);
+    }
+
+    body.app-immersive.sidebar-open .sidebar,
+    body.app-immersive.inspector-open .inspector {
+      transform: translateX(0);
+    }
+
+    body.app-immersive.sidebar-open .panel-scrim,
+    body.app-immersive.inspector-open .panel-scrim {
+      position: fixed;
+      inset: 0;
+      z-index: 60;
+      display: block;
+      background: rgba(32, 37, 31, 0.22);
+    }
+
+    body.app-immersive .app-chrome-hotzone {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 49;
+      display: block;
+      height: 12px;
+    }
+
+    body.app-immersive .edge-handle {
+      position: fixed;
+      top: 50%;
+      z-index: 55;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 20px;
+      min-height: 84px;
+      border: 1px solid var(--line);
+      background: rgba(244, 247, 241, 0.9);
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: var(--weight-strong);
+      writing-mode: vertical-rl;
+      transform: translateY(-50%);
+      transition: background 140ms ease-out, border-color 140ms ease-out, color 140ms ease-out, opacity 140ms ease-out;
+    }
+
+    body.app-immersive .edge-handle:hover,
+    body.app-immersive .edge-handle:focus-visible {
+      border-color: var(--accent);
+      background: var(--surface);
+      color: var(--accent);
+    }
+
+    body.app-immersive .edge-handle-left {
+      left: 0;
+      border-left: 0;
+    }
+
+    body.app-immersive .edge-handle-right {
+      right: 0;
+      border-right: 0;
+    }
+
+    body.app-immersive.sidebar-open .edge-handle-left,
+    body.app-immersive.inspector-open .edge-handle-right {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    body.app-immersive #app-view {
+      position: relative;
+      height: 100vh;
+      min-height: 0;
+      display: grid;
+      grid-template-rows: minmax(0, 1fr);
+      overflow: hidden;
+    }
+
+    body.app-immersive #app-view .stage-bar {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 50;
+      min-height: 42px;
+      padding: 6px 10px 6px 12px;
+      gap: 10px;
+      background: rgba(244, 247, 241, 0.96);
+      border-bottom-color: color-mix(in srgb, var(--line), transparent 26%);
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(calc(-100% - 2px));
+      transition: opacity 150ms ease-out, transform 170ms ease-out;
+    }
+
+    body.app-immersive.app-chrome-visible #app-view .stage-bar,
+    body.app-immersive #app-view .stage-bar:focus-within {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateY(0);
+    }
+
+    body.app-immersive.app-topbar-hidden .app-chrome-hotzone,
+    body.app-immersive.app-topbar-hidden #app-view .stage-bar {
+      display: none;
+    }
+
+    body.app-immersive #app-view .stage-bar > div:first-child {
+      min-width: 0;
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+    }
+
+    body.app-immersive #app-view .stage-title {
+      max-width: 28ch;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 16px;
+      line-height: 1;
+    }
+
+    body.app-immersive #app-view #app-state {
+      flex: 0 0 auto;
+      font-size: 11px;
+      line-height: 1;
+      white-space: nowrap;
+    }
+
+    body.app-immersive #app-view .stage-actions {
+      flex: 0 0 auto;
+      gap: 5px;
+      flex-wrap: nowrap;
+    }
+
+    body.app-immersive #app-view .panel-toggle {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    body.app-immersive #app-view .panel-toggle,
+    body.app-immersive #app-view .refresh {
+      min-height: 28px;
+      padding: 3px 8px;
+      font-size: 11px;
+      line-height: 1;
+    }
+
+    body.app-immersive #app-view .stage-entry {
+      display: none;
+    }
+
+    body.app-immersive #app-view .frame-wrap {
+      min-height: 0;
+      height: 100%;
+      padding: 0;
+    }
+
+    body.app-immersive #app-view iframe {
+      display: block;
+      border: 0;
+      box-shadow: none;
+    }
+
+    @media (max-width: 760px) {
+      body.app-immersive #app-view .stage-bar {
+        align-items: center;
+        flex-direction: row;
+      }
+
+      body.app-immersive #app-view .stage-title {
+        max-width: 34vw;
+        font-size: 14px;
+      }
+
+      body.app-immersive #app-view #app-state {
+        display: none;
+      }
+
+      body.app-immersive #app-view .stage-actions {
+        width: auto;
+        margin-left: auto;
+      }
+    }
   </style>
 </head>
 <body>
   <div id="panel-scrim" class="panel-scrim" aria-hidden="true"></div>
+  <div id="app-chrome-hotzone" class="app-chrome-hotzone" aria-hidden="true"></div>
+  <button class="edge-handle edge-handle-left sidebar-toggle" id="sidebar-edge" type="button" aria-controls="workbench-sidebar" aria-expanded="false">Menu</button>
+  <button class="edge-handle edge-handle-right inspector-toggle" id="inspector-edge" type="button" aria-controls="workbench-inspector" aria-expanded="false">Detail</button>
   <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="false"></div>
   <div id="confirm-modal" class="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-message" hidden>
     <div class="confirm-card">
@@ -1761,9 +1987,108 @@
 
     const $ = (id) => document.getElementById(id);
     const compactLayout = window.matchMedia("(max-width: 1500px)");
+    const shellViewKey = "nex.workbench.shell.view.v1";
+    const shellViews = new Set(["observe", "evolution", "sessions", "config", "app"]);
+    const stageIds = {
+      observe: "observe-view",
+      evolution: "evolution-view",
+      sessions: "sessions-view",
+      config: "config-view",
+      app: "app-view"
+    };
+    const inspectorIds = {
+      observe: "observe-inspector",
+      evolution: "evolution-inspector",
+      sessions: "sessions-inspector",
+      config: "config-inspector",
+      app: "app-inspector"
+    };
+    const navIds = {
+      observe: "observe-nav",
+      evolution: "evolution-nav",
+      sessions: "sessions-nav",
+      config: "config-nav"
+    };
+    let appChromeHideTimer = null;
+
+    function readStoredShellView() {
+      try {
+        const raw = window.localStorage.getItem(shellViewKey);
+        if (!raw) return null;
+        const value = JSON.parse(raw);
+        if (!value || !shellViews.has(value.view)) return null;
+        return {
+          view: value.view,
+          selectedId: typeof value.selectedId === "string" ? value.selectedId : null
+        };
+      } catch (_error) {
+        return null;
+      }
+    }
+
+    function persistShellView() {
+      try {
+        window.localStorage.setItem(shellViewKey, JSON.stringify({
+          view: state.view,
+          selectedId: state.selectedId
+        }));
+      } catch (_error) {
+        // Browsers can deny localStorage in restricted modes. The shell should still work.
+      }
+    }
 
     function compactMode() {
       return compactLayout.matches;
+    }
+
+    function immersiveMode() {
+      return document.body.classList.contains("app-immersive");
+    }
+
+    function overlayPanelsEnabled() {
+      return compactMode() || immersiveMode();
+    }
+
+    function selectedApp() {
+      return state.apps.find((candidate) => candidate.id === state.selectedId) || null;
+    }
+
+    function setActiveByView(ids, view) {
+      for (const [key, id] of Object.entries(ids)) {
+        $(id).hidden = key !== view;
+      }
+    }
+
+    function setNavSelection(view) {
+      for (const [key, id] of Object.entries(navIds)) {
+        $(id).setAttribute("aria-selected", key === view ? "true" : "false");
+      }
+    }
+
+    function appTopbarMode(app) {
+      return app?.chrome?.topbar === "hidden" ? "hidden" : "auto";
+    }
+
+    function resetAppChrome() {
+      window.clearTimeout(appChromeHideTimer);
+      document.body.classList.remove("app-chrome-visible", "app-topbar-hidden");
+    }
+
+    function applyAppChrome(app) {
+      const hidden = state.view === "app" && appTopbarMode(app) === "hidden";
+      document.body.classList.toggle("app-topbar-hidden", hidden);
+
+      if (hidden) {
+        window.clearTimeout(appChromeHideTimer);
+        document.body.classList.remove("app-chrome-visible");
+      }
+    }
+
+    function updatePanelButton(button, expanded, openText, closedText) {
+      button.setAttribute("aria-expanded", expanded ? "true" : "false");
+      if (!button.classList.contains("edge-handle")) {
+        button.textContent = expanded ? openText : closedText;
+      }
     }
 
     function updatePanelButtons() {
@@ -1771,13 +2096,11 @@
       const inspectorOpen = document.body.classList.contains("inspector-open");
 
       for (const button of document.querySelectorAll(".sidebar-toggle")) {
-        button.setAttribute("aria-expanded", sidebarOpen ? "true" : "false");
-        button.textContent = sidebarOpen ? "Close menu" : "Menu";
+        updatePanelButton(button, sidebarOpen, "Close menu", "Menu");
       }
 
       for (const button of document.querySelectorAll(".inspector-toggle")) {
-        button.setAttribute("aria-expanded", inspectorOpen ? "true" : "false");
-        button.textContent = inspectorOpen ? "Close detail" : "Detail";
+        updatePanelButton(button, inspectorOpen, "Close detail", "Detail");
       }
     }
 
@@ -1787,7 +2110,7 @@
     }
 
     function togglePanel(panel) {
-      if (!compactMode()) return;
+      if (!overlayPanelsEnabled()) return;
       const className = panel === "sidebar" ? "sidebar-open" : "inspector-open";
       const otherClass = panel === "sidebar" ? "inspector-open" : "sidebar-open";
       const willOpen = !document.body.classList.contains(className);
@@ -1797,10 +2120,34 @@
     }
 
     function openInspectorPanel() {
-      if (!compactMode()) return;
+      if (!overlayPanelsEnabled()) return;
       document.body.classList.remove("sidebar-open");
       document.body.classList.add("inspector-open");
       updatePanelButtons();
+    }
+
+    function showAppChrome() {
+      if (!immersiveMode() || document.body.classList.contains("app-topbar-hidden")) return;
+      window.clearTimeout(appChromeHideTimer);
+      document.body.classList.add("app-chrome-visible");
+    }
+
+    function hideAppChrome() {
+      if (!immersiveMode() || document.body.classList.contains("app-topbar-hidden")) return;
+      const chrome = $("app-view")?.querySelector(".stage-bar");
+      if (chrome?.matches(":hover") || chrome?.contains(document.activeElement)) return;
+      document.body.classList.remove("app-chrome-visible");
+    }
+
+    function scheduleAppChromeHide(delay = 700) {
+      window.clearTimeout(appChromeHideTimer);
+      appChromeHideTimer = window.setTimeout(hideAppChrome, delay);
+    }
+
+    function revealAppChrome(delay = 1300) {
+      if (document.body.classList.contains("app-topbar-hidden")) return;
+      showAppChrome();
+      scheduleAppChromeHide(delay);
     }
 
     async function api(path, options = {}) {
@@ -2006,24 +2353,47 @@
       }
     }
 
-    function switchView(view) {
+    function switchView(view, options = {}) {
       state.view = view;
+      document.body.classList.toggle("app-immersive", view === "app");
+      if (view === "app") applyAppChrome(selectedApp());
+      if (view !== "app") resetAppChrome();
       closePanels();
-      $("observe-view").hidden = view !== "observe";
-      $("evolution-view").hidden = view !== "evolution";
-      $("sessions-view").hidden = view !== "sessions";
-      $("config-view").hidden = view !== "config";
-      $("app-view").hidden = view !== "app";
-      $("observe-inspector").hidden = view !== "observe";
-      $("evolution-inspector").hidden = view !== "evolution";
-      $("sessions-inspector").hidden = view !== "sessions";
-      $("config-inspector").hidden = view !== "config";
-      $("app-inspector").hidden = view !== "app";
-      $("observe-nav").setAttribute("aria-selected", view === "observe" ? "true" : "false");
-      $("evolution-nav").setAttribute("aria-selected", view === "evolution" ? "true" : "false");
-      $("sessions-nav").setAttribute("aria-selected", view === "sessions" ? "true" : "false");
-      $("config-nav").setAttribute("aria-selected", view === "config" ? "true" : "false");
+      setActiveByView(stageIds, view);
+      setActiveByView(inspectorIds, view);
+      setNavSelection(view);
       renderApps();
+      if (options.persist !== false) persistShellView();
+    }
+
+    async function restoreInitialView() {
+      const stored = readStoredShellView();
+
+      if (stored?.view === "app" && stored.selectedId && state.apps.some((app) => app.id === stored.selectedId)) {
+        await selectApp(stored.selectedId);
+        return;
+      }
+
+      if (stored?.view === "evolution") {
+        switchView("evolution");
+        await loadEvolution();
+        return;
+      }
+
+      if (stored?.view === "sessions") {
+        switchView("sessions");
+        await loadSessions();
+        return;
+      }
+
+      if (stored?.view === "config") {
+        switchView("config");
+        await loadConfig();
+        return;
+      }
+
+      switchView("observe");
+      await loadObserve();
     }
 
     async function selectApp(appId) {
@@ -2033,6 +2403,8 @@
 
       state.selectedId = appId;
       switchView("app");
+      applyAppChrome(app);
+      revealAppChrome();
       $("stage-title").textContent = app.title || app.id;
       $("stage-entry").textContent = app.entry || "";
       setStatus("app-state", "loading app", "warning");
@@ -2053,7 +2425,8 @@
       const rows = [
         ["ID", app.id],
         ["Version", app.version || ""],
-        ["Entry", app.entry || ""]
+        ["Entry", app.entry || ""],
+        ["Chrome", `topbar:${appTopbarMode(app)}`]
       ];
 
       for (const [key, value] of rows) {
@@ -2100,6 +2473,7 @@
 
         if (!fresh) {
           state.selectedId = null;
+          persistShellView();
           $("stage-title").textContent = "Workbench";
           $("stage-entry").textContent = "";
           $("frame-wrap").innerHTML = `<div class="empty">Selected app is no longer available</div>`;
@@ -2109,6 +2483,7 @@
 
         $("stage-title").textContent = fresh.title || fresh.id;
         $("stage-entry").textContent = fresh.entry || "";
+        applyAppChrome(fresh);
         renderManifest(fresh);
         renderFrame(fresh);
         await loadPermissions(fresh.id);
@@ -4065,6 +4440,16 @@
       button.addEventListener("click", () => togglePanel("inspector"));
     }
 
+    const appChrome = $("app-view").querySelector(".stage-bar");
+    $("app-chrome-hotzone").addEventListener("mouseenter", () => revealAppChrome(900));
+    appChrome.addEventListener("mouseenter", showAppChrome);
+    appChrome.addEventListener("mouseleave", () => scheduleAppChromeHide());
+    appChrome.addEventListener("focusin", showAppChrome);
+    appChrome.addEventListener("focusout", () => scheduleAppChromeHide(180));
+    document.addEventListener("mousemove", (event) => {
+      if (immersiveMode() && event.clientY <= 10) revealAppChrome(900);
+    });
+
     $("panel-scrim").addEventListener("click", closePanels);
 
     document.addEventListener("keydown", (event) => {
@@ -4129,7 +4514,7 @@
     updatePanelButtons();
 
     loadApps()
-      .then(loadObserve)
+      .then(restoreInitialView)
       .catch((error) => {
         setStatus("connection", "error", "error");
         $("observation-detail").innerHTML = `<div class="diag"></div>`;

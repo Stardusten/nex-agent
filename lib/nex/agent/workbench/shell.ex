@@ -302,6 +302,14 @@ defmodule Nex.Agent.Workbench.Shell do
         observe: Object.freeze({
           query: (filters = {}) => call("observe.query", filters),
           summary: (params = {}) => call("observe.summary", params)
+        }),
+        notes: Object.freeze({
+          roots: () => call("notes.roots.list", {}),
+          files: (params = {}) => call("notes.files.list", params),
+          read: (params = {}) => call("notes.file.read", params),
+          write: (params = {}) => call("notes.file.write", params),
+          remove: (params = {}) => call("notes.file.delete", params),
+          search: (params = {}) => call("notes.search", params)
         })
       });
     })();
