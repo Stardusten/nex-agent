@@ -3,6 +3,7 @@ defmodule Nex.Agent.Self.Update.Deployer do
 
   alias Nex.Agent.Observe.ControlPlane.Log, as: ControlPlaneLog
   alias Nex.Agent.{Self.CodeUpgrade, Self.HotReload}
+  alias Nex.Agent.Sandbox.{Command, Exec, Policy}
   alias Nex.Agent.Self.Update.{Planner, ReleaseStore}
   require ControlPlaneLog
 
@@ -188,11 +189,18 @@ defmodule Nex.Agent.Self.Update.Deployer do
   end
 
   defp git_head_content(relative_path) do
-    case System.cmd("git", ["show", "HEAD:#{relative_path}"],
-           cd: CodeUpgrade.repo_root(),
-           stderr_to_stdout: true
-         ) do
-      {content, 0} -> {:ok, content}
+    repo_root = CodeUpgrade.repo_root()
+
+    command = %Command{
+      program: "git",
+      args: ["show", "HEAD:#{relative_path}"],
+      cwd: repo_root,
+      timeout_ms: 10_000,
+      metadata: %{workspace: repo_root, observe_attrs: %{"source" => "self_update.deployer"}}
+    }
+
+    case Exec.run(command, internal_exec_policy()) do
+      {:ok, %{stdout: content}} -> {:ok, content}
       _ -> :error
     end
   rescue
@@ -279,26 +287,26 @@ defmodule Nex.Agent.Self.Update.Deployer do
     relative_paths = Enum.map(paths, &Path.relative_to(&1, repo_root))
     {executable, args} = mix_test_command(relative_paths)
 
-    task =
-      Task.async(fn ->
-        System.cmd(executable, args, stderr_to_stdout: true, cd: repo_root)
-      end)
+    command = %Command{
+      program: executable,
+      args: args,
+      cwd: repo_root,
+      timeout_ms: @test_timeout_ms,
+      metadata: %{workspace: repo_root, observe_attrs: %{"source" => "self_update.test_runner"}}
+    }
 
-    receive do
-      {ref, {_output, 0}} when ref == task.ref ->
-        Process.demonitor(task.ref, [:flush])
+    case Exec.run(command, internal_exec_policy()) do
+      {:ok, %{exit_code: 0}} ->
         {:ok, Enum.map(paths, &%{path: &1, status: :passed})}
 
-      {ref, {output, _status}} when ref == task.ref ->
-        Process.demonitor(task.ref, [:flush])
+      {:error, %{status: :timeout}} ->
+        {:error, "tests timed out after #{@test_timeout_ms}ms"}
+
+      {:error, %{stdout: output}} when is_binary(output) ->
         {:error, trim_output(output)}
 
-      {:DOWN, ref, :process, _pid, reason} when ref == task.ref ->
+      {:error, reason} ->
         {:error, "test runner exited: #{inspect(reason)}"}
-    after
-      @test_timeout_ms ->
-        Task.shutdown(task, :brutal_kill)
-        {:error, "tests timed out after #{@test_timeout_ms}ms"}
     end
   rescue
     e ->
@@ -628,5 +636,19 @@ defmodule Nex.Agent.Self.Update.Deployer do
       String.valid?(text) -> text
       true -> text |> binary_part(0, byte_size(text) - 1) |> trim_trailing_invalid_utf8()
     end
+  end
+
+  defp internal_exec_policy do
+    %Policy{
+      enabled: false,
+      backend: :noop,
+      mode: :external,
+      network: :restricted,
+      filesystem: [],
+      protected_paths: [],
+      protected_names: [],
+      env_allowlist: ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "MIX_ENV"],
+      raw: %{}
+    }
   end
 end

@@ -4,6 +4,9 @@ defmodule Nex.Agent.Channel.DiscordTest do
   alias Nex.Agent.{App.Bus, Runtime.Config}
   alias Nex.Agent.Channel.Discord
   alias Nex.Agent.Channel.Discord.StreamConverter
+  alias Nex.Agent.Interface.Outbound.Action, as: OutboundAction
+  alias Nex.Agent.Interface.Outbound.Approval, as: OutboundApproval
+  alias Nex.Agent.Sandbox.Approval.Request
 
   @instance_id "discord_test"
 
@@ -31,6 +34,11 @@ defmodule Nex.Agent.Channel.DiscordTest do
       {:ok, %{"id" => "patched"}}
     end
 
+    http_delete_fun = fn url, headers ->
+      send(parent, {:http_delete, url, headers})
+      :ok
+    end
+
     channel_config = %{"type" => "discord", "enabled" => false, "token" => "discord-token"}
     config = %Config{Config.default() | channel: %{@instance_id => channel_config}}
 
@@ -41,7 +49,8 @@ defmodule Nex.Agent.Channel.DiscordTest do
          config: config,
          channel_config: channel_config,
          http_post_fun: http_post_fun,
-         http_patch_fun: http_patch_fun}
+         http_patch_fun: http_patch_fun,
+         http_delete_fun: http_delete_fun}
       )
 
     :sys.replace_state(pid, fn state ->
@@ -161,6 +170,520 @@ defmodule Nex.Agent.Channel.DiscordTest do
     assert_receive {:http_post, _url2, %{"content" => ^code_block}, _headers2}
   end
 
+  test "approval outbound renders Discord components v2 buttons", %{pid: pid} do
+    request =
+      Request.new(%{
+        id: "approval_component_test",
+        kind: :command,
+        operation: :execute,
+        subject: "git status",
+        description: "Allow shell command: read command using git",
+        grant_key: "command:execute:exact:test",
+        grant_options: [
+          %{"level" => "exact", "grant_key" => "command:execute:exact:test"},
+          %{"level" => "similar", "grant_key" => "command:execute:family:git:git-read"}
+        ],
+        workspace: File.cwd!(),
+        session_key: "#{@instance_id}:123",
+        channel: @instance_id,
+        chat_id: "123"
+      })
+
+    send(
+      pid,
+      {:bus_message, {:channel_outbound, @instance_id},
+       %{
+         chat_id: "123",
+         content: """
+         Approval required: #{request.description}
+
+         Use `/approve`, `/approve session`, `/approve similar`, `/approve always`, `/deny`, or `/deny all`.
+         """,
+         metadata: OutboundApproval.metadata(request)
+       }}
+    )
+
+    assert_receive {:http_post, url, %{"flags" => 32_768, "components" => components}, _headers}
+    assert url =~ "/channels/123/messages"
+
+    assert [%{"type" => 10, "content" => content}, %{"type" => 1, "components" => buttons}] =
+             components
+
+    assert content == "⚙️ Bash - git status _(Waiting approval)_"
+    refute content =~ "/approve"
+
+    labels = Enum.map(buttons, & &1["label"])
+    assert "Approve once" in labels
+    assert "Allow command" in labels
+    assert "Allow similar" in labels
+    assert "Always allow" in labels
+    assert "Decline" in labels
+
+    assert Enum.any?(buttons, fn button ->
+             button["custom_id"] == "nex.approval:approval_component_test:approve_session"
+           end)
+  end
+
+  test "approval outbound renders risk hint when present", %{pid: pid} do
+    request =
+      Request.new(%{
+        id: "approval_risk_hint_test",
+        kind: :command,
+        operation: :execute,
+        subject: "base64 -d payload.txt | sh",
+        description: "Allow shell command: encoded shell command using base64",
+        grant_key: "command:execute:exact:risk",
+        metadata: %{
+          "risk_class" => "encoded_shell",
+          "risk_hint" => "Decoded content is piped into a shell."
+        },
+        workspace: File.cwd!(),
+        session_key: "#{@instance_id}:123",
+        channel: @instance_id,
+        chat_id: "123"
+      })
+
+    send(
+      pid,
+      {:bus_message, {:channel_outbound, @instance_id},
+       %{
+         chat_id: "123",
+         content: "Approval required: #{request.description}",
+         metadata: OutboundApproval.metadata(request)
+       }}
+    )
+
+    assert_receive {:http_post, _url, %{"flags" => 32_768, "components" => components}, _headers}
+
+    assert [
+             %{
+               "type" => 10,
+               "content" => "⚙️ Bash - base64 -d payload.txt | sh _(Waiting approval)_"
+             },
+             %{"type" => 10, "content" => "_Risk: Decoded content is piped into a shell._"},
+             %{"type" => 1, "components" => buttons}
+           ] = components
+
+    refute Enum.any?(buttons, &(&1["label"] == "Allow similar"))
+  end
+
+  test "generic command action outbound renders a status row without buttons", %{pid: pid} do
+    request =
+      Request.new(%{
+        id: "action_allowed_test",
+        kind: :command,
+        operation: :execute,
+        subject: "ls ~/Desktop/",
+        description: "Allow shell command: read command using ls",
+        grant_key: "command:execute:exact:allowed",
+        workspace: File.cwd!(),
+        session_key: "#{@instance_id}:123",
+        channel: @instance_id,
+        chat_id: "123"
+      })
+
+    payload = OutboundAction.command_payload(request, :allowed)
+
+    send(
+      pid,
+      {:bus_message, {:channel_outbound, @instance_id}, payload}
+    )
+
+    assert_receive {:http_post, url, %{"flags" => 32_768, "components" => components}, _headers}
+    assert url =~ "/channels/123/messages"
+    assert [%{"type" => 10, "content" => content}] = components
+    assert content == "⚙️ Bash - ls ~/Desktop/ _(Allowed)_"
+  end
+
+  test "approval component click resolves exact pending request and updates action row", %{
+    pid: pid
+  } do
+    unless Process.whereis(Nex.Agent.Sandbox.Approval) do
+      start_supervised!({Nex.Agent.Sandbox.Approval, name: Nex.Agent.Sandbox.Approval})
+    end
+
+    ws_pid = self()
+
+    :sys.replace_state(pid, fn state ->
+      %{state | ws_pid: ws_pid}
+    end)
+
+    request =
+      Request.new(%{
+        id: "approval_component_test",
+        kind: :command,
+        operation: :execute,
+        subject: "git status",
+        description: "Allow shell command: read command using git",
+        grant_key: "command:execute:exact:test",
+        workspace: File.cwd!(),
+        session_key: "#{@instance_id}:123",
+        channel: @instance_id,
+        chat_id: "123"
+      })
+
+    task = Task.async(fn -> Nex.Agent.Sandbox.Approval.request(request, publish?: false) end)
+
+    assert eventually(fn ->
+             Nex.Agent.Sandbox.Approval.pending?(File.cwd!(), "#{@instance_id}:123")
+           end)
+
+    send(
+      pid,
+      {:discord_ws_message, ws_pid,
+       Jason.encode!(%{
+         "op" => 0,
+         "t" => "INTERACTION_CREATE",
+         "s" => 4,
+         "d" => %{
+           "id" => "interaction-1",
+           "application_id" => "app-1",
+           "token" => "interaction-token",
+           "type" => 3,
+           "channel_id" => "123",
+           "guild_id" => "guild-1",
+           "member" => %{"user" => %{"id" => "user-1", "username" => "alice"}},
+           "data" => %{
+             "component_type" => 2,
+             "custom_id" => "nex.approval:approval_component_test:approve_session"
+           },
+           "message" => %{
+             "id" => "approval-msg-1",
+             "components" => [
+               %{
+                 "type" => 10,
+                 "content" => "⚙️ Bash - git status _(Waiting approval)_"
+               },
+               %{
+                 "type" => 1,
+                 "components" => [
+                   %{
+                     "type" => 2,
+                     "custom_id" => "nex.approval:approval_component_test:approve_session",
+                     "label" => "Allow command",
+                     "style" => 1
+                   }
+                 ]
+               }
+             ]
+           }
+         }
+       })}
+    )
+
+    assert_receive {:http_post, url, %{"type" => 6}, _headers}
+    assert url =~ "/interactions/interaction-1/interaction-token/callback"
+
+    assert_receive {:http_patch, patch_url, %{"flags" => 32_768, "components" => components},
+                    _headers}
+
+    assert patch_url =~ "/channels/123/messages/approval-msg-1"
+    assert [%{"type" => 10, "content" => status_text}] = components
+    assert status_text == "⚙️ Bash - git status _(Allowed for session)_"
+    assert Task.await(task) == {:ok, :approved}
+    refute_received {:bus_message, :inbound, _inbound}
+  end
+
+  test "stream approval row is a separate action message and preserves model stream", %{pid: _pid} do
+    assert {:ok, converter} = StreamConverter.start(@instance_id, "123", %{})
+    assert_receive {:http_post, _url, %{"content" => "🤔 Thinking..."}, _headers}
+    placeholder_message_id = converter.current_message_id
+
+    request =
+      Request.new(%{
+        id: "approval_stream_test",
+        kind: :command,
+        operation: :execute,
+        subject: "ls -la ~/Desktop/",
+        description: "Allow shell command: read command using ls",
+        grant_key: "command:execute:exact:desktop",
+        workspace: File.cwd!(),
+        session_key: "#{@instance_id}:123",
+        channel: @instance_id,
+        chat_id: "123"
+      })
+
+    payload = OutboundApproval.payload(request, "Approval required")
+    assert {:ok, converter} = StreamConverter.approval_request(converter, payload)
+
+    assert_receive {:http_delete, delete_url, _headers}
+    assert delete_url =~ "/channels/123/messages/#{placeholder_message_id}"
+
+    assert_receive {:http_post, post_url, %{"flags" => 32_768, "components" => components},
+                    _headers}
+
+    assert post_url =~ "/channels/123/messages"
+
+    assert [%{"type" => 10, "content" => content}, %{"type" => 1, "components" => buttons}] =
+             components
+
+    assert content == "⚙️ Bash - ls -la ~/Desktop/ _(Waiting approval)_"
+    assert buttons != []
+    assert converter.current_message_id == nil
+    refute converter.placeholder
+    assert converter.waiting_for_approval
+
+    assert {:ok, converter} = StreamConverter.push_text(converter, "触发了。")
+    assert_receive {:http_post, post_url, %{"content" => "触发了。"}, _headers}
+    assert post_url =~ "/channels/123/messages"
+    assert converter.active_text == "触发了。"
+    refute converter.waiting_for_approval
+  end
+
+  test "stream approval seals existing model content before action messages", %{pid: _pid} do
+    assert {:ok, converter} = StreamConverter.start(@instance_id, "123", %{})
+    assert_receive {:http_post, _url, %{"content" => "🤔 Thinking..."}, _headers}
+
+    assert {:ok, converter} = StreamConverter.push_text(converter, "我先解释一下。")
+    assert_receive {:http_patch, first_url, %{"content" => "我先解释一下。"}, _headers}
+    assert first_url =~ "/channels/123/messages/#{converter.current_message_id}"
+    first_message_id = converter.current_message_id
+
+    assert {:ok, converter} = StreamConverter.refresh_working_status(converter)
+    assert_receive {:http_patch, status_url, %{"content" => status_content}, _headers}
+    assert status_url =~ "/channels/123/messages/#{first_message_id}"
+    assert status_content =~ "_Still working..."
+
+    request =
+      Request.new(%{
+        id: "approval_after_text_test",
+        kind: :command,
+        operation: :execute,
+        subject: "ls ~/Desktop/",
+        description: "Allow shell command: read command using ls",
+        grant_key: "command:execute:exact:desktop-after-text",
+        workspace: File.cwd!(),
+        session_key: "#{@instance_id}:123",
+        channel: @instance_id,
+        chat_id: "123"
+      })
+
+    assert {:ok, converter} =
+             StreamConverter.approval_request(
+               converter,
+               OutboundApproval.payload(request, "Approval required")
+             )
+
+    assert_receive {:http_patch, clear_url, %{"content" => "我先解释一下。"}, _headers}
+    assert clear_url =~ "/channels/123/messages/#{first_message_id}"
+
+    assert_receive {:http_post, _url, %{"flags" => 32_768, "components" => components}, _headers}
+
+    assert [%{"content" => "⚙️ Bash - ls ~/Desktop/ _(Waiting approval)_"}, _] = components
+    assert converter.current_message_id == nil
+    assert converter.active_text == ""
+    refute converter.placeholder
+    assert converter.waiting_for_approval
+
+    assert {:ok, converter} = StreamConverter.push_text(converter, "命令通过后继续。")
+    assert_receive {:http_post, post_url, %{"content" => "命令通过后继续。"}, _headers}
+    assert post_url =~ "/channels/123/messages"
+    refute converter.waiting_for_approval
+
+    refute_received {:http_delete, _url, _headers}
+  end
+
+  test "stream approval requests create independent action messages", %{pid: _pid} do
+    assert {:ok, converter} = StreamConverter.start(@instance_id, "123", %{})
+    assert_receive {:http_post, _url, %{"content" => "🤔 Thinking..."}, _headers}
+    placeholder_message_id = converter.current_message_id
+
+    request1 =
+      Request.new(%{
+        id: "approval_stream_first",
+        kind: :command,
+        operation: :execute,
+        subject: "ls ~/Desktop/ | head -5",
+        description: "Allow shell command: read command using ls",
+        grant_key: "command:execute:exact:desktop-first",
+        workspace: File.cwd!(),
+        session_key: "#{@instance_id}:123",
+        channel: @instance_id,
+        chat_id: "123"
+      })
+
+    request2 =
+      Request.new(%{
+        id: "approval_stream_second",
+        kind: :command,
+        operation: :execute,
+        subject: "ls ~/Desktop/krisxin_kb/",
+        description: "Allow shell command: read command using ls",
+        grant_key: "command:execute:exact:desktop-second",
+        workspace: File.cwd!(),
+        session_key: "#{@instance_id}:123",
+        channel: @instance_id,
+        chat_id: "123"
+      })
+
+    assert {:ok, converter} =
+             StreamConverter.approval_request(
+               converter,
+               OutboundApproval.payload(request1, "Approval required")
+             )
+
+    assert {:ok, converter} =
+             StreamConverter.approval_request(
+               converter,
+               OutboundApproval.payload(request2, "Approval required")
+             )
+
+    assert_receive {:http_delete, delete_url, _headers}
+    assert delete_url =~ "/channels/123/messages/#{placeholder_message_id}"
+
+    assert_receive {:http_post, _url1, %{"flags" => 32_768, "components" => components1},
+                    _headers1}
+
+    assert_receive {:http_post, _url2, %{"flags" => 32_768, "components" => components2},
+                    _headers2}
+
+    assert [%{"content" => content1}, %{"components" => buttons1}] = components1
+    assert [%{"content" => content2}, %{"components" => buttons2}] = components2
+
+    assert content1 == "⚙️ Bash - ls ~/Desktop/ | head -5 _(Waiting approval)_"
+    assert content2 == "⚙️ Bash - ls ~/Desktop/krisxin_kb/ _(Waiting approval)_"
+
+    assert Enum.any?(buttons1, fn button ->
+             button["custom_id"] == "nex.approval:approval_stream_first:approve_once"
+           end)
+
+    assert Enum.any?(buttons2, fn button ->
+             button["custom_id"] == "nex.approval:approval_stream_second:approve_once"
+           end)
+
+    assert converter.current_message_id == nil
+    refute converter.placeholder
+    assert converter.waiting_for_approval
+
+    refute_received {:http_patch, _url, %{"flags" => 32_768, "components" => _components},
+                     _headers}
+  end
+
+  test "stream approval retries transient component delivery before text fallback", %{pid: pid} do
+    parent = self()
+    {:ok, attempts} = Agent.start_link(fn -> 0 end)
+
+    :sys.replace_state(pid, fn state ->
+      %{
+        state
+        | http_post_fun: fn
+            url, %{"components" => _components} = body, headers ->
+              attempt = Agent.get_and_update(attempts, fn count -> {count + 1, count + 1} end)
+
+              if attempt == 1 do
+                send(parent, {:http_post_failed, url, body, headers})
+                {:error, {:http_error, 503, %{"message" => "temporary overload"}}}
+              else
+                send(parent, {:http_post, url, body, headers})
+                {:ok, %{"id" => "approval-retry-success", "flags" => 32_768}}
+              end
+
+            url, body, headers ->
+              send(parent, {:http_post, url, body, headers})
+              {:ok, %{"id" => "msg_" <> Integer.to_string(System.unique_integer([:positive]))}}
+          end
+      }
+    end)
+
+    assert {:ok, converter} = StreamConverter.start(@instance_id, "123", %{})
+    assert_receive {:http_post, _url, %{"content" => "🤔 Thinking..."}, _headers}
+
+    request =
+      Request.new(%{
+        id: "approval_retry_test",
+        kind: :command,
+        operation: :execute,
+        subject: "ls ~/Desktop/krisxin_kb/",
+        description: "Allow shell command: read command using ls",
+        grant_key: "command:execute:exact:desktop-retry",
+        workspace: File.cwd!(),
+        session_key: "#{@instance_id}:123",
+        channel: @instance_id,
+        chat_id: "123"
+      })
+
+    assert {:ok, converter} =
+             StreamConverter.approval_request(
+               converter,
+               OutboundApproval.payload(request, "Approval required")
+             )
+
+    assert_receive {:http_delete, _url, _headers}
+
+    assert_receive {:http_post_failed, _url, %{"flags" => 32_768, "components" => _components},
+                    _headers}
+
+    assert_receive {:http_post, _url, %{"flags" => 32_768, "components" => components}, _headers}
+
+    assert [%{"content" => "⚙️ Bash - ls ~/Desktop/krisxin_kb/ _(Waiting approval)_"}, _] =
+             components
+
+    assert Agent.get(attempts, & &1) == 2
+    assert converter.waiting_for_approval
+
+    refute_received {:http_post, _url, %{"content" => _fallback_content, "embeds" => []},
+                     _headers}
+  end
+
+  test "stream approval falls back to text commands when components delivery fails", %{pid: pid} do
+    parent = self()
+
+    :sys.replace_state(pid, fn state ->
+      %{
+        state
+        | http_post_fun: fn
+            url, %{"components" => _components} = body, headers ->
+              send(parent, {:http_post_failed, url, body, headers})
+              {:error, {:discord, 400, "components v2 rejected"}}
+
+            url, body, headers ->
+              send(parent, {:http_post, url, body, headers})
+              {:ok, %{"id" => "msg_" <> Integer.to_string(System.unique_integer([:positive]))}}
+          end
+      }
+    end)
+
+    assert {:ok, converter} = StreamConverter.start(@instance_id, "123", %{})
+    assert_receive {:http_post, _url, %{"content" => "🤔 Thinking..."}, _headers}
+
+    request =
+      Request.new(%{
+        id: "approval_fallback_test",
+        kind: :command,
+        operation: :execute,
+        subject: "ls ~/Desktop/",
+        description: "Allow shell command: read command using ls",
+        grant_key: "command:execute:exact:desktop-fallback",
+        workspace: File.cwd!(),
+        session_key: "#{@instance_id}:123",
+        channel: @instance_id,
+        chat_id: "123"
+      })
+
+    content = """
+    Approval required: #{request.description}
+
+    Use `/approve #{request.id}`, `/approve #{request.id} session`, `/approve #{request.id} similar`, `/approve #{request.id} always`, or `/deny #{request.id}`.
+    """
+
+    assert {:ok, converter} =
+             StreamConverter.approval_request(
+               converter,
+               OutboundApproval.payload(request, content)
+             )
+
+    assert_receive {:http_delete, _url, _headers}
+
+    assert_receive {:http_post_failed, _url, %{"flags" => 32_768, "components" => _components},
+                    _headers}
+
+    assert_receive {:http_post, _url, %{"content" => fallback_content, "embeds" => []}, _headers}
+    assert fallback_content =~ "Approval required: Allow shell command: read command using ls"
+    assert fallback_content =~ "/approve approval_fallback_test"
+    assert fallback_content =~ "/deny approval_fallback_test"
+    assert converter.current_message_id == nil
+  end
+
   test "stream converter treats inline newmsg as boundary", %{pid: _pid} do
     assert {:ok, converter} = StreamConverter.start(@instance_id, "123", %{})
     assert_receive {:http_post, _url, %{"content" => "🤔 Thinking..."}, _headers}
@@ -249,6 +772,14 @@ defmodule Nex.Agent.Channel.DiscordTest do
     assert :ok = Discord.update_message(@instance_id, "123", "msg_1", "hello updated", %{})
 
     assert_receive {:http_patch, url, %{"content" => "hello updated"}, headers}
+    assert url =~ "/channels/123/messages/msg_1"
+    assert {"authorization", "Bot discord-token"} in headers
+  end
+
+  test "delete_message deletes existing Discord message", %{pid: _pid} do
+    assert :ok = Discord.delete_message(@instance_id, "123", "msg_1")
+
+    assert_receive {:http_delete, url, headers}
     assert url =~ "/channels/123/messages/msg_1"
     assert {"authorization", "Bot discord-token"} in headers
   end
@@ -602,4 +1133,17 @@ defmodule Nex.Agent.Channel.DiscordTest do
     assert_receive {:http_post, _url, %{"content" => "hello"}, headers}
     assert {"authorization", "Bot discord-token"} in headers
   end
+
+  defp eventually(fun, attempts \\ 20)
+
+  defp eventually(fun, attempts) when attempts > 0 do
+    if fun.() do
+      true
+    else
+      Process.sleep(50)
+      eventually(fun, attempts - 1)
+    end
+  end
+
+  defp eventually(_fun, 0), do: false
 end

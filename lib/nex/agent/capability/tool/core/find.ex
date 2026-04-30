@@ -4,7 +4,8 @@ defmodule Nex.Agent.Capability.Tool.Core.Find do
   @behaviour Nex.Agent.Capability.Tool.Behaviour
 
   alias Nex.Agent.Self.CodeUpgrade
-  alias Nex.Agent.Sandbox.Security
+  alias Nex.Agent.Runtime.Config
+  alias Nex.Agent.Sandbox.{Command, Exec, FileSystem, Policy}
 
   @default_limit 20
   @max_limit 200
@@ -39,8 +40,9 @@ defmodule Nex.Agent.Capability.Tool.Core.Find do
   end
 
   def execute(%{"query" => query} = args, ctx) when is_binary(query) and query != "" do
-    with {:ok, scope_path} <- scope_path(args, ctx),
-         {:ok, matches} <- run_search(query, scope_path, Map.get(args, "glob")) do
+    with {:ok, scope_info} <- scope_path(args, ctx),
+         {:ok, matches} <-
+           run_search(query, scope_info.expanded_path, Map.get(args, "glob"), ctx) do
       limit = min(normalize_limit(Map.get(args, "limit")), @max_limit)
 
       {:ok,
@@ -56,14 +58,14 @@ defmodule Nex.Agent.Capability.Tool.Core.Find do
   def execute(_args, _ctx), do: {:error, "query is required"}
 
   defp scope_path(%{"path" => path}, ctx) when is_binary(path) and path != "" do
-    Security.validate_path(path, ctx)
+    FileSystem.authorize(path, :search, ctx)
   end
 
   defp scope_path(_args, ctx) do
-    Security.validate_path(CodeUpgrade.repo_root(), ctx)
+    FileSystem.authorize(CodeUpgrade.repo_root(), :search, ctx)
   end
 
-  defp run_search(query, scope_path, glob) do
+  defp run_search(query, scope_path, glob, ctx) do
     executable = System.find_executable("rg")
 
     if is_nil(executable) do
@@ -74,16 +76,54 @@ defmodule Nex.Agent.Capability.Tool.Core.Find do
         |> maybe_add_glob(glob)
         |> Kernel.++([query, scope_path])
 
-      case System.cmd(executable, args, stderr_to_stdout: true) do
-        {output, 0} ->
+      command = %Command{
+        program: executable,
+        args: args,
+        cwd: scope_path,
+        timeout_ms: 30_000,
+        cancel_ref: Map.get(ctx, :cancel_ref),
+        metadata: %{
+          workspace: Map.get(ctx, :workspace) || Map.get(ctx, "workspace") || scope_path,
+          observe_context: %{
+            workspace: Map.get(ctx, :workspace) || Map.get(ctx, "workspace") || scope_path,
+            run_id: Map.get(ctx, :run_id),
+            session_key: Map.get(ctx, :session_key) || Map.get(ctx, "session_key"),
+            channel: Map.get(ctx, :channel) || Map.get(ctx, "channel"),
+            chat_id: Map.get(ctx, :chat_id) || Map.get(ctx, "chat_id"),
+            tool_call_id: Map.get(ctx, :tool_call_id)
+          },
+          observe_attrs: %{"tool" => "find"}
+        }
+      }
+
+      case Exec.run(command, sandbox_policy(ctx, scope_path)) do
+        {:ok, %{stdout: output}} ->
           {:ok, parse_rg_json(output)}
 
-        {output, 1} ->
+        {:error, %{status: :exit, exit_code: 1, stdout: output}} ->
           {:ok, parse_rg_json(output)}
 
-        {output, status} ->
+        {:error, %{status: :exit, exit_code: status, stdout: output}} ->
           {:error, "Search failed with status #{status}: #{String.trim(output)}"}
+
+        {:error, %{error: error}} when is_binary(error) ->
+          {:error, "Search failed: #{error}"}
+
+        {:error, reason} ->
+          {:error, "Search failed: #{inspect(reason)}"}
       end
+    end
+  end
+
+  defp sandbox_policy(ctx, cwd) do
+    case Map.get(ctx, :runtime_snapshot) do
+      %{sandbox: %Policy{} = policy} ->
+        policy
+
+      _ ->
+        ctx
+        |> Map.get(:config)
+        |> Config.sandbox_runtime(workspace: Map.get(ctx, :workspace, cwd))
     end
   end
 

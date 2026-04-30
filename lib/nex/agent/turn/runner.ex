@@ -854,6 +854,7 @@ defmodule Nex.Agent.Turn.Runner do
 
   defp render_tool_call_notice(tool_calls) do
     tool_calls
+    |> Enum.reject(&suppress_tool_call_notice?/1)
     |> Enum.map(&render_tool_call_notice_line/1)
     |> Enum.reject(&(&1 == ""))
     |> case do
@@ -861,6 +862,12 @@ defmodule Nex.Agent.Turn.Runner do
       lines -> Enum.join(lines, "\n") <> "\n"
     end
   end
+
+  defp suppress_tool_call_notice?(tool_call) when is_map(tool_call) do
+    get_in(tool_call, ["function", "name"]) == "bash"
+  end
+
+  defp suppress_tool_call_notice?(_tool_call), do: false
 
   defp render_tool_call_notice_line(tool_call) when is_map(tool_call) do
     tool_name = get_in(tool_call, ["function", "name"]) || "unknown_tool"
@@ -1734,7 +1741,16 @@ defmodule Nex.Agent.Turn.Runner do
             {:ok, result} when is_binary(result) ->
               result
 
+            {:ok, %{content: content, metadata: metadata}} when is_binary(content) ->
+              render_tool_content_with_metadata(tool_name, content, metadata)
+
+            {:ok, %{"content" => content, "metadata" => metadata}} when is_binary(content) ->
+              render_tool_content_with_metadata(tool_name, content, metadata)
+
             {:ok, %{content: content}} when is_binary(content) ->
+              content
+
+            {:ok, %{"content" => content}} when is_binary(content) ->
               content
 
             {:ok, %{error: error}} ->
@@ -1750,6 +1766,11 @@ defmodule Nex.Agent.Turn.Runner do
               "Error: #{reason}"
 
             %{content: content} when is_binary(content) ->
+              emit_tool_coercion(tool_name, ctx, "bare_content_map")
+
+              content
+
+            %{"content" => content} when is_binary(content) ->
               emit_tool_coercion(tool_name, ctx, "bare_content_map")
 
               content
@@ -1785,11 +1806,40 @@ defmodule Nex.Agent.Turn.Runner do
 
   defp tool_allowed?(_tool_name, _ctx), do: true
 
+  defp render_tool_content_with_metadata("bash", content, metadata) when is_map(metadata) do
+    case tool_context_note(metadata) do
+      nil -> content
+      note -> append_tool_context_note(content, note)
+    end
+  end
+
+  defp render_tool_content_with_metadata(_tool_name, content, _metadata), do: content
+
+  defp tool_context_note(metadata) when is_map(metadata) do
+    sandbox = Map.get(metadata, "sandbox") || Map.get(metadata, :sandbox) || %{}
+
+    case Map.get(sandbox, "llm_note") || Map.get(sandbox, :llm_note) do
+      note when is_binary(note) and note != "" -> note
+      _ -> nil
+    end
+  end
+
+  defp append_tool_context_note("", note) do
+    "[Context: #{note}]"
+  end
+
+  defp append_tool_context_note(content, note) do
+    content <> "\n\n[Context: #{note}]"
+  end
+
   defp build_tool_ctx(opts) do
     runtime_snapshot = Keyword.get(opts, :runtime_snapshot)
+    runtime_config = runtime_snapshot && runtime_snapshot.config
+    channel = Keyword.get(opts, :channel)
 
     %{
-      channel: Keyword.get(opts, :channel),
+      channel: channel,
+      channel_type: runtime_config && Config.channel_type(runtime_config, channel),
       chat_id: Keyword.get(opts, :chat_id),
       parent_chat_id: hook_parent_chat_id(opts),
       session_key: Keyword.get(opts, :session_key),
@@ -1803,10 +1853,12 @@ defmodule Nex.Agent.Turn.Runner do
       provider_options: Keyword.get(opts, :provider_options, []),
       tool_allowlist: Keyword.get(opts, :tool_allowlist),
       tools: Keyword.get(opts, :tools, %{}),
+      tool_result_format: :envelope,
       cwd: Keyword.get(opts, :cwd, File.cwd!()),
       workspace: Keyword.get(opts, :workspace),
-      config: runtime_snapshot && runtime_snapshot.config,
+      config: runtime_config,
       runtime_snapshot: runtime_snapshot,
+      stream_sink: Keyword.get(opts, :stream_sink),
       project: Keyword.get(opts, :project),
       metadata: Keyword.get(opts, :metadata, %{}),
       llm_stream_client: Keyword.get(opts, :llm_stream_client),

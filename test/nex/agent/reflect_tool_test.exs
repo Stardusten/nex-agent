@@ -31,12 +31,12 @@ defmodule Nex.Agent.ReflectToolTest do
             }} =
              Reflect.execute(%{"action" => "source", "module" => "Nex.Agent.Turn.Runner"}, %{})
 
-    assert path == Path.join(@repo_root, "lib/nex/agent/runner.ex")
+    assert path == Path.join(@repo_root, "lib/nex/agent/turn/runner.ex")
     assert content =~ "defmodule Nex.Agent.Turn.Runner do"
   end
 
   test "reflect source returns the same shape for path-first inspection" do
-    path = Path.join(@repo_root, "lib/nex/agent/runner.ex")
+    path = Path.join(@repo_root, "lib/nex/agent/turn/runner.ex")
 
     assert {:ok,
             %{

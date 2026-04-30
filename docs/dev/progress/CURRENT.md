@@ -219,6 +219,47 @@ Post-Phase 20 personal workflow plugin cleanup is now implemented:
 - Core keeps only the generic `Cron` scheduler/executor primitive; onboarding only normalizes legacy summary cron job messages during migration.
 - Admin task overview reads the personal task workflow only when the plugin is enabled.
 
+Phase 21 Command Sandbox And Approval is now planned:
+
+- design: `docs/dev/designs/2026-04-30-command-sandbox-and-approval.md`
+- task plan: `docs/dev/task-plan/phase21-command-sandbox-and-approval.md`
+- intent:
+  - replace brittle tool-local path checks with a unified permission decision layer
+  - route direct file-tool IO through `Nex.Agent.Sandbox.FileSystem`, leaving room for a future sandboxed filesystem helper
+  - cover message attachments, reflect source paths, memory/user/soul file-like tools, and channel upload paths in the direct file IO inventory
+  - route user/tool-triggered child processes through `Nex.Agent.Sandbox.Exec`
+  - freeze a long-running stdio sandbox process contract before MCP migration
+  - implement macOS Seatbelt first while keeping backend interfaces platform-neutral
+  - add deterministic approval grants for once/session/similar/always decisions
+  - hard-deny sensitive local profile/config paths across direct tools and sandboxed commands
+- Stage 1 runtime sandbox projection is implemented:
+  - `Nex.Agent.Sandbox.Policy` / `Command` / `Result` pure data contracts are in place
+  - `Config.sandbox_runtime/2` normalizes `tools.sandbox`, migrates legacy `tools.file_access.allowed_roots` into filesystem entries, and injects hard protected paths
+  - `Runtime.Snapshot.sandbox` now carries the normalized sandbox policy for later permission and exec cutovers
+  - focused config/runtime/sandbox policy tests and compile with warnings-as-errors passed via `/opt/homebrew/bin/mix`
+- Stage 2 approval state and command lane is implemented:
+  - `Nex.Agent.Sandbox.Approval` owns pending requests, session grants, and always grants
+  - always grants persist at `<workspace>/permissions/grants.json`, and `Workspace.ensure!/1` creates `permissions/`
+  - `/approve` and `/deny` are declared by `builtin:command.core`, accepted by the bounded handler table, and handled deterministically by `InboundWorker`
+  - `/approve all` approves only current pending requests once and creates no grant
+  - `/new` resets approval session state; `/stop` cancels pending approval requests without clearing session grants
+  - focused approval/command/InboundWorker tests and compile with warnings-as-errors passed via `/opt/homebrew/bin/mix`
+- Stage 3 direct file permission cutover is implemented:
+  - `Nex.Agent.Sandbox.FileSystem` is the direct filesystem authority for model/user-controlled paths
+  - `Security.authorize_path/3` now performs canonical path, symlink-aware, missing-target ancestor, deny-first, approval-aware path decisions
+  - migrated direct file-like paths include `read`, `find` scope validation, `apply_patch`, `message` attachments, `reflect source path`, `user_update`, `soul_update`, and `memory_write`
+  - Feishu outbound attachment upload consumes authorized attachment metadata or re-authorizes through `Sandbox.FileSystem`
+  - hard-denied paths remain ungrantable, including `~/.zshrc` and `~/.nex/agent/config.json`
+  - focused Stage 1-3 suites, compile with warnings-as-errors, and `git diff --check` passed via `/opt/homebrew/bin/mix`
+- Stage 4-7 sandbox exec, bash approval, process migration, and observability are implemented:
+  - `Sandbox.Exec.run/2` and `Sandbox.Exec.open/2` now own child process execution and long-running stdio process handles
+  - macOS backend uses fixed `/usr/bin/sandbox-exec` Seatbelt wrapping; backend interface remains platform-neutral for later Linux/Windows implementations
+  - `bash` now goes through command classification, approval grants, and `Sandbox.Exec.run/2`
+  - `find` rg, external executor, stdio MCP, and self-update git/test subprocesses no longer call `System.cmd` / `Port.open` directly outside the sandbox exec boundary
+  - project/context git-root detection no longer shells out to `git rev-parse`
+  - approval and exec lifecycles now emit `sandbox.approval.*` and `sandbox.exec.*` ControlPlane observations
+  - remaining subprocess grep hits are reviewed internal exemptions: `Sandbox.Exec` itself, `Observe.Admin` pid liveness probe, and Mix gateway process management task
+
 Post-Phase 20 dependency direction review is now implemented:
 
 - Core no longer imports Feishu/Discord channel implementation modules; `InboundWorker` routes stream lifecycle through the existing plugin-derived `Channel.Spec` boundary and keeps only opaque stream state.
@@ -435,14 +476,15 @@ Docs/dev workflow is split into four lanes:
 
 ## Immediate Next Steps
 
-1. Phase 18D Notes manual review：在真实 config 中配置 `gateway.workbench.apps.notes.root`，授权 notes app 的 `notes:read` / `notes:write`，打开 Workbench 验证真实 vault list/read/write/search/conflict。
-2. Phase 18 Workbench app artifact reload：把 `reload.sh` contract 落成受控 runner/tool 或 owner lane，并补 ControlPlane observations 和权限边界测试。
-3. Phase 18 Workbench：用一个临时 workspace 手动 seed `workbench/apps/<id>/nex.app.json` + `index.html`，启用 `gateway.workbench` 后打开 `http://127.0.0.1:50051/workbench` 验证真实 gateway 下的 shell/reload/permission/observe/SDK bridge 回路。
-4. 用真实 `~/.nex/agent/config.json` 手动改成新 config shape 后重启 gateway，验证多个 Feishu/Discord instance 可以同时注册、收消息、发消息。
-5. 真实 gateway/manual 场景检查 runtime reload 后 channel add/remove/change 是否只影响对应 instance。
-6. 用真实 gateway/manual 场景检查 busy 普通消息 follow-up、`/btw`、`/status`、`/stop`、可选 interrupt tool，以及 follow-up 使用 `observe summary` 的实际交互时序。
-7. Phase 7 留存问题仍需后续处理：Finch 连接池泄漏、飞书 `close_streaming_mode` 404、LLM 空返回兜底。
-8. 用真实 gateway/manual 场景检查 Phase 17 memory notice：普通 owner run 后台 refresh 应在最终回复之后发送 `🧠 Memory - <summary>`；cron、follow-up、subagent 不应发送。
+1. Phase 21 Command Sandbox And Approval：等待 review/验收；重点看 Seatbelt profile、approval grant 语义、direct file inventory reviewed exemptions、以及 Linux/Windows backend contract 是否还需要补冻结项。
+2. Phase 18D Notes manual review：在真实 config 中配置 `gateway.workbench.apps.notes.root`，授权 notes app 的 `notes:read` / `notes:write`，打开 Workbench 验证真实 vault list/read/write/search/conflict。
+3. Phase 18 Workbench app artifact reload：把 `reload.sh` contract 落成受控 runner/tool 或 owner lane，并补 ControlPlane observations 和权限边界测试。
+4. Phase 18 Workbench：用一个临时 workspace 手动 seed `workbench/apps/<id>/nex.app.json` + `index.html`，启用 `gateway.workbench` 后打开 `http://127.0.0.1:50051/workbench` 验证真实 gateway 下的 shell/reload/permission/observe/SDK bridge 回路。
+5. 用真实 `~/.nex/agent/config.json` 手动改成新 config shape 后重启 gateway，验证多个 Feishu/Discord instance 可以同时注册、收消息、发消息。
+6. 真实 gateway/manual 场景检查 runtime reload 后 channel add/remove/change 是否只影响对应 instance。
+7. 用真实 gateway/manual 场景检查 busy 普通消息 follow-up、`/btw`、`/status`、`/stop`、可选 interrupt tool，以及 follow-up 使用 `observe summary` 的实际交互时序。
+8. Phase 7 留存问题仍需后续处理：Finch 连接池泄漏、飞书 `close_streaming_mode` 404、LLM 空返回兜底。
+9. 用真实 gateway/manual 场景检查 Phase 17 memory notice：普通 owner run 后台 refresh 应在最终回复之后发送 `🧠 Memory - <summary>`；cron、follow-up、subagent 不应发送。
 
 ## Reviewer Verification
 

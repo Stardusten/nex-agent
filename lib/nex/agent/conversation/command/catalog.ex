@@ -21,7 +21,7 @@ defmodule Nex.Agent.Conversation.Command.Catalog do
           optional(:channels) => [String.t()]
         }
 
-  @handler_order ~w(new stop commands status model queue btw)
+  @handler_order ~w(new stop approve deny commands status model queue btw)
   @handler_ids MapSet.new(@handler_order)
 
   @spec definitions(keyword()) :: [definition()]

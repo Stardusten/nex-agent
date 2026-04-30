@@ -3,7 +3,7 @@ defmodule Nex.Agent.Capability.Tool.Core.Read do
 
   @behaviour Nex.Agent.Capability.Tool.Behaviour
 
-  alias Nex.Agent.Sandbox.Security
+  alias Nex.Agent.Sandbox.FileSystem
   alias Nex.Agent.Runtime.Workspace
 
   @default_max_bytes 50_000
@@ -58,12 +58,12 @@ defmodule Nex.Agent.Capability.Tool.Core.Read do
   end
 
   def execute(%{"path" => path} = args, ctx) do
-    with {:ok, expanded} <- Security.validate_path(path, ctx),
-         :ok <- reject_profile_shadow(expanded),
-         {:ok, kind} <- classify_path(expanded) do
+    with {:ok, info} <- FileSystem.authorize(path, :read, ctx),
+         :ok <- reject_profile_shadow(info.expanded_path),
+         {:ok, kind} <- classify_path(info) do
       case {kind, Map.get(args, "directory")} do
         {:file, nil} ->
-          read_file(expanded, args)
+          read_file(info, args)
 
         {:file, _directory_opts} ->
           {:error, "directory options require a directory path"}
@@ -72,7 +72,7 @@ defmodule Nex.Agent.Capability.Tool.Core.Read do
           {:error, "Path is a directory. Provide directory options to inspect entries."}
 
         {:directory, directory_opts} ->
-          read_directory(expanded, directory_opts || %{}, args)
+          read_directory(info, directory_opts || %{}, args, ctx)
       end
     else
       {:error, reason} -> {:error, reason}
@@ -81,16 +81,19 @@ defmodule Nex.Agent.Capability.Tool.Core.Read do
 
   def execute(_args, _ctx), do: {:error, "path is required"}
 
-  defp classify_path(path) do
-    cond do
-      File.regular?(path) -> {:ok, :file}
-      File.dir?(path) -> {:ok, :directory}
-      true -> {:error, "Path does not exist: #{path}"}
+  defp classify_path(info) do
+    with {:ok, regular?} <- FileSystem.regular?(info),
+         {:ok, directory?} <- FileSystem.directory?(info) do
+      cond do
+        regular? -> {:ok, :file}
+        directory? -> {:ok, :directory}
+        true -> {:error, "Path does not exist: #{info.expanded_path}"}
+      end
     end
   end
 
-  defp read_file(path, args) do
-    case File.read(path) do
+  defp read_file(info, args) do
+    case FileSystem.read_file(info) do
       {:ok, content} ->
         lines = split_lines(content)
         total_lines = length(lines)
@@ -119,7 +122,7 @@ defmodule Nex.Agent.Capability.Tool.Core.Read do
         {:ok,
          %{
            status: :ok,
-           path: path,
+           path: info.expanded_path,
            kind: :file,
            truncated: has_more,
            has_more: has_more,
@@ -127,18 +130,18 @@ defmodule Nex.Agent.Capability.Tool.Core.Read do
            content: content_out,
            total_lines: total_lines,
            entries: nil,
-           stat: maybe_stat(path, Map.get(args, "include_stat", false))
+           stat: maybe_stat(info, Map.get(args, "include_stat", false))
          }}
 
       {:error, reason} ->
-        {:error, "Error reading file #{path}: #{inspect(reason)}"}
+        {:error, "Error reading file #{info.expanded_path}: #{inspect(reason)}"}
     end
   end
 
-  defp read_directory(path, directory_opts, args) do
+  defp read_directory(info, directory_opts, args, ctx) do
     depth = normalize_non_negative(Map.get(directory_opts, "depth"), 0)
     limit = directory_limit(Map.get(directory_opts, "limit"))
-    entries = directory_entries(path, depth, Map.get(args, "include_stat", false))
+    entries = directory_entries(info, depth, Map.get(args, "include_stat", false), ctx)
     total_entries = length(entries)
     start_line = normalize_positive(Map.get(args, "start_line"), 1)
     start_index = max(start_line - 1, 0)
@@ -148,7 +151,7 @@ defmodule Nex.Agent.Capability.Tool.Core.Read do
     {:ok,
      %{
        status: :ok,
-       path: path,
+       path: info.expanded_path,
        kind: :directory,
        truncated: has_more,
        has_more: has_more,
@@ -156,7 +159,7 @@ defmodule Nex.Agent.Capability.Tool.Core.Read do
        content: nil,
        total_lines: total_entries,
        entries: limited_entries,
-       stat: maybe_stat(path, Map.get(args, "include_stat", false))
+       stat: maybe_stat(info, Map.get(args, "include_stat", false))
      }}
   end
 
@@ -216,42 +219,51 @@ defmodule Nex.Agent.Capability.Tool.Core.Read do
     end
   end
 
-  defp directory_entries(root, depth, include_stat) do
-    do_directory_entries(root, root, depth, include_stat)
+  defp directory_entries(root_info, depth, include_stat, ctx) do
+    do_directory_entries(root_info.expanded_path, root_info, depth, include_stat, ctx)
     |> Enum.sort_by(& &1.path)
   end
 
-  defp do_directory_entries(root, current, depth, include_stat) do
-    current
-    |> File.ls!()
-    |> Enum.sort()
-    |> Enum.flat_map(fn name ->
-      full_path = Path.join(current, name)
-      relative_path = Path.relative_to(full_path, root)
-      kind = if(File.dir?(full_path), do: :directory, else: :file)
+  defp do_directory_entries(root, current_info, depth, include_stat, ctx) do
+    with {:ok, names} <- FileSystem.list_dir(current_info) do
+      names
+      |> Enum.sort()
+      |> Enum.flat_map(fn name ->
+        full_path = Path.join(current_info.expanded_path, name)
 
-      entry =
-        %{
-          path: relative_path,
-          name: name,
-          kind: kind
-        }
-        |> maybe_put_entry_stat(full_path, include_stat)
+        with {:ok, child_info} <- FileSystem.authorize(full_path, :read, ctx),
+             {:ok, directory?} <- FileSystem.directory?(child_info) do
+          relative_path = Path.relative_to(child_info.expanded_path, root)
+          kind = if(directory?, do: :directory, else: :file)
 
-      cond do
-        kind == :directory and depth > 0 ->
-          [entry | do_directory_entries(root, full_path, depth - 1, include_stat)]
+          entry =
+            %{
+              path: relative_path,
+              name: name,
+              kind: kind
+            }
+            |> maybe_put_entry_stat(child_info, include_stat)
 
-        true ->
-          [entry]
-      end
-    end)
+          cond do
+            kind == :directory and depth > 0 ->
+              [entry | do_directory_entries(root, child_info, depth - 1, include_stat, ctx)]
+
+            true ->
+              [entry]
+          end
+        else
+          {:error, _reason} -> []
+        end
+      end)
+    else
+      {:error, _reason} -> []
+    end
   end
 
-  defp maybe_put_entry_stat(entry, _path, false), do: entry
+  defp maybe_put_entry_stat(entry, _info, false), do: entry
 
-  defp maybe_put_entry_stat(entry, path, true) do
-    case File.stat(path) do
+  defp maybe_put_entry_stat(entry, info, true) do
+    case FileSystem.stat(info) do
       {:ok, stat} ->
         Map.merge(entry, %{size: stat.size, mtime: format_mtime(stat.mtime)})
 
@@ -262,8 +274,8 @@ defmodule Nex.Agent.Capability.Tool.Core.Read do
 
   defp maybe_stat(_path, false), do: nil
 
-  defp maybe_stat(path, true) do
-    case File.stat(path) do
+  defp maybe_stat(info, true) do
+    case FileSystem.stat(info) do
       {:ok, stat} ->
         %{size: stat.size, mtime: format_mtime(stat.mtime)}
 

@@ -2,8 +2,10 @@ defmodule Nex.Agent.Capability.Executor do
   @moduledoc false
 
   alias Nex.Agent.Knowledge.ProjectMemory, as: ProjectMemory
+  alias Nex.Agent.Runtime.Config
   alias Nex.Agent.Runtime.Workspace
   alias Nex.Agent.Observe.ControlPlane.Log
+  alias Nex.Agent.Sandbox.{Command, Exec, Policy}
   require Log
 
   @executor_names ~w(codex_cli claude_code_cli nex_local)
@@ -119,32 +121,31 @@ defmodule Nex.Agent.Capability.Executor do
     started_at = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
     command = config.executable
     args = build_args(config, prompt)
-    cmd_opts = build_cmd_opts(config, prompt, cwd)
 
-    case run_command(command, args, cmd_opts, config.timeout) do
-      {:ok, {output, exit_code}} ->
+    case run_command(command, args, config, prompt, cwd, attrs, opts) do
+      {:ok, result} ->
         record =
           base_record(attrs, executor, cwd, project)
           |> Map.merge(%{
             "id" => id,
             "started_at" => started_at,
             "completed_at" => now_iso(),
-            "status" => if(exit_code == 0, do: "completed", else: "failed"),
+            "status" => if(result.exit_code == 0, do: "completed", else: "failed"),
             "command" => command,
             "args" => args,
-            "exit_code" => exit_code,
-            "output" => sanitize_output(output)
+            "exit_code" => result.exit_code,
+            "output" => sanitize_output(result.stdout)
           })
 
         persist_run(record, opts)
 
-        if exit_code == 0 do
+        if result.exit_code == 0 do
           {:ok, record}
         else
-          {:error, "Executor #{executor} failed with exit code #{exit_code}"}
+          {:error, "Executor #{executor} failed with exit code #{result.exit_code}"}
         end
 
-      {:error, :timeout} ->
+      {:error, %{status: :timeout}} ->
         record =
           base_record(attrs, executor, cwd, project)
           |> Map.merge(%{
@@ -161,7 +162,7 @@ defmodule Nex.Agent.Capability.Executor do
         {:error, "Executor #{executor} timed out after #{config.timeout}s"}
 
       {:error, reason} ->
-        message = Exception.format_banner(:error, reason)
+        message = executor_error_message(reason)
 
         record =
           base_record(attrs, executor, cwd, project)
@@ -243,68 +244,43 @@ defmodule Nex.Agent.Capability.Executor do
   defp build_args(%{prompt_mode: "arg_append", args: args}, prompt), do: args ++ [prompt]
   defp build_args(%{args: args}, _prompt), do: args
 
-  defp build_cmd_opts(%{prompt_mode: "stdin"}, prompt, cwd) do
-    [stderr_to_stdout: true, cd: cwd, prompt_input: prompt]
+  defp run_command(command, args, config, prompt, cwd, attrs, opts) do
+    Exec.run(
+      %Command{
+        program: command,
+        args: args,
+        cwd: cwd,
+        stdin: if(config.prompt_mode == "stdin", do: prompt),
+        timeout_ms: max(config.timeout, 1) * 1000,
+        cancel_ref: Keyword.get(opts, :cancel_ref),
+        metadata: %{
+          workspace: Keyword.get(opts, :workspace, cwd),
+          observe_context: %{
+            workspace: Keyword.get(opts, :workspace, cwd),
+            run_id: Map.get(attrs, :run_id) || Map.get(attrs, "run_id")
+          },
+          observe_attrs: %{"executor" => config.name}
+        }
+      },
+      sandbox_policy(opts, cwd)
+    )
   end
 
-  defp build_cmd_opts(_config, _prompt, cwd) do
-    [stderr_to_stdout: true, cd: cwd]
-  end
+  defp sandbox_policy(opts, cwd) do
+    case Keyword.get(opts, :runtime_snapshot) do
+      %{sandbox: %Policy{} = policy} ->
+        policy
 
-  defp run_command(command, args, cmd_opts, timeout_seconds) do
-    timeout_ms = max(timeout_seconds, 1) * 1000
-    prompt = Keyword.get(cmd_opts, :prompt_input)
-    system_opts = Keyword.delete(cmd_opts, :prompt_input)
-
-    task =
-      Task.async(fn ->
-        if is_binary(prompt) do
-          run_stdin_command(command, args, prompt, system_opts)
-        else
-          System.cmd(command, args, system_opts)
-        end
-      end)
-
-    case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
-      {:ok, result} -> {:ok, result}
-      nil -> {:error, :timeout}
-    end
-  rescue
-    error -> {:error, error}
-  catch
-    :exit, reason -> {:error, reason}
-  end
-
-  defp run_stdin_command(command, args, prompt, system_opts) do
-    prompt_file = temp_prompt_file()
-
-    try do
-      File.write!(prompt_file, prompt)
-
-      shell_args = [
-        "-lc",
-        "cat \"$NEX_AGENT_PROMPT_FILE\" | exec \"$NEX_AGENT_EXECUTABLE\" \"$@\"",
-        "nex-agent-executor"
-        | args
-      ]
-
-      env =
-        [{"NEX_AGENT_PROMPT_FILE", prompt_file}, {"NEX_AGENT_EXECUTABLE", command}] ++
-          Keyword.get(system_opts, :env, [])
-
-      system_opts =
-        system_opts
-        |> Keyword.put(:env, env)
-
-      System.cmd("sh", shell_args, system_opts)
-    after
-      File.rm(prompt_file)
+      _ ->
+        opts
+        |> Keyword.get(:config)
+        |> Config.sandbox_runtime(workspace: Keyword.get(opts, :workspace, cwd))
     end
   end
 
-  defp temp_prompt_file do
-    Path.join(System.tmp_dir!(), "nex-agent-exec-#{System.unique_integer([:positive])}.txt")
-  end
+  defp executor_error_message(%{error: error}) when is_binary(error), do: error
+  defp executor_error_message(%{status: status}), do: Atom.to_string(status)
+  defp executor_error_message(reason), do: inspect(reason)
 
   defp read_jsonl(path) do
     case File.read(path) do

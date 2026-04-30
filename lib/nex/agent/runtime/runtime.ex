@@ -243,6 +243,7 @@ defmodule Nex.Agent.Runtime do
          config_path: Config.config_path(opts),
          config: config,
          workspace: workspace,
+         sandbox: Config.sandbox_runtime(config, workspace: workspace),
          channels: Config.channels_runtime(config, plugin_data: plugins_data),
          commands: commands_data,
          prompt: prompt_data,

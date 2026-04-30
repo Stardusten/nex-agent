@@ -164,6 +164,11 @@ defmodule Nex.Agent.Conversation.InboundWorkerTest do
     assert payload.content =~ "Available slash commands:"
     assert payload.content =~ "/new - reset the current chat session"
     assert payload.content =~ "/stop - stop the current task and clear queued messages"
+
+    assert payload.content =~
+             "/approve [all|session|similar|always] - approve the next pending sandbox permission request"
+
+    assert payload.content =~ "/deny [all] - deny the next pending sandbox permission request"
     assert payload.content =~ "/commands - list supported slash commands for this chat"
     assert payload.content =~ "/status - show current owner run status immediately"
 

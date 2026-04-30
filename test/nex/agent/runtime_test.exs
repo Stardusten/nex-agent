@@ -3,6 +3,7 @@ defmodule Nex.Agent.RuntimeTest do
 
   alias Nex.Agent.{Runtime.Config, Runtime, Capability.Skills}
   alias Nex.Agent.Runtime.Snapshot
+  alias Nex.Agent.Sandbox.Policy
   alias Nex.Agent.Interface.Workbench.Store, as: WorkbenchStore
 
   setup do
@@ -83,6 +84,9 @@ defmodule Nex.Agent.RuntimeTest do
     assert snapshot.version >= 1
     assert snapshot.workspace == workspace
     assert %Config{} = snapshot.config
+    assert %Policy{mode: :workspace_write} = snapshot.sandbox
+    assert Path.expand("~/.zshrc") in snapshot.sandbox.protected_paths
+    assert %{path: {:special, :workspace}, access: :write} in snapshot.sandbox.filesystem
     assert snapshot.prompt.system_prompt =~ "Runtime AGENTS layer."
     assert snapshot.prompt.system_prompt =~ "Runtime identity layer."
     assert is_list(snapshot.prompt.diagnostics)
@@ -251,6 +255,32 @@ defmodule Nex.Agent.RuntimeTest do
                "show_table_as" => "ascii"
              }
            }
+  end
+
+  test "snapshot carries normalized sandbox policy from config", %{workspace: workspace} do
+    read_root = Path.join(workspace, "sandbox-read")
+    File.mkdir_p!(read_root)
+
+    config = runtime_config(workspace)
+
+    config = %{
+      config
+      | tools: %{
+          "sandbox" => %{
+            "backend" => "seatbelt",
+            "default_profile" => "read_only",
+            "allow_read_roots" => [read_root]
+          }
+        }
+    }
+
+    assert {:ok, %Snapshot{} = snapshot} =
+             Runtime.reload(workspace: workspace, config_loader: fn _opts -> config end)
+
+    assert %Policy{backend: :seatbelt, mode: :read_only} = snapshot.sandbox
+    assert %{path: {:path, read_root}, access: :read} in snapshot.sandbox.filesystem
+
+    assert %{path: {:path, Path.expand("~/.nex/agent/config.json")}, access: :none} in snapshot.sandbox.filesystem
   end
 
   test "disabled channel and provider plugins affect one runtime snapshot consistently", %{

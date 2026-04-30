@@ -5,7 +5,7 @@ defmodule Nex.Agent.Runtime.Workspace do
 
   @default_root Path.join(System.get_env("HOME", "~"), ".nex/agent/workspace")
 
-  @known_dirs ~w(memory skills tools plugins notes tasks projects executors audit workbench)
+  @known_dirs ~w(memory skills tools plugins notes tasks projects executors audit workbench permissions)
 
   @spec default_root() :: String.t()
   def default_root, do: @default_root

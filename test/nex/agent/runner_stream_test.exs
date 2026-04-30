@@ -2,6 +2,7 @@ defmodule Nex.Agent.Turn.RunnerStreamTest do
   use ExUnit.Case, async: false
 
   alias Nex.Agent.{Turn.Runner, Conversation.Session}
+  alias Nex.Agent.Runtime.{Config, Snapshot}
   alias Nex.Agent.Turn.Stream.Result
 
   defmodule TransportError do
@@ -542,7 +543,7 @@ defmodule Nex.Agent.Turn.RunnerStreamTest do
            ] = collect_stream_events([])
   end
 
-  test "runner formats bash tool call notices with emoji and plain command" do
+  test "runner emits bash command actions separately from assistant text" do
     parent = self()
 
     workspace =
@@ -568,7 +569,7 @@ defmodule Nex.Agent.Turn.RunnerStreamTest do
     turn_key = {:bash_tool_notice_turn, self()}
     Process.put(turn_key, 0)
 
-    llm_stream_client = fn _messages, _opts, callback ->
+    llm_stream_client = fn messages, _opts, callback ->
       turn = Process.get(turn_key, 0)
       Process.put(turn_key, turn + 1)
 
@@ -591,15 +592,32 @@ defmodule Nex.Agent.Turn.RunnerStreamTest do
           :ok
 
         1 ->
+          send(parent, {:second_turn_messages, messages})
           callback.({:delta, "done"})
           callback.({:done, %{finish_reason: nil, usage: nil, model: nil}})
           :ok
       end
     end
 
+    config =
+      Config.from_map(%{
+        "tools" => %{
+          "sandbox" => %{
+            "backend" => "noop",
+            "approval" => %{"default" => "allow"}
+          }
+        }
+      })
+
+    runtime_snapshot = runtime_snapshot(config, workspace)
+
     assert {:ok, %Result{handled?: true, status: :ok, final_content: "done"}, _session} =
              Runner.run(Session.new("stream:bash-tool-call"), "hi",
                workspace: workspace,
+               runtime_snapshot: runtime_snapshot,
+               channel: "discord_test",
+               chat_id: "123",
+               session_key: "discord_test:123",
                provider: :anthropic,
                model: "claude-sonnet-4-20250514",
                skip_consolidation: true,
@@ -609,12 +627,26 @@ defmodule Nex.Agent.Turn.RunnerStreamTest do
              )
 
     assert [
-             {:text, "⚙️ Bash - echo https://example.com/status\n"},
-             {:text, "\n"},
+             {:action, action_payload},
              {:text, "done"},
              :finish
            ] =
              collect_stream_events([])
+
+    assert action_payload.content == "⚙️ Bash - echo https://example.com/status _(Allowed)_"
+    assert action_payload.metadata["_nex_action"]["status"] == "allowed"
+    assert action_payload.metadata["_nex_action"]["subject"] == "echo https://example.com/status"
+
+    assert_receive {:second_turn_messages, second_turn_messages}
+
+    tool_message =
+      Enum.find(second_turn_messages, fn message ->
+        message["role"] == "tool" and message["name"] == "bash"
+      end)
+
+    assert tool_message["content"] =~ "https://example.com/status"
+    assert tool_message["content"] =~ "[Context:"
+    assert tool_message["content"] =~ "allowed by sandbox policy"
   end
 
   test "runner resumes interrupted stream with continue prompt and preserves partial output" do
@@ -755,6 +787,15 @@ defmodule Nex.Agent.Turn.RunnerStreamTest do
       100 ->
         acc
     end
+  end
+
+  defp runtime_snapshot(%Config{} = config, workspace) do
+    %Snapshot{
+      version: 1,
+      config: config,
+      workspace: workspace,
+      sandbox: Config.sandbox_runtime(config, workspace: workspace)
+    }
   end
 
   defp stream_client_from_response(fun) when is_function(fun, 2) do

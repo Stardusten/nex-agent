@@ -41,6 +41,7 @@ Thumbs.db
 # Temporary files and logs
 /tmp/
 /log/
+/control_plane/
 *.log
 
 # Environment and secrets

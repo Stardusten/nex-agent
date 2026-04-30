@@ -159,6 +159,16 @@ defmodule Nex.Agent.Interface.Channel.Specs.Discord do
     {:ok, updated}
   end
 
+  def handle_stream_event(%StreamState{} = stream_state, {:approval_request, payload}, _opts)
+      when is_map(payload) do
+    handle_action_event(stream_state, payload)
+  end
+
+  def handle_stream_event(%StreamState{} = stream_state, {:action, payload}, _opts)
+      when is_map(payload) do
+    handle_action_event(stream_state, payload)
+  end
+
   def handle_stream_event(%StreamState{} = stream_state, :finish, _opts) do
     flush_converter(cancel_flush(stream_state))
   end
@@ -168,6 +178,19 @@ defmodule Nex.Agent.Interface.Channel.Specs.Discord do
   end
 
   def handle_stream_event(%StreamState{} = stream_state, _event, _opts), do: {:ok, stream_state}
+
+  defp handle_action_event(%StreamState{} = stream_state, payload) do
+    stream_state =
+      stream_state
+      |> cancel_flush()
+      |> cancel_thinking_timer()
+      |> cancel_status_timer()
+
+    with {:ok, %StreamState{converter: converter} = flushed} <- flush_converter(stream_state),
+         {:ok, updated_converter} <- StreamConverter.action_event(converter, payload) do
+      {:ok, %{flushed | converter: updated_converter, pending_text: "", flush_timer_ref: nil}}
+    end
+  end
 
   @impl true
   def handle_stream_timer(%StreamState{} = stream_state, :flush, opts) do
@@ -180,10 +203,20 @@ defmodule Nex.Agent.Interface.Channel.Specs.Discord do
   end
 
   def handle_stream_timer(
-        %StreamState{converter: %{placeholder: true} = converter} = stream_state,
+        %StreamState{converter: %{placeholder: true, waiting_for_approval: true}} = stream_state,
+        :thinking,
+        _opts
+      ) do
+    {:ok, %{stream_state | thinking_timer_ref: nil}}
+  end
+
+  def handle_stream_timer(
+        %StreamState{converter: %{placeholder: true, waiting_for_approval: waiting?} = converter} =
+          stream_state,
         :thinking,
         opts
-      ) do
+      )
+      when waiting? in [false, nil] do
     case StreamConverter.update_thinking_timer(converter) do
       {:ok, updated_converter} ->
         parent = Keyword.get(opts, :parent, self())

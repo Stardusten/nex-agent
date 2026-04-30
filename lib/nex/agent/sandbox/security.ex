@@ -5,7 +5,10 @@ defmodule Nex.Agent.Sandbox.Security do
   Provides path validation, command blacklist validation, and other security checks.
   """
 
-  alias Nex.Agent.Runtime.Config
+  alias Nex.Agent.Runtime.{Config, Workspace}
+  alias Nex.Agent.Sandbox.Approval
+  alias Nex.Agent.Sandbox.Approval.Request
+  alias Nex.Agent.Sandbox.Policy
 
   @blocked_commands [
     "mkfs",
@@ -17,16 +20,14 @@ defmodule Nex.Agent.Sandbox.Security do
     "reboot",
     "poweroff",
     "halt",
-    "nc",
-    "netcat",
-    "ncat",
     "sudo",
     "su"
   ]
 
-  @blocked_shells ~w(bash sh zsh fish csh tcsh dash ksh)
+  @path_operations ~w(read write list search remove mkdir stat stream)a
+  @read_operations ~w(read list search stat stream)a
 
-  @dangerous_patterns [
+  @hard_deny_patterns [
     {~r/\brm\s+(-[^\s]*\s+)*\/(bin|sbin|usr|etc|var|boot|lib|sys|proc)\b/i,
      "Deleting system directories not allowed"},
     {~r/\brm\s+(-[^\s]*\s+)*\/\s*$/i, "Deleting from root not allowed"},
@@ -39,18 +40,7 @@ defmodule Nex.Agent.Sandbox.Security do
     {~r/>\s*\/dev\/sd/i, "Writing to block devices not allowed"},
     {~r/\b(shutdown|reboot|poweroff)\b/i, "System power control not allowed"},
     {~r/:\(\)\s*\{.*\};\s*:/, "Fork bomb not allowed"},
-    {~r/[;&|]\s*(?:bash|sh|zsh|fish|csh|tcsh|dash|ksh)\s+-[ic]/i, "Shell injection not allowed"},
-    {~r/`[^`]+`/, "Command substitution not allowed"},
-    {~r/\$\([^)]+\)/, "Command substitution not allowed"},
-    {~r/\b(env|xargs|exec|nice|timeout)\s+.*\b(bash|sh|zsh|fish|csh|tcsh|dash|ksh)\b/i,
-     "Shell command escape not allowed"},
-    {~r/\bpython\b.*-c\b/i, "Python command execution not allowed"},
-    {~r/\bperl\b.*-e\b/i, "Perl command execution not allowed"},
-    {~r/\bruby\b.*-e\b/i, "Ruby command execution not allowed"},
-    {~r/\bnode\b.*-e\b/i, "Node.js command execution not allowed"},
-    {~r/\bphp\b.*-r\b/i, "PHP command execution not allowed"},
-    {~r/\b(os\.system|subprocess|eval\(|exec\(|import\s+os)\b/i,
-     "Python system calls not allowed"}
+    {~r/(?:^|[;&|]\s*)(?:sudo|su)\b/i, "Privilege escalation not allowed"}
   ]
 
   @doc """
@@ -79,23 +69,10 @@ defmodule Nex.Agent.Sandbox.Security do
   @spec validate_path(String.t(), map() | keyword() | Config.t()) ::
           {:ok, String.t()} | {:error, String.t()}
   def validate_path(path, ctx) do
-    expanded = Path.expand(path)
-    roots = allowed_roots(ctx)
-
-    if String.contains?(path, "..") and not safe_traversal?(path, roots) do
-      {:error, "Path traversal not allowed: #{path}"}
-    else
-      with true <- path_within_allowed_roots?(expanded, roots),
-           {:ok, real_path} <- realpath_if_possible(expanded),
-           true <- path_within_allowed_roots?(real_path, roots) do
-        {:ok, expanded}
-      else
-        false ->
-          {:error, "Path not within allowed roots. Allowed: #{Enum.join(roots, ", ")}"}
-
-        {:error, reason} ->
-          {:error, reason}
-      end
+    case authorize_path(path, :read, ctx) do
+      {:ok, info} -> {:ok, info.expanded_path}
+      {:ask, request} -> {:ask, request}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -108,74 +85,457 @@ defmodule Nex.Agent.Sandbox.Security do
   @spec validate_write_path(String.t(), map() | keyword() | Config.t()) ::
           {:ok, String.t()} | {:error, String.t()}
   def validate_write_path(path, ctx) do
-    expanded = Path.expand(path)
-    roots = allowed_roots(ctx)
-
-    if String.contains?(path, "..") and not safe_traversal?(path, roots) do
-      {:error, "Path traversal not allowed: #{path}"}
-    else
-      with true <- path_within_allowed_roots?(expanded, roots),
-           {:ok, ancestor} <- nearest_existing_ancestor(expanded),
-           {:ok, real_ancestor} <- realpath_if_possible(ancestor),
-           true <- path_within_allowed_roots?(real_ancestor, roots) do
-        {:ok, expanded}
-      else
-        false ->
-          {:error, "Path not within allowed roots. Allowed: #{Enum.join(roots, ", ")}"}
-
-        {:error, reason} ->
-          {:error, reason}
-      end
+    case authorize_path(path, :write, ctx) do
+      {:ok, info} -> {:ok, info.expanded_path}
+      {:ask, request} -> {:ask, request}
+      {:error, reason} -> {:error, reason}
     end
   end
 
-  defp safe_traversal?(path, roots) do
+  @doc """
+  Authorize a direct filesystem operation against the runtime sandbox policy.
+  """
+  @spec authorize_path(String.t(), atom(), map() | keyword() | Config.t()) ::
+          {:ok, map()} | {:ask, Request.t()} | {:error, String.t()}
+  def authorize_path(path, operation, ctx)
+      when is_binary(path) and operation in @path_operations do
     expanded = Path.expand(path)
+    policy = policy_from_ctx(ctx)
 
-    path_within_allowed_roots?(expanded, roots) and
-      not symlink_escapes_to_forbidden_path?(expanded, roots)
-  end
-
-  defp path_within_allowed_roots?(expanded_path, roots) do
-    Enum.any?(roots, fn root ->
-      expanded_path == root or root == "/" or String.starts_with?(expanded_path, root <> "/")
-    end)
-  end
-
-  defp symlink_escapes_to_forbidden_path?(path, roots) do
-    case File.read_link(path) do
-      {:ok, target} ->
-        expanded_target = Path.expand(target)
-        not path_within_allowed_roots?(expanded_target, roots)
-
-      {:error, _} ->
-        false
+    with :ok <- reject_protected_expanded_path(expanded, policy),
+         {:ok, info} <- canonical_path_info(path, expanded),
+         :ok <- reject_protected_canonical_path(info, policy) do
+      decide_path_access(info, operation, policy, ctx)
     end
-  rescue
-    _ -> false
   end
 
-  defp nearest_existing_ancestor(path) do
-    parent = Path.dirname(path)
+  def authorize_path(_path, operation, _ctx) do
+    {:error, "Unsupported sandbox path operation: #{inspect(operation)}"}
+  end
 
+  defp canonical_path_info(input_path, expanded_path) do
+    with {:ok, ancestor, suffix} <- nearest_existing_ancestor(expanded_path),
+         {:ok, ancestor_realpath} <- realpath_if_possible(ancestor) do
+      canonical_path = join_path([ancestor_realpath | suffix])
+
+      {:ok,
+       %{
+         input_path: input_path,
+         expanded_path: expanded_path,
+         canonical_path: canonical_path,
+         existing_ancestor: ancestor,
+         existing_ancestor_realpath: ancestor_realpath,
+         missing_suffix: suffix,
+         target_exists?: suffix == []
+       }}
+    end
+  end
+
+  defp nearest_existing_ancestor(path), do: nearest_existing_ancestor(path, [])
+
+  defp nearest_existing_ancestor(path, suffix) do
     cond do
       File.exists?(path) ->
-        {:ok, path}
+        {:ok, path, suffix}
 
-      parent == path ->
+      Path.dirname(path) == path ->
         {:error, "No existing ancestor for path: #{path}"}
 
       true ->
-        nearest_existing_ancestor(parent)
+        nearest_existing_ancestor(Path.dirname(path), [Path.basename(path) | suffix])
     end
   end
 
+  defp join_path([path]), do: path
+  defp join_path(parts), do: Path.join(parts)
+
   defp realpath_if_possible(path) do
-    case :file.read_link_all(String.to_charlist(path)) do
-      {:ok, resolved} -> {:ok, List.to_string(resolved)}
-      {:error, _reason} -> {:ok, Path.expand(path)}
+    {:ok, resolve_path_components(Path.expand(path), 0)}
+  rescue
+    _ -> {:ok, Path.expand(path)}
+  end
+
+  defp resolve_path_components(path, depth) when depth > 40, do: Path.expand(path)
+
+  defp resolve_path_components(path, depth) do
+    expanded = Path.expand(path)
+
+    case Path.split(expanded) do
+      ["/" | parts] -> resolve_parts(parts, "/", depth)
+      parts -> resolve_parts(parts, "", depth)
     end
   end
+
+  defp resolve_parts([], current, _depth), do: if(current == "", do: ".", else: current)
+
+  defp resolve_parts([part | rest], current, depth) do
+    candidate = Path.join(current, part)
+
+    case File.read_link(candidate) do
+      {:ok, target} ->
+        resolved_target =
+          if Path.type(target) == :absolute do
+            Path.expand(target)
+          else
+            Path.expand(target, Path.dirname(candidate))
+          end
+
+        [resolved_target | rest]
+        |> join_path()
+        |> resolve_path_components(depth + 1)
+
+      {:error, _reason} ->
+        resolve_parts(rest, candidate, depth)
+    end
+  end
+
+  defp decide_path_access(%{} = info, _operation, %Policy{enabled: false}, _ctx),
+    do: {:ok, info}
+
+  defp decide_path_access(%{} = info, _operation, %Policy{mode: :danger_full_access}, _ctx),
+    do: {:ok, info}
+
+  defp decide_path_access(%{} = info, operation, %Policy{} = policy, ctx) do
+    cond do
+      denied_by_policy?(info, policy, ctx) ->
+        {:error, "Path denied by sandbox policy: #{info.input_path}"}
+
+      allowed_by_policy?(info, operation, policy, ctx) ->
+        {:ok, info}
+
+      approved_path?(info, operation, ctx) ->
+        {:ok, info}
+
+      true ->
+        request_path_approval(info, operation, policy, ctx)
+    end
+  end
+
+  defp denied_by_policy?(info, policy, ctx) do
+    policy
+    |> filesystem_entries(ctx)
+    |> Enum.any?(fn
+      %{access: :none} = entry -> entry_matches_any_authorized_path?(entry, info, ctx)
+      _entry -> false
+    end)
+  end
+
+  defp allowed_by_policy?(info, operation, policy, ctx) do
+    policy
+    |> filesystem_entries(ctx)
+    |> Enum.any?(fn
+      %{access: access} = entry when access in [:read, :write] ->
+        access_permits_operation?(access, operation) and
+          entry_matches_authorized_path?(entry, info, ctx)
+
+      _entry ->
+        false
+    end)
+  end
+
+  defp access_permits_operation?(:write, _operation), do: true
+  defp access_permits_operation?(:read, operation), do: operation in @read_operations
+  defp access_permits_operation?(_access, _operation), do: false
+
+  defp filesystem_entries(%Policy{} = policy, ctx) do
+    case env_allowed_roots() do
+      [] ->
+        policy.filesystem ++ extra_filesystem_entries(ctx)
+
+      roots ->
+        path_entries(:none, policy.protected_paths) ++
+          path_entries(:write, roots) ++
+          extra_filesystem_entries(ctx)
+    end
+  end
+
+  defp extra_filesystem_entries(ctx) do
+    path_entries(:write, explicit_allowed_roots(ctx))
+  end
+
+  defp path_entries(access, paths) do
+    paths
+    |> normalize_roots()
+    |> Enum.map(&%{path: {:path, &1}, access: access})
+  end
+
+  defp env_allowed_roots do
+    case System.get_env("NEX_ALLOWED_ROOTS") do
+      nil -> []
+      paths -> String.split(paths, ":")
+    end
+  end
+
+  defp entry_matches_authorized_path?(entry, info, ctx) do
+    entry
+    |> entry_roots(ctx)
+    |> Enum.any?(fn %{expanded: root, canonical: canonical_root} ->
+      path_within_root?(info.expanded_path, root) and
+        path_within_root?(info.canonical_path, canonical_root)
+    end)
+  end
+
+  defp entry_matches_any_authorized_path?(entry, info, ctx) do
+    paths = [
+      info.expanded_path,
+      info.canonical_path,
+      info.existing_ancestor,
+      info.existing_ancestor_realpath
+    ]
+
+    entry
+    |> entry_roots(ctx)
+    |> Enum.any?(fn %{expanded: root, canonical: canonical_root} ->
+      Enum.any?(paths, &(path_within_root?(&1, root) or path_within_root?(&1, canonical_root)))
+    end)
+  end
+
+  defp entry_roots(%{path: path_ref}, ctx) do
+    path_ref
+    |> resolve_path_ref(ctx)
+    |> Enum.flat_map(fn root ->
+      expanded = Path.expand(root)
+      {:ok, canonical} = realpath_if_possible(expanded)
+      [%{expanded: expanded, canonical: canonical}]
+    end)
+  end
+
+  defp resolve_path_ref({:path, path}, _ctx) when is_binary(path), do: [path]
+
+  defp resolve_path_ref({:special, :workspace}, ctx) do
+    case workspace_from_ctx(ctx) do
+      workspace when is_binary(workspace) and workspace != "" -> [workspace]
+      _ -> []
+    end
+  end
+
+  defp resolve_path_ref({:special, :minimal}, _ctx) do
+    [Application.get_env(:nex_agent, :repo_root, File.cwd!())]
+  end
+
+  defp resolve_path_ref({:special, :tmp}, _ctx), do: [System.tmp_dir!()]
+  defp resolve_path_ref({:special, :slash_tmp}, _ctx), do: ["/tmp"]
+  defp resolve_path_ref(_path_ref, _ctx), do: []
+
+  defp path_within_root?(path, root) when is_binary(path) and is_binary(root) do
+    path == root or root == "/" or String.starts_with?(path, root <> "/")
+  end
+
+  defp path_within_root?(_path, _root), do: false
+
+  defp reject_protected_expanded_path(path, %Policy{} = policy) do
+    cond do
+      path_matches_protected_path?(path, policy.protected_paths) ->
+        {:error, "Path is hard-denied by sandbox policy: #{path}"}
+
+      path_contains_protected_name?(path, policy.protected_names) ->
+        {:error, "Path contains protected name blocked by sandbox policy: #{path}"}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp reject_protected_canonical_path(%{} = info, %Policy{} = policy) do
+    [info.canonical_path, info.existing_ancestor_realpath]
+    |> Enum.find(&path_matches_protected_path?(&1, policy.protected_paths))
+    |> case do
+      nil -> :ok
+      path -> {:error, "Path is hard-denied by sandbox policy: #{path}"}
+    end
+  end
+
+  defp path_matches_protected_path?(path, protected_paths) when is_binary(path) do
+    Enum.any?(protected_paths, fn protected ->
+      path_within_root?(path, protected)
+    end)
+  end
+
+  defp path_matches_protected_path?(_path, _protected_paths), do: false
+
+  defp path_contains_protected_name?(path, protected_names) do
+    names = MapSet.new(protected_names || [])
+
+    path
+    |> Path.split()
+    |> Enum.any?(&MapSet.member?(names, &1))
+  end
+
+  defp approved_path?(info, operation, ctx) do
+    with true <- approval_server_available?(ctx),
+         request <- path_approval_request(info, operation, ctx) do
+      Approval.approved?(
+        request.workspace,
+        request.session_key,
+        request,
+        approval_opts(ctx)
+      )
+    else
+      _ -> false
+    end
+  end
+
+  defp request_path_approval(info, operation, policy, ctx) do
+    case approval_default(policy) do
+      "allow" ->
+        {:ok, info}
+
+      "deny" ->
+        {:error, path_not_allowed_message(policy, ctx)}
+
+      _ ->
+        do_request_path_approval(info, operation, policy, ctx)
+    end
+  end
+
+  defp do_request_path_approval(info, operation, policy, ctx) do
+    request = path_approval_request(info, operation, ctx)
+
+    cond do
+      ctx_value(ctx, :approval_mode) == :defer ->
+        {:ask, request}
+
+      not interactive_approval_context?(request) ->
+        {:error, path_not_allowed_message(policy, ctx)}
+
+      not approval_server_available?(ctx) ->
+        {:error, path_not_allowed_message(policy, ctx)}
+
+      true ->
+        case Approval.request(request, approval_opts(ctx)) do
+          {:ok, :approved} -> {:ok, info}
+          {:error, :denied} -> {:error, "Sandbox approval denied for path: #{info.input_path}"}
+          {:error, {:cancelled, reason}} -> {:error, "Sandbox approval cancelled: #{reason}"}
+          {:error, reason} -> {:error, "Sandbox approval failed: #{inspect(reason)}"}
+        end
+    end
+  end
+
+  defp approval_default(%Policy{raw: %{} = raw}) do
+    raw
+    |> Map.get("approval", %{})
+    |> case do
+      %{} = approval -> Map.get(approval, "default", "ask")
+      _ -> "ask"
+    end
+  end
+
+  defp path_approval_request(info, operation, ctx) do
+    grant_operation = grant_operation(operation)
+    grant_key = path_grant_key(grant_operation, :exact, info.canonical_path)
+    parent = Path.dirname(info.canonical_path)
+
+    Request.new(%{
+      kind: :path,
+      operation: grant_operation,
+      subject: info.canonical_path,
+      description: "Allow #{grant_operation} access to #{info.canonical_path}",
+      grant_key: grant_key,
+      grant_options: [
+        %{
+          "level" => "exact",
+          "grant_key" => grant_key,
+          "subject" => info.canonical_path
+        },
+        %{
+          "level" => "similar",
+          "scope" => "similar",
+          "grant_key" => path_grant_key(grant_operation, :directory, parent),
+          "subject" => "#{grant_operation} under #{parent}"
+        }
+      ],
+      workspace: workspace_from_ctx(ctx) || Workspace.root(),
+      session_key: session_key_from_ctx(ctx),
+      channel: ctx_value(ctx, :channel),
+      chat_id: ctx_value(ctx, :chat_id),
+      authorized_actor: actor_from_ctx(ctx)
+    })
+  end
+
+  defp grant_operation(operation) when operation in @read_operations, do: :read
+  defp grant_operation(_operation), do: :write
+
+  defp path_grant_key(operation, level, subject) do
+    digest =
+      subject
+      |> to_string()
+      |> then(&:crypto.hash(:sha256, &1))
+      |> Base.encode16(case: :lower)
+
+    "path:#{operation}:#{level}:#{digest}"
+  end
+
+  defp interactive_approval_context?(%Request{} = request) do
+    present?(request.channel) and present?(request.chat_id)
+  end
+
+  defp approval_server_available?(ctx) do
+    case ctx_value(ctx, :approval_server) do
+      pid when is_pid(pid) -> Process.alive?(pid)
+      name when is_atom(name) and not is_nil(name) -> Process.whereis(name) != nil
+      _ -> Process.whereis(Approval) != nil
+    end
+  end
+
+  defp approval_opts(ctx) do
+    case ctx_value(ctx, :approval_server) do
+      nil -> []
+      server -> [server: server]
+    end
+  end
+
+  defp session_key_from_ctx(ctx) do
+    case ctx_value(ctx, :session_key) do
+      value when is_binary(value) and value != "" ->
+        value
+
+      _ ->
+        channel = ctx_value(ctx, :channel)
+        chat_id = ctx_value(ctx, :chat_id)
+
+        if present?(channel) and present?(chat_id), do: "#{channel}:#{chat_id}", else: "default"
+    end
+  end
+
+  defp actor_from_ctx(ctx) do
+    case ctx_value(ctx, :user_id) || ctx_value(ctx, :actor) do
+      nil -> nil
+      value -> %{"id" => to_string(value)}
+    end
+  end
+
+  defp path_not_allowed_message(policy, ctx) do
+    roots =
+      policy
+      |> filesystem_entries(ctx)
+      |> Enum.reject(&(&1.access == :none))
+      |> Enum.flat_map(&entry_roots(&1, ctx))
+      |> Enum.map(& &1.expanded)
+      |> Enum.uniq()
+
+    "Path not within allowed roots. Allowed: #{Enum.join(roots, ", ")}"
+  end
+
+  defp policy_from_ctx(ctx) do
+    case ctx_value(ctx, :sandbox_policy) || snapshot_sandbox(ctx_value(ctx, :runtime_snapshot)) do
+      %Policy{} = policy -> policy
+      _ -> Config.sandbox_runtime(config_from_ctx(ctx), workspace: workspace_from_ctx(ctx))
+    end
+  end
+
+  defp workspace_from_ctx(ctx) do
+    ctx_value(ctx, :workspace) ||
+      snapshot_workspace(ctx_value(ctx, :runtime_snapshot)) ||
+      configured_workspace(config_from_ctx(ctx)) ||
+      Workspace.root()
+  end
+
+  defp snapshot_sandbox(%{sandbox: %Policy{} = policy}), do: policy
+  defp snapshot_sandbox(%{"sandbox" => %Policy{} = policy}), do: policy
+  defp snapshot_sandbox(_snapshot), do: nil
+
+  defp present?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present?(value), do: not is_nil(value)
 
   @doc """
   Validate a command against the blacklist.
@@ -199,11 +559,8 @@ defmodule Nex.Agent.Sandbox.Security do
       base_cmd in @blocked_commands ->
         {:error, "Command blocked: #{base_cmd}"}
 
-      base_cmd in @blocked_shells ->
-        {:error, "Shell invocation blocked: #{base_cmd}"}
-
       true ->
-        check_dangerous_patterns(sanitized_command)
+        check_hard_deny_patterns(sanitized_command)
     end
   end
 
@@ -220,8 +577,8 @@ defmodule Nex.Agent.Sandbox.Security do
     |> String.replace(~r/\s+#.*$/, "")
   end
 
-  defp check_dangerous_patterns(command) do
-    case Enum.find_value(@dangerous_patterns, fn {pattern, reason} ->
+  defp check_hard_deny_patterns(command) do
+    case Enum.find_value(@hard_deny_patterns, fn {pattern, reason} ->
            if Regex.match?(pattern, command), do: reason
          end) do
       nil -> :ok
@@ -234,7 +591,7 @@ defmodule Nex.Agent.Sandbox.Security do
   """
   @spec blocked_commands() :: [String.t()]
   def blocked_commands do
-    @blocked_commands ++ @blocked_shells
+    @blocked_commands
   end
 
   defp strip_quoted_segments(command) do

@@ -19,6 +19,7 @@ defmodule Nex.Agent.Channel.Feishu do
   alias Nex.Agent.Interface.IMIR.Text, as: IMText
   alias Nex.Agent.Interface.Media.{Hydrator, Ref}
   alias Nex.Agent.Interface.Outbound.Message, as: OutboundMessage
+  alias Nex.Agent.Sandbox.FileSystem
 
   @feishu_api "https://open.feishu.cn/open-apis"
   @feishu_ws_endpoint "https://open.feishu.cn/callback/ws/endpoint"
@@ -107,27 +108,14 @@ defmodule Nex.Agent.Channel.Feishu do
   @doc "Upload a local image and send it as a native Feishu image message."
   @spec deliver_local_image(String.t(), String.t(), String.t(), map()) :: :ok | {:error, term()}
   def deliver_local_image(instance_id, chat_id, image_path, metadata \\ %{}) do
-    expanded_path = Path.expand(image_path)
-
-    attachment = %Nex.Agent.Interface.Media.Attachment{
-      id: "out_" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower),
-      channel: instance_id,
-      kind: :image,
-      mime_type: MIME.from_path(expanded_path) || "image/jpeg",
-      filename: Path.basename(expanded_path),
-      local_path: expanded_path,
-      size_bytes: File.stat!(expanded_path).size,
-      source: :generated,
-      platform_ref: %{},
-      metadata: %{}
-    }
-
-    deliver_outbound(%OutboundMessage{
-      channel: instance_id,
-      chat_id: to_string(chat_id),
-      attachments: [attachment],
-      metadata: stringify_keys(metadata || %{})
-    })
+    with {:ok, attachment} <- local_image_attachment(instance_id, image_path) do
+      deliver_outbound(%OutboundMessage{
+        channel: instance_id,
+        chat_id: to_string(chat_id),
+        attachments: [attachment],
+        metadata: stringify_keys(metadata || %{})
+      })
+    end
   rescue
     error -> {:error, error}
   end
@@ -335,34 +323,23 @@ defmodule Nex.Agent.Channel.Feishu do
 
   @impl true
   def handle_call({:send_local_image, chat_id, image_path, metadata}, _from, state) do
-    expanded_path = Path.expand(image_path)
+    with {:ok, attachment} <- local_image_attachment(state.instance_id, image_path) do
+      outbound = %OutboundMessage{
+        channel: state.instance_id,
+        chat_id: to_string(chat_id),
+        attachments: [attachment],
+        metadata: stringify_keys(metadata || %{})
+      }
 
-    attachment = %Nex.Agent.Interface.Media.Attachment{
-      id: "out_" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower),
-      channel: state.instance_id,
-      kind: :image,
-      mime_type: MIME.from_path(expanded_path) || "image/jpeg",
-      filename: Path.basename(expanded_path),
-      local_path: expanded_path,
-      size_bytes: File.stat!(expanded_path).size,
-      source: :generated,
-      platform_ref: %{},
-      metadata: %{}
-    }
+      case do_send_outbound(outbound, state) do
+        {:ok, new_state} ->
+          {:reply, :ok, new_state}
 
-    outbound = %OutboundMessage{
-      channel: state.instance_id,
-      chat_id: to_string(chat_id),
-      attachments: [attachment],
-      metadata: stringify_keys(metadata || %{})
-    }
-
-    case do_send_outbound(outbound, state) do
-      {:ok, new_state} ->
-        {:reply, :ok, new_state}
-
-      {:error, reason, new_state} ->
-        {:reply, {:error, reason}, new_state}
+        {:error, reason, new_state} ->
+          {:reply, {:error, reason}, new_state}
+      end
+    else
+      {:error, reason} -> {:reply, {:error, reason}, state}
     end
   end
 
@@ -1900,20 +1877,19 @@ defmodule Nex.Agent.Channel.Feishu do
   end
 
   defp upload_image_attachment(%Nex.Agent.Interface.Media.Attachment{} = attachment, state) do
-    multipart = [
-      image_type: "message",
-      image:
-        {File.stream!(attachment.local_path, [], 2048),
-         filename: attachment.filename || Path.basename(attachment.local_path),
-         content_type: attachment.mime_type}
-    ]
-
-    with {:ok, token, _state} <- get_tenant_access_token(state),
+    with {:ok, stream} <- attachment_stream(attachment),
+         {:ok, token, _state} <- get_tenant_access_token(state),
          {:ok, body} <-
            feishu_post_multipart(
              state,
              "/im/v1/images",
-             multipart,
+             [
+               image_type: "message",
+               image:
+                 {stream,
+                  filename: attachment.filename || Path.basename(attachment.local_path),
+                  content_type: attachment.mime_type}
+             ],
              [{"Authorization", "Bearer #{token}"}]
            ),
          image_key when is_binary(image_key) and image_key != "" <-
@@ -1926,21 +1902,20 @@ defmodule Nex.Agent.Channel.Feishu do
   end
 
   defp upload_file_attachment(%Nex.Agent.Interface.Media.Attachment{} = attachment, state) do
-    multipart = [
-      file_type: "message",
-      file_name: attachment.filename || Path.basename(attachment.local_path),
-      file:
-        {File.stream!(attachment.local_path, [], 2048),
-         filename: attachment.filename || Path.basename(attachment.local_path),
-         content_type: attachment.mime_type}
-    ]
-
-    with {:ok, token, _state} <- get_tenant_access_token(state),
+    with {:ok, stream} <- attachment_stream(attachment),
+         {:ok, token, _state} <- get_tenant_access_token(state),
          {:ok, body} <-
            feishu_post_multipart(
              state,
              "/im/v1/files",
-             multipart,
+             [
+               file_type: "message",
+               file_name: attachment.filename || Path.basename(attachment.local_path),
+               file:
+                 {stream,
+                  filename: attachment.filename || Path.basename(attachment.local_path),
+                  content_type: attachment.mime_type}
+             ],
              [{"Authorization", "Bearer #{token}"}]
            ),
          file_key when is_binary(file_key) and file_key != "" <-
@@ -1950,6 +1925,66 @@ defmodule Nex.Agent.Channel.Feishu do
       {:error, reason} -> {:error, reason}
       other -> {:error, {:missing_file_key, other}}
     end
+  end
+
+  defp local_image_attachment(instance_id, image_path) do
+    expanded_path = Path.expand(image_path)
+
+    with {:ok, info} <- FileSystem.authorize(expanded_path, :stream, %{}),
+         {:ok, stat} <- FileSystem.stat(info) do
+      {:ok,
+       %Nex.Agent.Interface.Media.Attachment{
+         id: "out_" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower),
+         channel: instance_id,
+         kind: :image,
+         mime_type: MIME.from_path(info.expanded_path) || "image/jpeg",
+         filename: Path.basename(info.expanded_path),
+         local_path: info.expanded_path,
+         size_bytes: stat.size,
+         source: :generated,
+         platform_ref: %{},
+         metadata: %{"sandbox_authorization" => sandbox_authorization_metadata(info, :stream)}
+       }}
+    end
+  end
+
+  defp attachment_stream(%Nex.Agent.Interface.Media.Attachment{} = attachment) do
+    case authorized_attachment_info(attachment) do
+      {:ok, info} -> FileSystem.stream_file(info)
+      :error -> FileSystem.stream_file(attachment.local_path, %{})
+    end
+  end
+
+  defp authorized_attachment_info(%Nex.Agent.Interface.Media.Attachment{metadata: metadata}) do
+    case Map.get(metadata || %{}, "sandbox_authorization") do
+      %{} = info ->
+        {:ok,
+         %{
+           input_path: Map.get(info, "input_path"),
+           expanded_path: Map.get(info, "expanded_path"),
+           canonical_path: Map.get(info, "canonical_path"),
+           existing_ancestor: Map.get(info, "existing_ancestor"),
+           existing_ancestor_realpath: Map.get(info, "existing_ancestor_realpath"),
+           missing_suffix: Map.get(info, "missing_suffix", []),
+           target_exists?: Map.get(info, "target_exists", true)
+         }}
+
+      _ ->
+        :error
+    end
+  end
+
+  defp sandbox_authorization_metadata(info, operation) do
+    %{
+      "operation" => Atom.to_string(operation),
+      "input_path" => info.input_path,
+      "expanded_path" => info.expanded_path,
+      "canonical_path" => info.canonical_path,
+      "existing_ancestor" => info.existing_ancestor,
+      "existing_ancestor_realpath" => info.existing_ancestor_realpath,
+      "missing_suffix" => info.missing_suffix,
+      "target_exists" => info.target_exists?
+    }
   end
 
   defp calendar_summary(content_json, label) do

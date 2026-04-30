@@ -2,6 +2,7 @@ defmodule Nex.Agent.Self.Update.Planner do
   @moduledoc false
 
   alias Nex.Agent.Self.CodeUpgrade
+  alias Nex.Agent.Sandbox.{Command, Exec, Policy}
 
   @type plan_entry :: %{
           path: String.t(),
@@ -28,11 +29,16 @@ defmodule Nex.Agent.Self.Update.Planner do
   def pending_code_files do
     repo_root = CodeUpgrade.repo_root()
 
-    case System.cmd("git", ["status", "--porcelain", "--", "lib/nex/agent"],
-           stderr_to_stdout: true,
-           cd: repo_root
-         ) do
-      {output, 0} ->
+    command = %Command{
+      program: "git",
+      args: ["status", "--porcelain", "--", "lib/nex/agent"],
+      cwd: repo_root,
+      timeout_ms: 10_000,
+      metadata: %{workspace: repo_root, observe_attrs: %{"source" => "self_update.planner"}}
+    }
+
+    case Exec.run(command, internal_exec_policy()) do
+      {:ok, %{stdout: output}} ->
         files =
           output
           |> String.split("\n", trim: true)
@@ -44,8 +50,11 @@ defmodule Nex.Agent.Self.Update.Planner do
 
         {:ok, files, []}
 
-      {output, _status} ->
+      {:error, %{stdout: output}} ->
         {:error, "Unable to inspect pending CODE files via git status: #{String.trim(output)}"}
+
+      {:error, %{error: error}} when is_binary(error) ->
+        {:error, "Unable to inspect pending CODE files via git status: #{error}"}
     end
   rescue
     e ->
@@ -72,6 +81,20 @@ defmodule Nex.Agent.Self.Update.Planner do
           {:ok, plans, warnings}
         end
     end
+  end
+
+  defp internal_exec_policy do
+    %Policy{
+      enabled: false,
+      backend: :noop,
+      mode: :external,
+      network: :restricted,
+      filesystem: [],
+      protected_paths: [],
+      protected_names: [],
+      env_allowlist: ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL"],
+      raw: %{}
+    }
   end
 
   defp build_entry(path) do

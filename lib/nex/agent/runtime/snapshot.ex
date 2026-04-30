@@ -4,12 +4,14 @@ defmodule Nex.Agent.Runtime.Snapshot do
   """
 
   alias Nex.Agent.Runtime.Config
+  alias Nex.Agent.Sandbox.Policy
 
   @type t :: %__MODULE__{
           version: pos_integer(),
           config_path: String.t() | nil,
           config: Config.t(),
           workspace: String.t(),
+          sandbox: Policy.t(),
           channels: %{optional(String.t()) => map()},
           commands: %{
             definitions: [map()],
@@ -71,6 +73,7 @@ defmodule Nex.Agent.Runtime.Snapshot do
             config_path: nil,
             config: nil,
             workspace: nil,
+            sandbox: %Policy{},
             channels: %{},
             commands: %{
               definitions: [],

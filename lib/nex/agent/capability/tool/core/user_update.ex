@@ -5,6 +5,7 @@ defmodule Nex.Agent.Capability.Tool.Core.UserUpdate do
 
   alias Nex.Agent.Turn.ContextDiagnostics
   alias Nex.Agent.Knowledge.Memory
+  alias Nex.Agent.Sandbox.FileSystem
 
   def name, do: "user_update"
 
@@ -52,18 +53,17 @@ defmodule Nex.Agent.Capability.Tool.Core.UserUpdate do
   def execute(%{"action" => action} = args, ctx) do
     workspace = Map.get(ctx, :workspace) || Map.get(ctx, "workspace")
 
-    # Read current USER.md content
-    current = Memory.read_user_profile(workspace: workspace)
+    with {:ok, current} <- read_current_profile(workspace, ctx) do
+      case action do
+        "append" ->
+          do_append(current, Map.get(args, "content"), workspace, ctx)
 
-    case action do
-      "append" ->
-        do_append(current, Map.get(args, "content"), workspace)
+        "set" ->
+          do_set(Map.get(args, "content"), workspace, ctx)
 
-      "set" ->
-        do_set(Map.get(args, "content"), workspace)
-
-      _ ->
-        {:error, "Unknown action: #{action}"}
+        _ ->
+          {:error, "Unknown action: #{action}"}
+      end
     end
   end
 
@@ -71,10 +71,10 @@ defmodule Nex.Agent.Capability.Tool.Core.UserUpdate do
 
   # Private functions for user profile operations
 
-  defp do_append(_current, nil, _workspace), do: {:error, "content is required for append"}
-  defp do_append(_current, "", _workspace), do: {:error, "content is required for append"}
+  defp do_append(_current, nil, _workspace, _ctx), do: {:error, "content is required for append"}
+  defp do_append(_current, "", _workspace, _ctx), do: {:error, "content is required for append"}
 
-  defp do_append(current, content, workspace) do
+  defp do_append(current, content, workspace, ctx) do
     trimmed = String.trim(content)
 
     if trimmed == "" do
@@ -89,8 +89,9 @@ defmodule Nex.Agent.Capability.Tool.Core.UserUpdate do
               upsert_or_append_profile_line(current, trimmed)
             end
 
-          Memory.write_user_profile(updated, workspace: workspace)
-          {:ok, "User profile updated (appended)."}
+          with :ok <- write_profile(updated, workspace, ctx) do
+            {:ok, "User profile updated (appended)."}
+          end
 
         {:error, diagnostics} ->
           {:error, ContextDiagnostics.write_error_message(diagnostics)}
@@ -125,10 +126,10 @@ defmodule Nex.Agent.Capability.Tool.Core.UserUpdate do
     end
   end
 
-  defp do_set(nil, _workspace), do: {:error, "content is required for set"}
-  defp do_set("", _workspace), do: {:error, "content is required for set"}
+  defp do_set(nil, _workspace, _ctx), do: {:error, "content is required for set"}
+  defp do_set("", _workspace, _ctx), do: {:error, "content is required for set"}
 
-  defp do_set(new_content, workspace) do
+  defp do_set(new_content, workspace, ctx) do
     trimmed = String.trim(new_content)
 
     if trimmed == "" do
@@ -137,12 +138,48 @@ defmodule Nex.Agent.Capability.Tool.Core.UserUpdate do
       case ContextDiagnostics.validate_write(:user, trimmed, source: "USER.md") do
         :ok ->
           updated = String.trim_trailing(new_content) <> "\n"
-          Memory.write_user_profile(updated, workspace: workspace)
-          {:ok, "User profile updated (set)."}
+
+          with :ok <- write_profile(updated, workspace, ctx) do
+            {:ok, "User profile updated (set)."}
+          end
 
         {:error, diagnostics} ->
           {:error, ContextDiagnostics.write_error_message(diagnostics)}
       end
     end
   end
+
+  defp read_current_profile(workspace, ctx) do
+    path = user_profile_path(workspace)
+    auth_ctx = put_ctx_workspace(ctx, profile_workspace(workspace))
+
+    with {:ok, info} <- FileSystem.authorize(path, :read, auth_ctx),
+         {:ok, exists?} <- FileSystem.exists?(info) do
+      if exists? do
+        FileSystem.read_file(info)
+      else
+        {:ok, ""}
+      end
+    end
+  end
+
+  defp write_profile(content, workspace, ctx) do
+    path = user_profile_path(workspace)
+    auth_ctx = put_ctx_workspace(ctx, profile_workspace(workspace))
+    FileSystem.write_file(path, content, auth_ctx)
+  end
+
+  defp user_profile_path(workspace), do: Path.join(profile_workspace(workspace), "USER.md")
+
+  defp profile_workspace(workspace) when is_binary(workspace) and workspace != "",
+    do: workspace
+
+  defp profile_workspace(_workspace), do: Memory.workspace_path()
+
+  defp put_ctx_workspace(ctx, workspace) when is_map(ctx), do: Map.put(ctx, :workspace, workspace)
+
+  defp put_ctx_workspace(ctx, workspace) when is_list(ctx),
+    do: Keyword.put(ctx, :workspace, workspace)
+
+  defp put_ctx_workspace(_ctx, workspace), do: %{workspace: workspace}
 end

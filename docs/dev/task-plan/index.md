@@ -35,3 +35,4 @@ Task plans are execution documents. Keep product/architecture exploration in `..
 - [Phase 18D Workbench Notes App MVP](./phase18d-notes-app-mvp.md)
 - [Phase 19 Channel Spec Registry And Prompt Governance](./phase19-channel-spec-registry-and-prompt-governance.md)
 - [Phase 20 Plugin Runtime Foundation](./phase20-plugin-runtime-foundation.md)
+- [Phase 21 Command Sandbox And Approval](./phase21-command-sandbox-and-approval.md)

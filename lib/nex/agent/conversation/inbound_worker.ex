@@ -20,11 +20,13 @@ defmodule Nex.Agent.Conversation.InboundWorker do
     Runtime,
     Conversation.Session,
     Conversation.SessionManager,
-    Runtime.Workspace
+    Runtime.Workspace,
+    Sandbox.Approval
   }
 
   alias Nex.Agent.Conversation.Command.Invocation
   alias Nex.Agent.Conversation.Command.StatusView
+  alias Nex.Agent.Interface.Outbound.Action, as: OutboundAction
   alias Nex.Agent.Interface.Channel.Catalog, as: ChannelCatalog
   alias Nex.Agent.Knowledge.Memory.Updater, as: MemoryUpdater
   alias Nex.Agent.Observe.ControlPlane.{Query, Redactor}
@@ -497,8 +499,17 @@ defmodule Nex.Agent.Conversation.InboundWorker do
       {:ok, {:text_buffer, buffer}} ->
         updated =
           case event do
-            {:text, chunk} when is_binary(chunk) -> {:text_buffer, buffer <> chunk}
-            _ -> {:text_buffer, buffer}
+            {:text, chunk} when is_binary(chunk) ->
+              {:text_buffer, buffer <> chunk}
+
+            {:action, payload} when is_map(payload) ->
+              {:text_buffer, append_action_text(buffer, payload)}
+
+            {:approval_request, payload} when is_map(payload) ->
+              {:text_buffer, append_action_text(buffer, payload)}
+
+            _ ->
+              {:text_buffer, buffer}
           end
 
         {:noreply, put_in(state.stream_states[key], updated)}
@@ -649,6 +660,8 @@ defmodule Nex.Agent.Conversation.InboundWorker do
       case Map.get(definition, "handler") do
         "new" -> handle_new_command(state, key, session_key, workspace, envelope)
         "stop" -> handle_stop_command(state, key, session_key, workspace, envelope)
+        "approve" -> handle_approve_command(state, session_key, workspace, invocation, envelope)
+        "deny" -> handle_deny_command(state, session_key, workspace, invocation, envelope)
         "commands" -> handle_commands_command(state, envelope)
         "status" -> handle_status_command(state, session_key, workspace, envelope)
         "model" -> handle_model_command(state, key, session_key, workspace, invocation, envelope)
@@ -662,6 +675,7 @@ defmodule Nex.Agent.Conversation.InboundWorker do
   defp handle_new_command(state, key, session_key, workspace, %Envelope{} = envelope) do
     state = cancel_follow_up_task(state, key)
     state = cancel_active_task(state, key, session_key, workspace, :new_session)
+    approval_reset_session(workspace, session_key, :new)
     reset_current_session(session_key, workspace)
     publish_outbound(envelope, "New session started.")
 
@@ -691,6 +705,7 @@ defmodule Nex.Agent.Conversation.InboundWorker do
     dropped = :queue.len(Map.get(state.pending_queue, key, :queue.new()))
     state = %{state | pending_queue: Map.delete(state.pending_queue, key)}
     state = update_queue_count(state, key, 0)
+    approval_cancel_pending(workspace, session_key, :stop)
 
     observe_queue_changed(
       workspace,
@@ -708,6 +723,189 @@ defmodule Nex.Agent.Conversation.InboundWorker do
     )
 
     state
+  end
+
+  defp handle_approve_command(
+         state,
+         session_key,
+         workspace,
+         %Invocation{} = invocation,
+         %Envelope{} = envelope
+       ) do
+    result =
+      with {:ok, {request_id, choice}} <- approve_choice(invocation.args),
+           {:ok, approval_result} <-
+             approval_call(:approve, workspace, session_key, request_id, choice, envelope) do
+        {:ok, approval_result}
+      end
+
+    publish_outbound(envelope, render_approve_result(result))
+    state
+  end
+
+  defp handle_deny_command(
+         state,
+         session_key,
+         workspace,
+         %Invocation{} = invocation,
+         %Envelope{} = envelope
+       ) do
+    result =
+      with {:ok, {request_id, choice}} <- deny_choice(invocation.args),
+           {:ok, deny_result} <-
+             approval_call(:deny, workspace, session_key, request_id, choice, envelope) do
+        {:ok, deny_result}
+      end
+
+    publish_outbound(envelope, render_deny_result(result))
+    state
+  end
+
+  defp approve_choice(args) do
+    {request_id, rest} = split_approval_request_id(args)
+
+    case rest do
+      [] -> {:ok, {request_id, :once}}
+      ["all" | _rest] when is_nil(request_id) -> {:ok, {nil, :all}}
+      ["session" | _rest] -> {:ok, {request_id, :session}}
+      ["similar" | _rest] -> {:ok, {request_id, :similar}}
+      ["always" | _rest] -> {:ok, {request_id, :always}}
+      _args -> {:error, :approve_usage}
+    end
+  end
+
+  defp deny_choice(args) do
+    {request_id, rest} = split_approval_request_id(args)
+
+    case rest do
+      [] -> {:ok, {request_id, :once}}
+      ["all" | _rest] when is_nil(request_id) -> {:ok, {nil, :all}}
+      _args -> {:error, :deny_usage}
+    end
+  end
+
+  defp split_approval_request_id(args) when is_list(args) do
+    case Enum.split_with(args, &approval_request_id?/1) do
+      {[request_id], rest} -> {request_id, rest}
+      {[], rest} -> {nil, rest}
+      _other -> {nil, ["invalid"]}
+    end
+  end
+
+  defp split_approval_request_id(_args), do: {nil, ["invalid"]}
+
+  defp approval_request_id?(value) when is_binary(value),
+    do: String.starts_with?(value, "approval_")
+
+  defp approval_request_id?(_value), do: false
+
+  defp approval_call(
+         :approve,
+         _workspace,
+         _session_key,
+         request_id,
+         choice,
+         %Envelope{} = envelope
+       )
+       when is_binary(request_id) do
+    if Process.whereis(Approval) do
+      Approval.approve_request(request_id, choice, authorized_actor: approval_actor(envelope))
+    else
+      {:error, :approval_unavailable}
+    end
+  end
+
+  defp approval_call(:approve, workspace, session_key, nil, choice, %Envelope{} = envelope) do
+    if Process.whereis(Approval) do
+      Approval.approve(workspace, session_key, choice, authorized_actor: approval_actor(envelope))
+    else
+      {:error, :approval_unavailable}
+    end
+  end
+
+  defp approval_call(:deny, _workspace, _session_key, request_id, choice, %Envelope{} = envelope)
+       when is_binary(request_id) do
+    if Process.whereis(Approval) do
+      Approval.deny_request(request_id, choice, authorized_actor: approval_actor(envelope))
+    else
+      {:error, :approval_unavailable}
+    end
+  end
+
+  defp approval_call(:deny, workspace, session_key, nil, choice, %Envelope{} = envelope) do
+    if Process.whereis(Approval) do
+      Approval.deny(workspace, session_key, choice, authorized_actor: approval_actor(envelope))
+    else
+      {:error, :approval_unavailable}
+    end
+  end
+
+  defp approval_actor(%Envelope{} = envelope) do
+    %{
+      "sender_id" => envelope.sender_id,
+      "user_id" => envelope.user_id,
+      "channel" => envelope.channel,
+      "chat_id" => payload_chat_id(envelope)
+    }
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    |> Map.new()
+  end
+
+  defp render_approve_result({:ok, %{approved: 0}}), do: "No pending approval requests."
+
+  defp render_approve_result({:ok, %{approved: count, choice: :all}}) do
+    "Approved #{count} pending request(s)."
+  end
+
+  defp render_approve_result({:ok, %{approved: count, granted: nil}}) do
+    "Approved #{count} pending request(s)."
+  end
+
+  defp render_approve_result({:ok, %{approved: count, granted: %{} = grant}}) do
+    scope = Map.get(grant, "scope", "session")
+    "Approved #{count} pending request(s) and granted #{scope} permission."
+  end
+
+  defp render_approve_result({:error, :approve_usage}) do
+    "Usage: /approve [request_id] [session|similar|always] or /approve all"
+  end
+
+  defp render_approve_result({:error, :approval_unavailable}),
+    do: "Approval service is unavailable."
+
+  defp render_approve_result({:error, :no_pending_request}), do: "No pending approval requests."
+
+  defp render_approve_result({:error, :no_similar_grant_option}) do
+    "No similar safe grant is available for the pending request."
+  end
+
+  defp render_approve_result({:error, reason}), do: "Approval failed: #{inspect(reason)}"
+
+  defp render_deny_result({:ok, %{denied: 0}}), do: "No pending approval requests."
+
+  defp render_deny_result({:ok, %{denied: count}}) do
+    "Denied #{count} pending request(s)."
+  end
+
+  defp render_deny_result({:error, :deny_usage}), do: "Usage: /deny [request_id] or /deny all"
+  defp render_deny_result({:error, :approval_unavailable}), do: "Approval service is unavailable."
+  defp render_deny_result({:error, :no_pending_request}), do: "No pending approval requests."
+  defp render_deny_result({:error, reason}), do: "Deny failed: #{inspect(reason)}"
+
+  defp approval_reset_session(workspace, session_key, reason) do
+    if Process.whereis(Approval) do
+      _ = Approval.reset_session(workspace, session_key, reason)
+    end
+
+    :ok
+  end
+
+  defp approval_cancel_pending(workspace, session_key, reason) do
+    if Process.whereis(Approval) do
+      _ = Approval.cancel_pending(workspace, session_key, reason)
+    end
+
+    :ok
   end
 
   defp handle_commands_command(state, %Envelope{} = envelope) do
@@ -1115,6 +1313,14 @@ defmodule Nex.Agent.Conversation.InboundWorker do
       {:error, message} ->
         send(parent, {:stream_state_event, key, {:error, message}})
         :ok
+
+      {:approval_request, payload} when is_map(payload) ->
+        send(parent, {:stream_state_event, key, {:approval_request, payload}})
+        :ok
+
+      {:action, payload} when is_map(payload) ->
+        send(parent, {:stream_state_event, key, {:action, payload}})
+        :ok
     end
   end
 
@@ -1132,6 +1338,32 @@ defmodule Nex.Agent.Conversation.InboundWorker do
 
       {:error, _message} ->
         :ok
+
+      {:approval_request, payload} when is_map(payload) ->
+        send(parent, {:stream_state_event, key, {:approval_request, payload}})
+        :ok
+
+      {:action, payload} when is_map(payload) ->
+        send(parent, {:stream_state_event, key, {:action, payload}})
+        :ok
+    end
+  end
+
+  defp append_action_text(buffer, payload) do
+    text = OutboundAction.fallback_content(payload)
+
+    cond do
+      text == "" ->
+        buffer
+
+      buffer == "" ->
+        text <> "\n"
+
+      String.ends_with?(buffer, "\n") ->
+        buffer <> text <> "\n"
+
+      true ->
+        buffer <> "\n" <> text <> "\n"
     end
   end
 

@@ -551,13 +551,22 @@ defmodule Nex.Agent.Turn.ContextBuilder do
 
   defp git_root(cwd) when is_binary(cwd) do
     cwd = Path.expand(cwd)
+    find_git_root(cwd, 0)
+  end
 
-    case System.cmd("git", ["rev-parse", "--show-toplevel"], stderr_to_stdout: true, cd: cwd) do
-      {path, 0} -> String.trim(path)
-      _ -> nil
+  defp find_git_root(path, depth) when depth > 80 or path in [nil, ""], do: nil
+
+  defp find_git_root(path, depth) do
+    cond do
+      File.dir?(Path.join(path, ".git")) or File.regular?(Path.join(path, ".git")) ->
+        path
+
+      Path.dirname(path) == path ->
+        nil
+
+      true ->
+        path |> Path.dirname() |> find_git_root(depth + 1)
     end
-  rescue
-    _ -> nil
   end
 
   @doc """

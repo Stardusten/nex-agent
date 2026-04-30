@@ -15,6 +15,7 @@ defmodule Nex.Agent.App.InfrastructureSupervisor do
   def init(_opts) do
     children = [
       Nex.Agent.App.Bus,
+      Nex.Agent.Sandbox.Approval,
       Nex.Agent.Capability.Tool.Registry,
       Nex.Agent.Interface.MCP.ServerManager,
       Nex.Agent.Knowledge.Memory.Updater,

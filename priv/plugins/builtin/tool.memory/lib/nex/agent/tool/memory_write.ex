@@ -61,7 +61,8 @@ defmodule Nex.Agent.Tool.MemoryWrite do
            action,
            "memory",
            Map.get(args, "content"),
-           workspace: workspace
+           workspace: workspace,
+           authorize_ctx: ctx
          ) do
       {:ok, %{action: saved_action} = write_result} ->
         maybe_emit_changed(write_result, ctx, workspace)

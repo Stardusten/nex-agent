@@ -26,6 +26,24 @@
         "channels": ["feishu", "discord"]
       },
       {
+        "name": "approve",
+        "description": "approve the next pending sandbox permission request",
+        "usage": "/approve [all|session|similar|always]",
+        "bypass_busy?": true,
+        "native_enabled?": true,
+        "handler": "approve",
+        "channels": ["feishu", "discord"]
+      },
+      {
+        "name": "deny",
+        "description": "deny the next pending sandbox permission request",
+        "usage": "/deny [all]",
+        "bypass_busy?": true,
+        "native_enabled?": true,
+        "handler": "deny",
+        "channels": ["feishu", "discord"]
+      },
+      {
         "name": "commands",
         "description": "list supported slash commands for this chat",
         "usage": "/commands",

@@ -6,6 +6,7 @@ defmodule Nex.Agent.Interface.Channel.Specs.Feishu do
 
   alias Nex.Agent.Channel.Feishu.StreamConverter
   alias Nex.Agent.Channel.Feishu.StreamState
+  alias Nex.Agent.Interface.Outbound.Action, as: OutboundAction
 
   @stream_flush_ms 500
   @impl true
@@ -150,6 +151,16 @@ defmodule Nex.Agent.Interface.Channel.Specs.Feishu do
     flush_stream(cancel_flush(stream_state))
   end
 
+  def handle_stream_event(%StreamState{} = stream_state, {:approval_request, payload}, opts)
+      when is_map(payload) do
+    handle_action_event(stream_state, payload, opts)
+  end
+
+  def handle_stream_event(%StreamState{} = stream_state, {:action, payload}, opts)
+      when is_map(payload) do
+    handle_action_event(stream_state, payload, opts)
+  end
+
   def handle_stream_event(%StreamState{} = stream_state, {:error, message}, _opts) do
     feishu_stream_trace(
       stream_state,
@@ -164,6 +175,25 @@ defmodule Nex.Agent.Interface.Channel.Specs.Feishu do
   end
 
   def handle_stream_event(%StreamState{} = stream_state, _event, _opts), do: {:ok, stream_state}
+
+  defp handle_action_event(%StreamState{} = stream_state, payload, opts) do
+    fallback = OutboundAction.fallback_content(payload)
+
+    if fallback == "" do
+      {:ok, stream_state}
+    else
+      stream_state
+      |> cancel_flush()
+      |> flush_stream()
+      |> case do
+        {:ok, flushed} ->
+          handle_stream_event(flushed, {:text, "\n" <> fallback <> "\n"}, opts)
+
+        error ->
+          error
+      end
+    end
+  end
 
   @impl true
   def handle_stream_timer(%StreamState{} = stream_state, :flush, _opts) do

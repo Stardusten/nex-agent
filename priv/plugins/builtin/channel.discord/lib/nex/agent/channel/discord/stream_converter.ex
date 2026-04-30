@@ -4,12 +4,14 @@ defmodule Nex.Agent.Channel.Discord.StreamConverter do
   require Logger
 
   alias Nex.Agent.Channel.Discord
+  alias Nex.Agent.Interface.Outbound.Action, as: OutboundAction
   alias Nex.Agent.Interface.IMIR.Text, as: IMText
 
   @new_message_token "<newmsg/>"
   @newmsg_holdback_bytes byte_size(@new_message_token) - 1
   @max_message_length 2000
   @placeholder_text "🤔 Thinking..."
+  @approval_retry_delays_ms [250, 1_000]
 
   defstruct [
     :instance_id,
@@ -18,6 +20,7 @@ defmodule Nex.Agent.Channel.Discord.StreamConverter do
     :current_message_id,
     :started_at,
     :status_text,
+    :waiting_for_approval,
     active_text: "",
     pending_buffer: "",
     placeholder: true,
@@ -31,6 +34,7 @@ defmodule Nex.Agent.Channel.Discord.StreamConverter do
           current_message_id: String.t() | nil,
           started_at: integer() | nil,
           status_text: String.t() | nil,
+          waiting_for_approval: boolean() | nil,
           active_text: String.t(),
           pending_buffer: String.t(),
           placeholder: boolean(),
@@ -70,6 +74,7 @@ defmodule Nex.Agent.Channel.Discord.StreamConverter do
   def update_thinking_timer(%__MODULE__{placeholder: false} = state), do: {:ok, state}
   def update_thinking_timer(%__MODULE__{current_message_id: nil} = state), do: {:ok, state}
   def update_thinking_timer(%__MODULE__{completed: true} = state), do: {:ok, state}
+  def update_thinking_timer(%__MODULE__{waiting_for_approval: true} = state), do: {:ok, state}
 
   def update_thinking_timer(%__MODULE__{placeholder: true, started_at: started_at} = state)
       when is_integer(started_at) do
@@ -120,6 +125,26 @@ defmodule Nex.Agent.Channel.Discord.StreamConverter do
   end
 
   def active_content?(%__MODULE__{}), do: false
+
+  @doc "Render an approval control as an independent action message."
+  @spec approval_request(t(), map()) :: {:ok, t()} | {:error, term()}
+  def approval_request(%__MODULE__{} = state, %{content: content, metadata: metadata})
+      when is_map(metadata) do
+    action_event(state, %{content: content, metadata: metadata})
+  end
+
+  def approval_request(%__MODULE__{} = state, _payload), do: {:ok, state}
+
+  @doc "Render a typed action event as an independent action message."
+  @spec action_event(t(), map()) :: {:ok, t()} | {:error, term()}
+  def action_event(%__MODULE__{} = state, %{content: content, metadata: metadata})
+      when is_map(metadata) do
+    state
+    |> prepare_for_action()
+    |> deliver_action_message(content, metadata)
+  end
+
+  def action_event(%__MODULE__{} = state, _payload), do: {:ok, state}
 
   @spec push_text(t(), String.t()) :: {:ok, t()} | {:error, term()}
   def push_text(%__MODULE__{} = state, text_chunk) when is_binary(text_chunk) do
@@ -251,7 +276,16 @@ defmodule Nex.Agent.Channel.Discord.StreamConverter do
     if text == "" do
       {:ok, state}
     else
-      append_text(%{state | active_text: "", placeholder: false, status_text: nil}, text)
+      append_text(
+        %{
+          state
+          | active_text: "",
+            placeholder: false,
+            status_text: nil,
+            waiting_for_approval: false
+        },
+        text
+      )
     end
   end
 
@@ -301,7 +335,8 @@ defmodule Nex.Agent.Channel.Discord.StreamConverter do
            | current_message_id: message_id,
              active_text: text,
              status_text: nil,
-             placeholder: false
+             placeholder: false,
+             waiting_for_approval: false
          }}
 
       {:error, reason} ->
@@ -320,6 +355,142 @@ defmodule Nex.Agent.Channel.Discord.StreamConverter do
       end
     end)
   end
+
+  defp deliver_action_message(%__MODULE__{} = state, content, metadata) do
+    case deliver_approval_components(state, content, metadata, @approval_retry_delays_ms) do
+      {:ok, message_id} ->
+        register_approval_message(state, message_id, content, metadata)
+
+        {:ok, %{state | status_text: nil}}
+
+      {:error, reason} ->
+        Logger.warning("[DiscordStream] approval message failed: #{inspect(reason)}")
+        deliver_action_fallback(state, content, metadata, reason)
+    end
+  end
+
+  defp deliver_approval_components(%__MODULE__{} = state, content, metadata, retry_delays) do
+    case Discord.deliver_message(
+           state.instance_id,
+           state.chat_id,
+           to_string(content || ""),
+           metadata
+         ) do
+      {:ok, message_id} ->
+        {:ok, message_id}
+
+      {:error, reason} = error ->
+        case retry_delays do
+          [delay_ms | rest] ->
+            if transient_delivery_error?(reason) do
+              Logger.warning(
+                "[DiscordStream] approval message transient failure, retrying: #{inspect(reason)}"
+              )
+
+              Process.sleep(delay_ms)
+              deliver_approval_components(state, content, metadata, rest)
+            else
+              error
+            end
+
+          [] ->
+            error
+        end
+    end
+  end
+
+  defp deliver_action_fallback(%__MODULE__{} = state, content, metadata, original_reason) do
+    fallback_content =
+      case OutboundAction.fallback_content(%{content: content, metadata: metadata}) do
+        "" -> to_string(content || "")
+        fallback -> fallback
+      end
+
+    case Discord.deliver_message(state.instance_id, state.chat_id, fallback_content, %{}) do
+      {:ok, _message_id} ->
+        {:ok, %{state | status_text: nil}}
+
+      {:error, fallback_reason} ->
+        Logger.warning(
+          "[DiscordStream] approval fallback message failed: #{inspect(fallback_reason)}"
+        )
+
+        {:error, {:approval_delivery_failed, original_reason, fallback_reason}}
+    end
+  end
+
+  defp register_approval_message(%__MODULE__{} = state, message_id, content, metadata) do
+    request_id =
+      Map.get(metadata || %{}, "_approval_request_id") ||
+        Map.get(metadata || %{}, :_approval_request_id)
+
+    if is_binary(request_id) and request_id != "" do
+      Discord.register_approval_message(
+        state.instance_id,
+        request_id,
+        state.chat_id,
+        message_id,
+        to_string(content || ""),
+        metadata
+      )
+    end
+  end
+
+  defp prepare_for_action(%__MODULE__{placeholder: true, current_message_id: message_id} = state)
+       when is_binary(message_id) do
+    case Discord.delete_message(state.instance_id, state.chat_id, message_id) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("[DiscordStream] approval placeholder delete failed: #{inspect(reason)}")
+    end
+
+    seal_stream_before_action(state)
+  end
+
+  defp prepare_for_action(%__MODULE__{} = state) do
+    state
+    |> best_effort_clear_working_status()
+    |> seal_stream_before_action()
+  end
+
+  defp seal_stream_before_action(%__MODULE__{} = state) do
+    %{
+      state
+      | current_message_id: nil,
+        active_text: "",
+        status_text: nil,
+        placeholder: false,
+        waiting_for_approval: true
+    }
+  end
+
+  defp best_effort_clear_working_status(%__MODULE__{} = state) do
+    case clear_working_status(state) do
+      {:ok, state} ->
+        state
+
+      {:error, reason} ->
+        Logger.warning(
+          "[DiscordStream] clear working status before approval failed: #{inspect(reason)}"
+        )
+
+        %{state | status_text: nil}
+    end
+  end
+
+  defp transient_delivery_error?({:http_error, status, _response}) when status in [408, 425, 429],
+    do: true
+
+  defp transient_delivery_error?({:http_error, status, _response})
+       when is_integer(status) and status >= 500,
+       do: true
+
+  defp transient_delivery_error?(:timeout), do: true
+  defp transient_delivery_error?(:closed), do: true
+  defp transient_delivery_error?(:econnreset), do: true
+  defp transient_delivery_error?(_reason), do: false
 
   defp update_current_message(%__MODULE__{current_message_id: nil} = state, text) do
     send_new_message(state, text)

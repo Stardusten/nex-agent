@@ -25,7 +25,7 @@ defmodule Nex.Agent.Conversation.CommandCatalogTest do
   test "runtime command definitions come from enabled builtin plugin contributions" do
     names = Catalog.runtime_definitions() |> Enum.map(& &1["name"])
 
-    assert names == ~w(new stop commands status model queue btw)
+    assert names == ~w(new stop approve deny commands status model queue btw)
   end
 
   test "disabled core command plugin removes slash command definitions" do

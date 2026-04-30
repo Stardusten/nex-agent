@@ -3,6 +3,7 @@ defmodule Nex.Agent.Runtime.ConfigTest do
 
   alias Nex.Agent.Interface.Auth.Codex
   alias Nex.Agent.Runtime.Config
+  alias Nex.Agent.Sandbox.Policy
 
   test "loads new config shape and resolves model roles" do
     previous = System.get_env("HY3_API_KEY")
@@ -586,6 +587,57 @@ defmodule Nex.Agent.Runtime.ConfigTest do
       })
 
     assert Config.file_access_allowed_roots(config) == [root]
+  end
+
+  test "sandbox runtime normalizes policy and migrates file_access roots" do
+    legacy_root = Path.expand("../nex-agent-file-access-root", File.cwd!())
+    read_root = Path.expand("../nex-agent-sandbox-read", File.cwd!())
+    write_root = Path.expand("../nex-agent-sandbox-write", File.cwd!())
+    denied_root = Path.expand("../nex-agent-sandbox-deny", File.cwd!())
+
+    config =
+      Config.from_map(%{
+        full_config()
+        | "tools" => %{
+            "file_access" => %{"allowed_roots" => [" #{legacy_root} ", legacy_root]},
+            "sandbox" => %{
+              "backend" => "seatbelt",
+              "default_profile" => "read-only",
+              "network" => "enabled",
+              "allow_read_roots" => [read_root, ""],
+              "allow_write_roots" => [write_root],
+              "deny_read" => [denied_root],
+              "env_allowlist" => [" PATH ", "PATH", "CUSTOM_TOKEN"],
+              "approval" => %{
+                "default" => "deny",
+                "allow_session_grants" => "false"
+              }
+            }
+          }
+      })
+
+    assert %Policy{
+             enabled: true,
+             backend: :seatbelt,
+             mode: :read_only,
+             network: :enabled,
+             env_allowlist: ["PATH", "CUSTOM_TOKEN"]
+           } = policy = Config.sandbox_runtime(config, workspace: "/tmp/nex-agent-workspace")
+
+    assert get_in(config.tools, ["sandbox", "default_profile"]) == "read_only"
+    assert get_in(config.tools, ["sandbox", "approval", "default"]) == "deny"
+    assert get_in(config.tools, ["sandbox", "approval", "allow_session_grants"]) == false
+    assert get_in(config.tools, ["sandbox", "approval", "allow_always_grants"]) == true
+
+    assert %{path: {:special, :workspace}, access: :read} in policy.filesystem
+    assert %{path: {:path, legacy_root}, access: :write} in policy.filesystem
+    assert %{path: {:path, read_root}, access: :read} in policy.filesystem
+    assert %{path: {:path, write_root}, access: :write} in policy.filesystem
+    assert %{path: {:path, denied_root}, access: :none} in policy.filesystem
+
+    assert Path.expand("~/.zshrc") in policy.protected_paths
+    assert Path.expand("~/.nex/agent/config.json") in policy.protected_paths
+    assert %{path: {:path, Path.expand("~/.zshrc")}, access: :none} in policy.filesystem
   end
 
   defp full_config do

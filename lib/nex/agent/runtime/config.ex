@@ -4,6 +4,7 @@ defmodule Nex.Agent.Runtime.Config do
   """
 
   alias Nex.Agent.Interface.Channel.Catalog, as: ChannelCatalog
+  alias Nex.Agent.Sandbox.Policy
   alias Nex.Agent.Turn.LLM.ProviderProfile
   alias Nex.Agent.Turn.LLM.ProviderRegistry
 
@@ -427,6 +428,48 @@ defmodule Nex.Agent.Runtime.Config do
   end
 
   def file_access_allowed_roots(_config), do: []
+
+  @spec sandbox_runtime(t() | nil, keyword()) :: Policy.t()
+  def sandbox_runtime(config, opts \\ [])
+
+  def sandbox_runtime(%__MODULE__{} = config, opts) when is_list(opts) do
+    sandbox =
+      config.tools
+      |> Map.get("sandbox", %{})
+      |> normalize_sandbox_config()
+
+    mode = sandbox_mode(Map.get(sandbox, "default_profile"))
+    protected_paths = sandbox_protected_paths(sandbox)
+    protected_names = normalize_string_list(Map.get(sandbox, "protected_names"))
+    env_allowlist = normalize_string_list(Map.get(sandbox, "env_allowlist"))
+
+    filesystem =
+      mode
+      |> sandbox_filesystem_defaults(Keyword.get(opts, :workspace))
+      |> prepend_path_entries(:none, protected_paths)
+      |> append_path_entries(:read, Map.get(sandbox, "allow_read_roots", []))
+      |> append_path_entries(
+        :write,
+        file_access_allowed_roots(config) ++ Map.get(sandbox, "allow_write_roots", [])
+      )
+      |> append_path_entries(:none, Map.get(sandbox, "deny_read", []))
+      |> append_path_entries(:none, Map.get(sandbox, "deny_write", []))
+      |> uniq_filesystem_entries()
+
+    %Policy{
+      enabled: Map.get(sandbox, "enabled", true),
+      backend: sandbox_backend(Map.get(sandbox, "backend")),
+      mode: mode,
+      network: sandbox_network(Map.get(sandbox, "network")),
+      filesystem: filesystem,
+      protected_paths: protected_paths,
+      protected_names: default_if_empty(protected_names, Policy.default_protected_names()),
+      env_allowlist: default_if_empty(env_allowlist, Policy.default_env_allowlist()),
+      raw: sandbox
+    }
+  end
+
+  def sandbox_runtime(_config, opts) when is_list(opts), do: sandbox_runtime(default(), opts)
 
   @spec request_trace(t()) :: map()
   def request_trace(%__MODULE__{}), do: %{"enabled" => false}
@@ -961,13 +1004,19 @@ defmodule Nex.Agent.Runtime.Config do
   defp normalize_tools(tools) when is_map(tools) do
     tools = stringify_map_keys(tools)
 
-    case Map.fetch(tools, "file_access") do
-      {:ok, config} -> Map.put(tools, "file_access", normalize_file_access_config(config))
-      :error -> tools
-    end
+    tools
+    |> maybe_normalize_tool_section("file_access", &normalize_file_access_config/1)
+    |> maybe_normalize_tool_section("sandbox", &normalize_sandbox_config/1)
   end
 
   defp normalize_tools(_tools), do: %{}
+
+  defp maybe_normalize_tool_section(tools, key, normalizer) do
+    case Map.fetch(tools, key) do
+      {:ok, config} -> Map.put(tools, key, normalizer.(config))
+      :error -> tools
+    end
+  end
 
   defp normalize_file_access_config(%{} = config) do
     config = stringify_map_keys(config)
@@ -979,6 +1028,46 @@ defmodule Nex.Agent.Runtime.Config do
 
   defp normalize_file_access_config(_config), do: %{"allowed_roots" => []}
 
+  defp normalize_sandbox_config(%{} = config) do
+    config = stringify_map_keys(config)
+
+    %{
+      "enabled" => normalize_boolean(Map.get(config, "enabled"), true),
+      "backend" => normalize_sandbox_backend(Map.get(config, "backend")),
+      "default_profile" =>
+        normalize_sandbox_profile(Map.get(config, "default_profile") || Map.get(config, "mode")),
+      "network" => normalize_sandbox_network(Map.get(config, "network")),
+      "allow_read_roots" => normalize_allowed_roots(Map.get(config, "allow_read_roots")),
+      "allow_write_roots" => normalize_allowed_roots(Map.get(config, "allow_write_roots")),
+      "deny_read" => normalize_allowed_roots(Map.get(config, "deny_read")),
+      "deny_write" => normalize_allowed_roots(Map.get(config, "deny_write")),
+      "protected_paths" => normalize_allowed_roots(Map.get(config, "protected_paths")),
+      "protected_names" => normalize_string_list(Map.get(config, "protected_names")),
+      "env_allowlist" => normalize_string_list(Map.get(config, "env_allowlist")),
+      "auto_allow_sandboxed_bash" =>
+        normalize_boolean(Map.get(config, "auto_allow_sandboxed_bash"), false),
+      "approval" => normalize_sandbox_approval(Map.get(config, "approval"))
+    }
+  end
+
+  defp normalize_sandbox_config(_config) do
+    %{
+      "enabled" => true,
+      "backend" => "auto",
+      "default_profile" => "workspace_write",
+      "network" => "restricted",
+      "allow_read_roots" => [],
+      "allow_write_roots" => [],
+      "deny_read" => [],
+      "deny_write" => [],
+      "protected_paths" => [],
+      "protected_names" => [],
+      "env_allowlist" => [],
+      "auto_allow_sandboxed_bash" => false,
+      "approval" => normalize_sandbox_approval(nil)
+    }
+  end
+
   defp normalize_allowed_roots(roots) when is_list(roots) do
     roots
     |> Enum.filter(&is_binary/1)
@@ -989,6 +1078,169 @@ defmodule Nex.Agent.Runtime.Config do
   end
 
   defp normalize_allowed_roots(_roots), do: []
+
+  defp normalize_string_list(values) when is_list(values) do
+    values
+    |> Enum.filter(&is_binary/1)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
+  end
+
+  defp normalize_string_list(_values), do: []
+
+  defp normalize_boolean(value, _default) when value in [true, "true", "TRUE", "1", 1],
+    do: true
+
+  defp normalize_boolean(value, _default) when value in [false, "false", "FALSE", "0", 0],
+    do: false
+
+  defp normalize_boolean(_value, default), do: default
+
+  defp normalize_sandbox_backend(value) do
+    case normalize_optional_string(value) do
+      "seatbelt" -> "seatbelt"
+      "macos" -> "seatbelt"
+      "linux" -> "linux"
+      "windows" -> "windows"
+      "noop" -> "noop"
+      _ -> "auto"
+    end
+  end
+
+  defp normalize_sandbox_profile(value) do
+    case normalize_optional_string(value) do
+      "read_only" -> "read_only"
+      "read-only" -> "read_only"
+      "readonly" -> "read_only"
+      "workspace_write" -> "workspace_write"
+      "workspace-write" -> "workspace_write"
+      "danger_full_access" -> "danger_full_access"
+      "danger-full-access" -> "danger_full_access"
+      "external" -> "external"
+      _ -> "workspace_write"
+    end
+  end
+
+  defp normalize_sandbox_network(value) do
+    case normalize_optional_string(value) do
+      "enabled" -> "enabled"
+      "true" -> "enabled"
+      "restricted" -> "restricted"
+      "false" -> "restricted"
+      _ -> "restricted"
+    end
+  end
+
+  defp normalize_sandbox_approval(%{} = approval) do
+    approval = stringify_map_keys(approval)
+
+    %{
+      "default" => normalize_sandbox_approval_default(Map.get(approval, "default")),
+      "allow_session_grants" =>
+        normalize_boolean(Map.get(approval, "allow_session_grants"), true),
+      "allow_always_grants" => normalize_boolean(Map.get(approval, "allow_always_grants"), true)
+    }
+  end
+
+  defp normalize_sandbox_approval(_approval) do
+    %{
+      "default" => "ask",
+      "allow_session_grants" => true,
+      "allow_always_grants" => true
+    }
+  end
+
+  defp normalize_sandbox_approval_default(value) do
+    case normalize_optional_string(value) do
+      "ask" -> "ask"
+      "deny" -> "deny"
+      "allow" -> "allow"
+      _ -> "ask"
+    end
+  end
+
+  defp sandbox_backend("seatbelt"), do: :seatbelt
+  defp sandbox_backend("linux"), do: :linux
+  defp sandbox_backend("windows"), do: :windows
+  defp sandbox_backend("noop"), do: :noop
+  defp sandbox_backend(_backend), do: :auto
+
+  defp sandbox_mode("read_only"), do: :read_only
+  defp sandbox_mode("danger_full_access"), do: :danger_full_access
+  defp sandbox_mode("external"), do: :external
+  defp sandbox_mode(_profile), do: :workspace_write
+
+  defp sandbox_network("enabled"), do: :enabled
+  defp sandbox_network(_network), do: :restricted
+
+  defp sandbox_protected_paths(sandbox) do
+    (default_protected_paths() ++ Map.get(sandbox, "protected_paths", []))
+    |> Enum.uniq()
+  end
+
+  defp default_protected_paths do
+    [
+      Path.expand("~/.zshrc"),
+      Path.expand("~/.nex/agent/config.json")
+    ]
+  end
+
+  defp sandbox_filesystem_defaults(:danger_full_access, _workspace), do: []
+
+  defp sandbox_filesystem_defaults(:read_only, _workspace) do
+    [
+      %{path: {:special, :minimal}, access: :read},
+      %{path: {:special, :workspace}, access: :read}
+    ]
+  end
+
+  defp sandbox_filesystem_defaults(:external, _workspace) do
+    [
+      %{path: {:special, :minimal}, access: :read}
+    ]
+  end
+
+  defp sandbox_filesystem_defaults(_mode, _workspace) do
+    [
+      %{path: {:special, :minimal}, access: :read},
+      %{path: {:special, :workspace}, access: :write},
+      %{path: {:special, :tmp}, access: :write},
+      %{path: {:special, :slash_tmp}, access: :write}
+    ]
+  end
+
+  defp prepend_path_entries(entries, access, paths) do
+    path_entries(paths, access) ++ entries
+  end
+
+  defp append_path_entries(entries, access, paths) do
+    entries ++ path_entries(paths, access)
+  end
+
+  defp path_entries(paths, access) do
+    paths
+    |> normalize_allowed_roots()
+    |> Enum.map(&%{path: {:path, &1}, access: access})
+  end
+
+  defp uniq_filesystem_entries(entries) do
+    entries
+    |> Enum.reduce({[], MapSet.new()}, fn entry, {acc, seen} ->
+      key = {entry.path, entry.access}
+
+      if MapSet.member?(seen, key) do
+        {acc, seen}
+      else
+        {[entry | acc], MapSet.put(seen, key)}
+      end
+    end)
+    |> elem(0)
+    |> Enum.reverse()
+  end
+
+  defp default_if_empty([], default), do: default
+  defp default_if_empty(value, _default), do: value
 
   defp selected_tool_backend(tools, tool_name, default_provider) do
     tool_config =

@@ -8,6 +8,7 @@ defmodule Nex.Agent.Capability.Tool.Core.Reflect do
 
   alias Nex.Agent.{Self.CodeUpgrade, Self.Evolution}
   alias Nex.Agent.Self.Update.ReleaseStore
+  alias Nex.Agent.Sandbox.FileSystem
 
   def name, do: "reflect"
 
@@ -246,9 +247,9 @@ defmodule Nex.Agent.Capability.Tool.Core.Reflect do
      }}
   end
 
-  def execute(%{"action" => "source"} = args, _ctx) do
+  def execute(%{"action" => "source"} = args, ctx) do
     with {:ok, source_kind, value} <- validate_source_args(args) do
-      source_response(source_kind, value)
+      source_response(source_kind, value, ctx)
     end
   end
 
@@ -495,7 +496,7 @@ defmodule Nex.Agent.Capability.Tool.Core.Reflect do
     end
   end
 
-  defp source_response(:module, module_str) do
+  defp source_response(:module, module_str, _ctx) do
     module = String.to_existing_atom("Elixir.#{module_str}")
 
     with {:ok, source} <- CodeUpgrade.get_source(module) do
@@ -512,29 +513,34 @@ defmodule Nex.Agent.Capability.Tool.Core.Reflect do
     ArgumentError -> {:error, "Unknown module: #{module_str}"}
   end
 
-  defp source_response(:path, path) do
+  defp source_response(:path, path, ctx) do
     expanded = Path.expand(path, CodeUpgrade.repo_root())
 
-    cond do
-      not File.exists?(expanded) ->
-        {:error, "Source file does not exist: #{expanded}"}
+    with {:ok, info} <- FileSystem.authorize(expanded, :read, ctx),
+         {:ok, exists?} <- FileSystem.exists?(info),
+         :ok <- ensure_source_exists(exists?, info.expanded_path),
+         :ok <- ensure_code_layer_source(info.expanded_path),
+         {:ok, source} <- FileSystem.read_file(info),
+         {:ok, module} <- CodeUpgrade.detect_primary_module(source) do
+      {:ok,
+       %{
+         status: :ok,
+         module: module_name(module),
+         path: info.expanded_path,
+         content: source,
+         source_kind: :path
+       }}
+    end
+  end
 
-      not CodeUpgrade.code_layer_file?(expanded) ->
-        {:error,
-         "reflect source path must be a repo CODE-layer file under lib/nex/agent: #{expanded}"}
+  defp ensure_source_exists(true, _path), do: :ok
+  defp ensure_source_exists(false, path), do: {:error, "Source file does not exist: #{path}"}
 
-      true ->
-        with {:ok, source} <- File.read(expanded),
-             {:ok, module} <- CodeUpgrade.detect_primary_module(source) do
-          {:ok,
-           %{
-             status: :ok,
-             module: module_name(module),
-             path: expanded,
-             content: source,
-             source_kind: :path
-           }}
-        end
+  defp ensure_code_layer_source(path) do
+    if CodeUpgrade.code_layer_file?(path) do
+      :ok
+    else
+      {:error, "reflect source path must be a repo CODE-layer file under lib/nex/agent: #{path}"}
     end
   end
 

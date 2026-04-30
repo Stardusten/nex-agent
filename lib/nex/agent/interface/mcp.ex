@@ -26,10 +26,15 @@ defmodule Nex.Agent.Interface.MCP do
   use GenServer
   require Logger
 
+  alias Nex.Agent.Runtime.Config
+  alias Nex.Agent.Sandbox.{Command, Exec, Policy}
+  alias Nex.Agent.Sandbox.Process, as: SandboxProcess
+
   @timeout 30_000
 
   defstruct [
     :port,
+    :sandbox_process,
     :request_id,
     :pending_requests,
     :tools,
@@ -103,26 +108,29 @@ defmodule Nex.Agent.Interface.MCP do
     command = Keyword.fetch!(opts, :command)
     args = Keyword.get(opts, :args, [])
     env = Keyword.get(opts, :env, %{})
+    cwd = Keyword.get(opts, :cwd, File.cwd!())
+    policy = sandbox_policy(opts, cwd)
 
-    case System.find_executable(command) do
-      nil ->
-        {:stop, {:executable_not_found, command}}
+    command = %Command{
+      program: command,
+      args: Enum.map(args, &to_string/1),
+      cwd: cwd,
+      env: Map.new(env, fn {key, value} -> {to_string(key), to_string(value)} end),
+      timeout_ms: @timeout,
+      metadata: %{
+        workspace: Keyword.get(opts, :workspace, cwd),
+        observe_context: %{
+          workspace: Keyword.get(opts, :workspace, cwd)
+        },
+        observe_attrs: %{"interface" => "mcp"}
+      }
+    }
 
-      executable_path ->
-        # Convert env map to list of {key, value} tuples
-        env_list = Enum.map(env, fn {k, v} -> {to_charlist(k), to_charlist(v)} end)
-
-        port =
-          Port.open({:spawn_executable, to_charlist(executable_path)}, [
-            :binary,
-            :eof,
-            :stderr_to_stdout,
-            args: Enum.map(args, &to_charlist/1),
-            env: env_list
-          ])
-
+    case Exec.open(command, policy) do
+      {:ok, %SandboxProcess{} = process} ->
         state = %__MODULE__{
-          port: port,
+          port: process.port,
+          sandbox_process: process,
           request_id: 0,
           pending_requests: %{},
           tools: [],
@@ -131,6 +139,9 @@ defmodule Nex.Agent.Interface.MCP do
         }
 
         {:ok, state}
+
+      {:error, reason} ->
+        {:stop, reason}
     end
   end
 
@@ -222,8 +233,8 @@ defmodule Nex.Agent.Interface.MCP do
 
   @impl true
   def terminate(_reason, state) do
-    if state.port do
-      Port.close(state.port)
+    if state.sandbox_process do
+      Exec.close(state.sandbox_process)
     end
 
     :ok
@@ -236,7 +247,7 @@ defmodule Nex.Agent.Interface.MCP do
     request = %{request | id: request_id}
 
     json = Jason.encode!(request) <> "\n"
-    Port.command(state.port, json)
+    :ok = Exec.write(state.sandbox_process, json)
 
     new_state = %{
       state
@@ -303,6 +314,18 @@ defmodule Nex.Agent.Interface.MCP do
 
   defp send_notification(state, notification) do
     json = Jason.encode!(notification) <> "\n"
-    Port.command(state.port, json)
+    :ok = Exec.write(state.sandbox_process, json)
+  end
+
+  defp sandbox_policy(opts, cwd) do
+    case Keyword.get(opts, :runtime_snapshot) do
+      %{sandbox: %Policy{} = policy} ->
+        policy
+
+      _ ->
+        opts
+        |> Keyword.get(:config)
+        |> Config.sandbox_runtime(workspace: Keyword.get(opts, :workspace, cwd))
+    end
   end
 end

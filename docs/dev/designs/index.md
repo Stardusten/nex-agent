@@ -22,3 +22,4 @@ When a design settles, promote the stable decision into `docs/dev/findings/`. Wh
 - [2026-04-28 Workbench App Authoring Guide](./2026-04-28-workbench-app-authoring-guide.md)
 - [2026-04-28 Workbench App Runtime Design](./2026-04-28-workbench-app-runtime.md)
 - [2026-04-29 Plugin Runtime Foundation](./2026-04-29-plugin-runtime-foundation.md)
+- [2026-04-30 Command Sandbox And Approval](./2026-04-30-command-sandbox-and-approval.md)

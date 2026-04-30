@@ -20,13 +20,16 @@ defmodule Nex.Agent.Channel.Discord do
   require Logger
 
   alias Nex.Agent.{App.Bus, Runtime.Config, Interface.HTTP}
+  alias Nex.Agent.Sandbox.Approval
   alias Nex.Agent.Observe.ControlPlane.Log, as: ControlPlaneLog
-  alias Nex.Agent.Conversation.Command.Invocation
+  alias Nex.Agent.Conversation.Command.{Invocation, Parser}
   alias Nex.Agent.Channel.Discord.WSClient
   alias Nex.Agent.Interface.Inbound.Envelope
   alias Nex.Agent.Interface.IMIR.Renderers.Discord, as: DiscordRenderer
   alias Nex.Agent.Interface.IMIR.Text, as: IMText
   alias Nex.Agent.Interface.Media.Ref
+  alias Nex.Agent.Interface.Outbound.Action, as: OutboundAction
+  alias Nex.Agent.Interface.Outbound.Approval, as: OutboundApproval
 
   require ControlPlaneLog
 
@@ -35,6 +38,7 @@ defmodule Nex.Agent.Channel.Discord do
   @heartbeat_jitter 0.9
   @reconnect_delay_ms 5_000
   @max_message_length 2000
+  @components_v2_flag 32_768
   @table_modes [:raw, :ascii, :embed]
   @eyes_emoji "👀"
   @done_emoji "✅"
@@ -54,6 +58,7 @@ defmodule Nex.Agent.Channel.Discord do
     :show_table_as,
     :http_post_fun,
     :http_patch_fun,
+    :http_delete_fun,
     :ws_pid,
     :ws_ref,
     :heartbeat_interval,
@@ -62,7 +67,8 @@ defmodule Nex.Agent.Channel.Discord do
     :session_id,
     :resume_gateway_url,
     :bot_user_id,
-    known_threads: %{}
+    known_threads: %{},
+    approval_messages: %{}
   ]
 
   @type t :: %__MODULE__{
@@ -74,6 +80,7 @@ defmodule Nex.Agent.Channel.Discord do
           show_table_as: :raw | :ascii | :embed,
           http_post_fun: (String.t(), map(), keyword() -> {:ok, map()} | {:error, term()}),
           http_patch_fun: (String.t(), map(), keyword() -> {:ok, map()} | {:error, term()}),
+          http_delete_fun: (String.t(), keyword() -> :ok | {:error, term()}),
           ws_pid: pid() | nil,
           ws_ref: reference() | nil,
           heartbeat_interval: integer() | nil,
@@ -82,7 +89,8 @@ defmodule Nex.Agent.Channel.Discord do
           session_id: String.t() | nil,
           resume_gateway_url: String.t() | nil,
           bot_user_id: String.t() | nil,
-          known_threads: %{optional(String.t()) => thread_meta()}
+          known_threads: %{optional(String.t()) => thread_meta()},
+          approval_messages: %{optional(String.t()) => map()}
         }
 
   # Client API
@@ -126,6 +134,45 @@ defmodule Nex.Agent.Channel.Discord do
     else
       {:error, :discord_not_running}
     end
+  end
+
+  @doc "Delete an existing Discord message synchronously."
+  @spec delete_message(String.t(), String.t(), String.t()) :: :ok | {:error, term()}
+  def delete_message(instance_id, channel_id, message_id) do
+    if pid = Nex.Agent.Interface.Channel.Registry.whereis(instance_id) do
+      GenServer.call(pid, {:delete_message, channel_id, message_id}, 15_000)
+    else
+      {:error, :discord_not_running}
+    end
+  end
+
+  @doc false
+  @spec register_approval_message(
+          String.t(),
+          String.t(),
+          String.t(),
+          String.t(),
+          String.t(),
+          map()
+        ) ::
+          :ok
+  def register_approval_message(
+        instance_id,
+        request_id,
+        channel_id,
+        message_id,
+        content,
+        metadata
+      )
+      when is_binary(request_id) and is_binary(message_id) do
+    if pid = Nex.Agent.Interface.Channel.Registry.whereis(instance_id) do
+      GenServer.cast(
+        pid,
+        {:register_approval_message, request_id, channel_id, message_id, content, metadata}
+      )
+    end
+
+    :ok
   end
 
   @doc "Add a Unicode emoji reaction to a message. Fire-and-forget."
@@ -180,13 +227,16 @@ defmodule Nex.Agent.Channel.Discord do
       show_table_as: normalize_table_mode(Map.get(discord, "show_table_as")),
       http_post_fun: Keyword.get(opts, :http_post_fun, &default_http_post/3),
       http_patch_fun: Keyword.get(opts, :http_patch_fun, &default_http_patch/3),
+      http_delete_fun: Keyword.get(opts, :http_delete_fun, &default_http_delete/2),
       sequence: nil,
-      session_id: nil
+      session_id: nil,
+      approval_messages: %{}
     }
 
     Bus.subscribe(Nex.Agent.Interface.Outbound.topic_for_channel(instance_id))
     Bus.subscribe(:inbound_ack)
     Bus.subscribe(:task_complete)
+    Bus.subscribe(:sandbox_approval_resolved)
     {:ok, state, {:continue, :connect}}
   end
 
@@ -207,6 +257,14 @@ defmodule Nex.Agent.Channel.Discord do
   end
 
   @impl true
+  def handle_call({:delete_message, channel_id, message_id}, _from, state) do
+    case delete_channel_message(channel_id, message_id, state) do
+      :ok -> {:reply, :ok, state}
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  @impl true
   def handle_cast({:add_reaction, channel_id, message_id, emoji}, state) do
     do_add_reaction(channel_id, message_id, emoji, state)
     {:noreply, state}
@@ -216,6 +274,22 @@ defmodule Nex.Agent.Channel.Discord do
   def handle_cast({:remove_reaction, channel_id, message_id, emoji}, state) do
     do_remove_reaction(channel_id, message_id, emoji, state)
     {:noreply, state}
+  end
+
+  @impl true
+  def handle_cast(
+        {:register_approval_message, request_id, channel_id, message_id, content, metadata},
+        state
+      ) do
+    {:noreply,
+     register_approval_message_in_state(
+       state,
+       request_id,
+       channel_id,
+       message_id,
+       content,
+       metadata
+     )}
   end
 
   @impl true
@@ -313,10 +387,30 @@ defmodule Nex.Agent.Channel.Discord do
   @impl true
   def handle_info({:bus_message, {:channel_outbound, instance_id}, payload}, state)
       when is_map(payload) do
-    if instance_id == state.instance_id do
-      _ = do_send(payload, state)
-    end
+    state =
+      if instance_id == state.instance_id do
+        do_send(payload, state)
+      else
+        state
+      end
 
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info({:bus_message, :sandbox_approval_resolved, payload}, state)
+      when is_map(payload) do
+    state =
+      if approval_resolution_for_channel?(payload, state.instance_id) do
+        update_resolved_approval_message(payload, state)
+      else
+        state
+      end
+
+    {:noreply, state}
+  end
+
+  def handle_info({:bus_message, :sandbox_approval_resolved, _payload}, state) do
     {:noreply, state}
   end
 
@@ -618,6 +712,11 @@ defmodule Nex.Agent.Channel.Discord do
         publish_interaction_command(data, state)
         state
 
+      type == 3 ->
+        _ = acknowledge_component_interaction(data, state)
+        state = handle_component_interaction(data, state)
+        state
+
       true ->
         state
     end
@@ -672,6 +771,128 @@ defmodule Nex.Agent.Channel.Discord do
 
   defp interaction_option_values(_option), do: []
 
+  defp handle_component_interaction(data, state) do
+    custom_id = get_in(data, ["data", "custom_id"])
+
+    case OutboundApproval.custom_id_parts(custom_id) do
+      {:ok, %{request_id: request_id, action_id: action_id}} ->
+        state = register_interaction_approval_message(data, request_id, state)
+        _ = resolve_approval_component(request_id, action_id, data)
+        state
+
+      :error ->
+        publish_component_command(data, state)
+        state
+    end
+  end
+
+  defp publish_component_command(data, state) do
+    custom_id = get_in(data, ["data", "custom_id"])
+
+    with {:ok, raw} <- OutboundApproval.command_for_custom_id(custom_id),
+         {:ok, %Invocation{} = invocation} <- Parser.parse(raw) do
+      publish_component_invocation(data, %{invocation | source: :native}, state)
+    end
+  end
+
+  defp register_interaction_approval_message(data, request_id, state) do
+    channel_id = Map.get(data, "channel_id")
+    message_id = get_in(data, ["message", "id"])
+    content = original_component_content(data) || approval_row_content_from_interaction(data)
+    metadata = %{"_approval_request_id" => request_id}
+
+    if is_binary(channel_id) and channel_id != "" and
+         is_binary(message_id) and message_id != "" do
+      register_approval_message_in_state(
+        state,
+        request_id,
+        channel_id,
+        message_id,
+        content,
+        metadata
+      )
+    else
+      state
+    end
+  end
+
+  defp approval_row_content_from_interaction(data) do
+    data
+    |> get_in(["message", "content"])
+    |> case do
+      content when is_binary(content) and content != "" -> content
+      _ -> "Approval request"
+    end
+  end
+
+  defp resolve_approval_component(request_id, action_id, data) do
+    actor = approval_actor_from_interaction(data)
+
+    case OutboundApproval.choice_for_action(action_id) do
+      {:approve, choice} ->
+        if Process.whereis(Approval) do
+          Approval.approve_request(request_id, choice, authorized_actor: actor)
+        else
+          {:error, :approval_unavailable}
+        end
+
+      {:deny, choice} ->
+        if Process.whereis(Approval) do
+          Approval.deny_request(request_id, choice, authorized_actor: actor)
+        else
+          {:error, :approval_unavailable}
+        end
+
+      :error ->
+        {:error, :unknown_approval_action}
+    end
+  end
+
+  defp approval_actor_from_interaction(data) do
+    %{
+      "sender_id" => get_in(data, ["member", "user", "id"]) || get_in(data, ["user", "id"]),
+      "username" =>
+        get_in(data, ["member", "user", "username"]) || get_in(data, ["user", "username"]),
+      "channel" => Map.get(data, "channel_id")
+    }
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    |> Map.new()
+  end
+
+  defp publish_component_invocation(data, %Invocation{} = invocation, state) do
+    channel_id = Map.get(data, "channel_id")
+    author_id = get_in(data, ["member", "user", "id"]) || get_in(data, ["user", "id"])
+    guild_id = Map.get(data, "guild_id")
+    thread_meta = Map.get(state.known_threads, channel_id)
+    parent_chat_id = parent_chat_id(data, thread_meta)
+
+    if allowed?(parent_chat_id, state.allow_from) do
+      Bus.publish(:inbound, %Envelope{
+        channel: state.instance_id,
+        chat_id: to_string(channel_id),
+        sender_id: to_string(author_id),
+        text: invocation.raw,
+        command: invocation,
+        message_type: :text,
+        raw: data,
+        metadata: %{
+          "channel_type" => "discord",
+          "guild_id" => guild_id,
+          "application_id" => Map.get(data, "application_id"),
+          "interaction_id" => Map.get(data, "id"),
+          "interaction_token" => Map.get(data, "token"),
+          "origin_channel_id" => channel_id,
+          "parent_chat_id" => parent_chat_id,
+          "component_custom_id" => get_in(data, ["data", "custom_id"]),
+          "username" =>
+            get_in(data, ["member", "user", "username"]) || get_in(data, ["user", "username"])
+        },
+        media_refs: [],
+        attachments: []
+      })
+    end
+  end
+
   defp acknowledge_interaction(data, state) do
     interaction_id = Map.get(data, "id")
     token = Map.get(data, "token")
@@ -686,6 +907,47 @@ defmodule Nex.Agent.Channel.Discord do
       {:error, :invalid_interaction}
     end
   end
+
+  defp acknowledge_component_interaction(data, state) do
+    interaction_id = Map.get(data, "id")
+    token = Map.get(data, "token")
+    custom_id = get_in(data, ["data", "custom_id"])
+
+    if is_binary(interaction_id) and interaction_id != "" and is_binary(token) and token != "" do
+      state.http_post_fun.(
+        "#{@discord_api}/interactions/#{interaction_id}/#{token}/callback",
+        component_ack_body(custom_id, data),
+        request_headers(%{}, state)
+      )
+    else
+      {:error, :invalid_interaction}
+    end
+  end
+
+  defp component_ack_body(custom_id, data) do
+    _ = data
+    _ = custom_id
+    %{"type" => 6}
+  end
+
+  defp original_component_content(data) when is_map(data) do
+    data
+    |> get_in(["message", "components"])
+    |> List.wrap()
+    |> Enum.find_value(&component_text_content/1)
+  end
+
+  defp original_component_content(_data), do: nil
+
+  defp component_text_content(%{"type" => 10, "content" => content}) when is_binary(content) do
+    content
+  end
+
+  defp component_text_content(%{"components" => children}) when is_list(children) do
+    Enum.find_value(children, &component_text_content/1)
+  end
+
+  defp component_text_content(_component), do: nil
 
   defp publish_inbound(chat_id, author_id, content, data, state, opts) do
     origin_channel_id = Map.get(data, "channel_id")
@@ -817,7 +1079,7 @@ defmodule Nex.Agent.Channel.Discord do
         content
         |> normalize_outbound_text()
         |> Enum.join("\n\n")
-        |> render_discord_body(state)
+        |> render_discord_body(metadata, state)
         |> edit_interaction_response(application_id, token, state)
         |> case do
           :ok ->
@@ -827,34 +1089,48 @@ defmodule Nex.Agent.Channel.Discord do
             Logger.error("[Discord] Interaction response failed: #{inspect(reason)}")
         end
 
+        state
+
       _ ->
-        send_channel_message(channel_id, content, state)
+        send_channel_message(channel_id, content, metadata, state)
     end
   end
 
   defp do_send(%{chat_id: channel_id, content: content}, state) do
-    send_channel_message(to_string(channel_id || ""), content, state)
+    send_channel_message(to_string(channel_id || ""), content, %{}, state)
   end
 
-  defp do_send(payload, _state) do
+  defp do_send(payload, state) do
     Logger.error("[Discord] Invalid outbound payload: #{inspect(payload)}")
+    state
   end
 
-  defp send_channel_message(channel_id, content, state) do
+  defp send_channel_message(channel_id, content, metadata, state) do
     content
     |> normalize_outbound_text()
-    |> Enum.each(fn segment ->
-      for body <- render_discord_bodies(segment, state) do
-        case create_message(channel_id, body, %{}, state) do
-          {:ok, _message_id} -> :ok
-          {:error, reason} -> Logger.error("[Discord] Send failed: #{inspect(reason)}")
+    |> Enum.reduce(state, fn segment, acc_state ->
+      render_discord_bodies(segment, metadata, acc_state)
+      |> Enum.reduce(acc_state, fn body, inner_state ->
+        case create_message(channel_id, body, metadata, inner_state) do
+          {:ok, message_id} ->
+            maybe_register_outbound_approval_message(
+              inner_state,
+              channel_id,
+              message_id,
+              segment,
+              metadata
+            )
+
+          {:error, reason} ->
+            Logger.error("[Discord] Send failed: #{inspect(reason)}")
+            inner_state
         end
-      end
+      end)
     end)
   end
 
   defp create_message(channel_id, content, metadata, state) do
-    body = render_discord_body(content, state)
+    body = render_discord_body(content, metadata, state)
     observe_discord_outbound_body(channel_id, body, state)
 
     with :ok <- validate_outbound_message(channel_id, body, state),
@@ -874,7 +1150,7 @@ defmodule Nex.Agent.Channel.Discord do
   end
 
   defp edit_message(channel_id, message_id, content, metadata, state) do
-    body = render_discord_body(content, state)
+    body = render_discord_body(content, metadata, state)
 
     with :ok <- validate_outbound_message(channel_id, body, state),
          true <- (is_binary(message_id) and message_id != "") or {:error, :invalid_message_id},
@@ -888,32 +1164,365 @@ defmodule Nex.Agent.Channel.Discord do
     end
   end
 
-  defp render_discord_bodies(content, state) when is_binary(content) do
+  defp delete_channel_message(channel_id, message_id, state) do
+    with true <- (is_binary(channel_id) and channel_id != "") or {:error, :invalid_channel_id},
+         true <- (is_binary(message_id) and message_id != "") or {:error, :invalid_message_id},
+         true <- state.token not in [nil, ""] or {:error, :missing_token} do
+      state.http_delete_fun.(
+        "#{@discord_api}/channels/#{channel_id}/messages/#{message_id}",
+        request_headers(%{}, state)
+      )
+    end
+  end
+
+  defp render_discord_bodies(content, metadata, state)
+       when is_binary(content) and is_map(metadata) do
+    case render_discord_action_body(content, metadata) do
+      nil ->
+        content
+        |> DiscordRenderer.render_payload(show_table_as: state.show_table_as)
+        |> discord_payload_to_bodies()
+
+      body ->
+        [body]
+    end
+  end
+
+  defp render_discord_bodies(content, _metadata, state) when is_binary(content) do
     content
     |> DiscordRenderer.render_payload(show_table_as: state.show_table_as)
     |> discord_payload_to_bodies()
   end
 
-  defp render_discord_bodies(content, state), do: [render_discord_body(content, state)]
+  defp render_discord_bodies(content, metadata, state),
+    do: [render_discord_body(content, metadata, state)]
 
-  defp render_discord_body(%{} = body, _state) do
+  defp render_discord_body(%{} = body, _metadata, _state) do
     content = Map.get(body, "content", Map.get(body, :content, ""))
     embeds = Map.get(body, "embeds", Map.get(body, :embeds, []))
+    components = Map.get(body, "components", Map.get(body, :components))
+    flags = Map.get(body, "flags", Map.get(body, :flags))
 
-    %{
-      "content" => to_string(content || ""),
-      "embeds" => if(is_list(embeds), do: embeds, else: [])
-    }
+    if is_list(components) and components != [] do
+      %{}
+      |> maybe_put_non_empty("content", content)
+      |> maybe_put_list("embeds", embeds)
+      |> Map.put("components", components)
+      |> maybe_put_integer("flags", flags)
+    else
+      %{
+        "content" => to_string(content || ""),
+        "embeds" => if(is_list(embeds), do: embeds, else: [])
+      }
+    end
   end
 
-  defp render_discord_body(content, state) when is_binary(content) do
-    content
-    |> DiscordRenderer.render_payload(show_table_as: state.show_table_as)
-    |> discord_payload_to_body()
+  defp render_discord_body(content, metadata, state) when is_binary(content) do
+    case render_discord_action_body(content, metadata) do
+      nil ->
+        content
+        |> DiscordRenderer.render_payload(show_table_as: state.show_table_as)
+        |> discord_payload_to_body()
+
+      body ->
+        body
+    end
   end
 
-  defp render_discord_body(content, _state),
+  defp render_discord_body(content, _metadata, _state),
     do: %{"content" => to_string(content || ""), "embeds" => []}
+
+  defp render_discord_action_body(content, metadata) when is_map(metadata) do
+    render_discord_approval_body(content, metadata) ||
+      render_discord_generic_action_body(metadata)
+  end
+
+  defp render_discord_action_body(_content, _metadata), do: nil
+
+  defp render_discord_approval_body(_content, metadata) when is_map(metadata) do
+    case OutboundApproval.request(metadata) do
+      %{} = request ->
+        request_id = Map.get(request, "request_id")
+        actions = Map.get(request, "actions", [])
+
+        buttons =
+          actions
+          |> Enum.filter(&is_map/1)
+          |> Enum.map(&discord_approval_button(request_id, &1))
+          |> Enum.reject(&is_nil/1)
+
+        if is_binary(request_id) and buttons != [] do
+          %{
+            "flags" => @components_v2_flag,
+            "components" =>
+              [
+                %{"type" => 10, "content" => approval_row_content(request, :pending)}
+              ] ++
+                approval_risk_components(request) ++
+                [
+                  %{"type" => 1, "components" => buttons}
+                ]
+          }
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp render_discord_approval_body(_content, _metadata), do: nil
+
+  defp render_discord_generic_action_body(metadata) when is_map(metadata) do
+    case OutboundAction.action(metadata) do
+      %{} = action ->
+        content = OutboundAction.render_fallback(action)
+
+        if content != "" do
+          %{
+            "flags" => @components_v2_flag,
+            "components" => [%{"type" => 10, "content" => content}]
+          }
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp render_discord_generic_action_body(_metadata), do: nil
+
+  defp discord_approval_button(request_id, %{} = action) do
+    action_id = Map.get(action, "id")
+    label = Map.get(action, "label")
+
+    if is_binary(request_id) and is_binary(action_id) and is_binary(label) do
+      %{
+        "type" => 2,
+        "style" => discord_button_style(Map.get(action, "style")),
+        "label" => label,
+        "custom_id" => OutboundApproval.custom_id(request_id, action_id)
+      }
+    end
+  end
+
+  defp discord_button_style("primary"), do: 1
+  defp discord_button_style("secondary"), do: 2
+  defp discord_button_style("success"), do: 3
+  defp discord_button_style("danger"), do: 4
+  defp discord_button_style(_style), do: 2
+
+  defp maybe_register_outbound_approval_message(state, channel_id, message_id, _content, metadata) do
+    case OutboundApproval.request(metadata) do
+      %{"request_id" => request_id} = request when is_binary(request_id) ->
+        register_approval_message_in_state(
+          state,
+          request_id,
+          channel_id,
+          message_id,
+          approval_row_content(request, :pending),
+          metadata
+        )
+
+      _ ->
+        state
+    end
+  end
+
+  defp register_approval_message_in_state(
+         state,
+         request_id,
+         channel_id,
+         message_id,
+         content,
+         metadata
+       ) do
+    record = %{
+      channel_id: to_string(channel_id || ""),
+      message_id: to_string(message_id || ""),
+      content: to_string(content || ""),
+      metadata: metadata || %{}
+    }
+
+    %{state | approval_messages: Map.put(state.approval_messages, request_id, record)}
+  end
+
+  defp approval_resolution_for_channel?(payload, instance_id) do
+    channel = Map.get(payload, :channel) || Map.get(payload, "channel")
+    is_nil(channel) or channel == instance_id
+  end
+
+  defp update_resolved_approval_message(payload, state) do
+    request_id = Map.get(payload, :request_id) || Map.get(payload, "request_id")
+
+    case Map.get(state.approval_messages, request_id) do
+      nil ->
+        state
+
+      record ->
+        status =
+          normalize_approval_status(Map.get(payload, :status) || Map.get(payload, "status"))
+
+        choice =
+          normalize_approval_choice(Map.get(payload, :choice) || Map.get(payload, "choice"))
+
+        request = Map.get(payload, :request) || Map.get(payload, "request")
+        content = approval_row_content(request || record.metadata, status, choice, record.content)
+
+        body = %{
+          "flags" => @components_v2_flag,
+          "components" => [%{"type" => 10, "content" => content}]
+        }
+
+        case state.http_patch_fun.(
+               "#{@discord_api}/channels/#{record.channel_id}/messages/#{record.message_id}",
+               body,
+               request_headers(%{}, state)
+             ) do
+          {:ok, _response} ->
+            %{state | approval_messages: Map.delete(state.approval_messages, request_id)}
+
+          {:error, reason} ->
+            Logger.warning("[Discord] Approval message update failed: #{inspect(reason)}")
+            state
+        end
+    end
+  end
+
+  defp approval_row_content(request, :pending) do
+    approval_row_base(request) <> " _(Waiting approval)_"
+  end
+
+  defp approval_risk_components(request) do
+    case approval_risk_hint(request) do
+      nil -> []
+      hint -> [%{"type" => 10, "content" => "_Risk: #{hint}_"}]
+    end
+  end
+
+  defp approval_risk_hint(%Nex.Agent.Sandbox.Approval.Request{metadata: metadata}) do
+    approval_risk_hint(metadata)
+  end
+
+  defp approval_risk_hint(%{} = request) do
+    request = OutboundApproval.request(request) || stringify_map_keys(request)
+
+    hint =
+      Map.get(request, "risk_hint") ||
+        get_in(request, ["request_metadata", "risk_hint"]) ||
+        get_in(request, ["metadata", "risk_hint"])
+
+    case hint do
+      value when is_binary(value) and value != "" -> approval_subject(value)
+      _ -> nil
+    end
+  end
+
+  defp approval_risk_hint(_request), do: nil
+
+  defp approval_row_content(request, status, choice, fallback) do
+    base =
+      case approval_row_base(request) do
+        "" -> strip_approval_status(fallback)
+        value -> value
+      end
+
+    "#{base} _(#{OutboundApproval.status_label(status, choice)})_"
+  end
+
+  defp approval_row_base(%Nex.Agent.Sandbox.Approval.Request{kind: :command, subject: subject}) do
+    "⚙️ Bash - " <> approval_subject(subject)
+  end
+
+  defp approval_row_base(%Nex.Agent.Sandbox.Approval.Request{description: description}) do
+    "🔐 Approval - " <> approval_subject(description)
+  end
+
+  defp approval_row_base(%{} = request) do
+    request = OutboundApproval.request(request) || stringify_map_keys(request)
+    kind = Map.get(request, "kind")
+    subject = Map.get(request, "subject")
+    description = Map.get(request, "description")
+
+    cond do
+      kind == "command" and is_binary(subject) and subject != "" ->
+        "⚙️ Bash - " <> approval_subject(subject)
+
+      is_binary(description) and description != "" ->
+        "🔐 Approval - " <> approval_subject(description)
+
+      true ->
+        ""
+    end
+  end
+
+  defp approval_row_base(_request), do: ""
+
+  defp approval_subject(subject) do
+    subject
+    |> to_string()
+    |> String.replace("\n", " ")
+    |> String.trim()
+    |> String.slice(0, 140)
+  end
+
+  defp strip_approval_status(content) do
+    content
+    |> to_string()
+    |> String.replace(~r/\s+_\([^)]*\)_\s*$/, "")
+    |> String.trim()
+  end
+
+  defp normalize_approval_status(status)
+       when status in [:approved, :denied, :timeout, :cancelled],
+       do: status
+
+  defp normalize_approval_status(status) when is_binary(status) do
+    case status do
+      "approved" -> :approved
+      "denied" -> :denied
+      "timeout" -> :timeout
+      "cancelled" -> :cancelled
+      _ -> :approved
+    end
+  end
+
+  defp normalize_approval_status(_status), do: :approved
+
+  defp normalize_approval_choice(choice)
+       when choice in [:once, :all, :session, :similar, :always, :grant],
+       do: choice
+
+  defp normalize_approval_choice(choice) when is_binary(choice) do
+    case choice do
+      "once" -> :once
+      "all" -> :all
+      "session" -> :session
+      "similar" -> :similar
+      "always" -> :always
+      "grant" -> :grant
+      _ -> :once
+    end
+  end
+
+  defp normalize_approval_choice(_choice), do: :once
+
+  defp stringify_map_keys(map) do
+    Map.new(map, fn {key, value} -> {to_string(key), value} end)
+  end
+
+  defp maybe_put_non_empty(map, key, value) when is_binary(value) do
+    if String.trim(value) == "", do: map, else: Map.put(map, key, value)
+  end
+
+  defp maybe_put_non_empty(map, _key, _value), do: map
+
+  defp maybe_put_list(map, key, value) when is_list(value) and value != [],
+    do: Map.put(map, key, value)
+
+  defp maybe_put_list(map, _key, _value), do: map
+
+  defp maybe_put_integer(map, key, value) when is_integer(value), do: Map.put(map, key, value)
+  defp maybe_put_integer(map, _key, _value), do: map
 
   defp discord_payload_to_bodies(%{content: content, embeds: embeds}) do
     content_chunks = IMText.chunk_message(content || "", @max_message_length)
@@ -965,6 +1574,10 @@ defmodule Nex.Agent.Channel.Discord do
   defp valid_discord_body?(%{"content" => content, "embeds" => embeds}) do
     (is_binary(content) and String.trim(content) != "") or
       (is_list(embeds) and embeds != [])
+  end
+
+  defp valid_discord_body?(%{"components" => components}) when is_list(components) do
+    components != []
   end
 
   defp valid_discord_body?(_body), do: false
@@ -1110,7 +1723,7 @@ defmodule Nex.Agent.Channel.Discord do
       url =
         "#{@discord_api}/channels/#{channel_id}/messages/#{message_id}/reactions/#{encoded_emoji}/@me"
 
-      case default_http_delete(url, [{"authorization", discord_authorization(state.token)}]) do
+      case state.http_delete_fun.(url, [{"authorization", discord_authorization(state.token)}]) do
         :ok ->
           Logger.debug("[Discord] Removed #{emoji} reaction from #{message_id}")
 
@@ -1283,8 +1896,10 @@ defmodule Nex.Agent.Channel.Discord do
       {:ok, %{status: status, body: response}} when status in 200..299 and is_map(response) ->
         {:ok, response}
 
-      {:ok, %{status: 429, body: body}} ->
-        retry_after = get_in(body, ["retry_after"]) || get_in(body, [:retry_after]) || 1
+      {:ok, %{status: 429, body: response_body}} ->
+        retry_after =
+          get_in(response_body, ["retry_after"]) || get_in(response_body, [:retry_after]) || 1
+
         Logger.warning("[Discord] Rate limited, retry after #{retry_after}s")
         Process.sleep(trunc(retry_after * 1000))
         default_http_post(url, body, headers)
@@ -1306,8 +1921,10 @@ defmodule Nex.Agent.Channel.Discord do
       {:ok, %{status: status, body: response}} when status in 200..299 and is_map(response) ->
         {:ok, response}
 
-      {:ok, %{status: 429, body: body}} ->
-        retry_after = get_in(body, ["retry_after"]) || get_in(body, [:retry_after]) || 1
+      {:ok, %{status: 429, body: response_body}} ->
+        retry_after =
+          get_in(response_body, ["retry_after"]) || get_in(response_body, [:retry_after]) || 1
+
         Logger.warning("[Discord] Rate limited, retry after #{retry_after}s")
         Process.sleep(trunc(retry_after * 1000))
         default_http_patch(url, body, headers)

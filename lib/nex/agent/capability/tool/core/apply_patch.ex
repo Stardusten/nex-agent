@@ -3,7 +3,7 @@ defmodule Nex.Agent.Capability.Tool.Core.ApplyPatch do
 
   @behaviour Nex.Agent.Capability.Tool.Behaviour
 
-  alias Nex.Agent.Sandbox.Security
+  alias Nex.Agent.Sandbox.FileSystem
   alias Nex.Agent.Runtime.Workspace
 
   @begin_marker "*** Begin Patch"
@@ -243,67 +243,90 @@ defmodule Nex.Agent.Capability.Tool.Core.ApplyPatch do
   end
 
   defp prepare_operation(%{type: :add, path: path, content: content}, ctx) do
-    with {:ok, expanded} <- validate_mutation_target(path, ctx),
-         false <- File.exists?(expanded) do
-      {:ok, %{type: :add, path: expanded, content: content}}
+    with {:ok, info} <- validate_mutation_target(path, ctx),
+         :ok <- ensure_missing(info, path, "Add File target already exists") do
+      {:ok, %{type: :add, path: info.expanded_path, path_info: info, content: content}}
     else
-      true -> {:error, "Add File target already exists: #{path}"}
       {:error, reason} -> {:error, reason}
     end
   end
 
   defp prepare_operation(%{type: :delete, path: path}, ctx) do
-    with {:ok, expanded} <- validate_mutation_target(path, ctx),
-         true <- File.regular?(expanded) do
-      {:ok, %{type: :delete, path: expanded, original_content: File.read!(expanded)}}
+    with {:ok, info} <- validate_mutation_target(path, ctx),
+         :ok <- ensure_regular(info, path, "Delete File target does not exist"),
+         {:ok, original_content} <- FileSystem.read_file(info) do
+      {:ok,
+       %{
+         type: :delete,
+         path: info.expanded_path,
+         path_info: info,
+         original_content: original_content
+       }}
     else
-      false -> {:error, "Delete File target does not exist: #{path}"}
       {:error, reason} -> {:error, reason}
     end
   end
 
   defp prepare_operation(%{type: :update, path: path, move_to: move_to, hunks: hunks}, ctx) do
-    with {:ok, expanded} <- validate_mutation_target(path, ctx),
-         true <- File.regular?(expanded),
-         {:ok, destination} <- validate_update_destination(expanded, move_to, ctx),
-         {:ok, original_content} <- File.read(expanded),
+    with {:ok, info} <- validate_mutation_target(path, ctx),
+         :ok <- ensure_regular(info, path, "Update File target does not exist"),
+         {:ok, destination_info} <- validate_update_destination(info, move_to, ctx),
+         {:ok, original_content} <- FileSystem.read_file(info),
          {:ok, updated_content} <- apply_hunks(original_content, hunks) do
       {:ok,
        %{
          type: :update,
-         path: expanded,
-         destination: destination,
+         path: info.expanded_path,
+         path_info: info,
+         destination: destination_info.expanded_path,
+         destination_info: destination_info,
          original_content: original_content,
          updated_content: updated_content
        }}
     else
-      false -> {:error, "Update File target does not exist: #{path}"}
       {:error, reason} -> {:error, reason}
     end
   end
 
-  defp validate_update_destination(source, nil, _ctx), do: {:ok, source}
+  defp validate_update_destination(source_info, nil, _ctx), do: {:ok, source_info}
 
-  defp validate_update_destination(source, move_to, ctx) do
-    with {:ok, destination} <- validate_mutation_target(move_to, ctx) do
+  defp validate_update_destination(source_info, move_to, ctx) do
+    with {:ok, destination_info} <- validate_mutation_target(move_to, ctx),
+         {:ok, destination_exists?} <- FileSystem.exists?(destination_info) do
       cond do
-        destination == source ->
-          {:ok, source}
+        destination_info.expanded_path == source_info.expanded_path ->
+          {:ok, source_info}
 
-        File.exists?(destination) ->
+        destination_exists? ->
           {:error, "Move destination already exists: #{move_to}"}
 
         true ->
-          {:ok, destination}
+          {:ok, destination_info}
       end
     end
   end
 
   defp validate_mutation_target(path, ctx) do
-    with {:ok, expanded} <- Security.validate_write_path(path, ctx),
-         :ok <- reject_profile_shadow(expanded) do
-      {:ok, expanded}
+    with {:ok, info} <- FileSystem.authorize(path, :write, ctx),
+         :ok <- reject_profile_shadow(info.expanded_path) do
+      {:ok, info}
     else
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp ensure_missing(info, original_path, message) do
+    case FileSystem.exists?(info) do
+      {:ok, false} -> :ok
+      {:ok, true} -> {:error, "#{message}: #{original_path}"}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp ensure_regular(info, original_path, message) do
+    case FileSystem.regular?(info) do
+      {:ok, true} -> :ok
+      {:ok, false} -> {:error, "#{message}: #{original_path}"}
       {:error, reason} -> {:error, reason}
     end
   end
@@ -412,18 +435,17 @@ defmodule Nex.Agent.Capability.Tool.Core.ApplyPatch do
     end
   end
 
-  defp apply_operation(%{type: :add, path: path, content: content}) do
-    with :ok <- File.mkdir_p(Path.dirname(path)),
-         :ok <- File.write(path, content) do
-      {:ok, %{undo: :delete, path: path}}
+  defp apply_operation(%{type: :add, path: path, path_info: info, content: content}) do
+    with :ok <- FileSystem.write_file(info, content) do
+      {:ok, %{undo: :delete, path: path, path_info: info}}
     else
       {:error, reason} -> {:error, "Failed to create #{path}: #{inspect(reason)}"}
     end
   end
 
-  defp apply_operation(%{type: :delete, path: path, original_content: content}) do
-    with :ok <- File.rm(path) do
-      {:ok, %{undo: :restore, path: path, content: content}}
+  defp apply_operation(%{type: :delete, path: path, path_info: info, original_content: content}) do
+    with :ok <- FileSystem.remove(info) do
+      {:ok, %{undo: :restore, path: path, path_info: info, content: content}}
     else
       {:error, reason} -> {:error, "Failed to delete #{path}: #{inspect(reason)}"}
     end
@@ -432,12 +454,13 @@ defmodule Nex.Agent.Capability.Tool.Core.ApplyPatch do
   defp apply_operation(%{
          type: :update,
          path: source,
+         path_info: source_info,
          destination: source,
          updated_content: content,
          original_content: original_content
        }) do
-    with :ok <- File.write(source, content) do
-      {:ok, %{undo: :restore, path: source, content: original_content}}
+    with :ok <- FileSystem.write_file(source_info, content) do
+      {:ok, %{undo: :restore, path: source, path_info: source_info, content: original_content}}
     else
       {:error, reason} -> {:error, "Failed to update #{source}: #{inspect(reason)}"}
     end
@@ -446,24 +469,27 @@ defmodule Nex.Agent.Capability.Tool.Core.ApplyPatch do
   defp apply_operation(%{
          type: :update,
          path: source,
+         path_info: source_info,
          destination: destination,
+         destination_info: destination_info,
          updated_content: content,
          original_content: original_content
        }) do
-    with :ok <- File.mkdir_p(Path.dirname(destination)),
-         :ok <- File.write(destination, content) do
-      case File.rm(source) do
+    with :ok <- FileSystem.write_file(destination_info, content) do
+      case FileSystem.remove(source_info) do
         :ok ->
           {:ok,
            %{
              undo: :move_restore,
              source: source,
+             source_info: source_info,
              destination: destination,
+             destination_info: destination_info,
              content: original_content
            }}
 
         {:error, reason} ->
-          rollback_move_destination(destination)
+          rollback_move_destination(destination_info)
           {:error, "Failed to move #{source} to #{destination}: #{inspect(reason)}"}
       end
     else
@@ -472,8 +498,8 @@ defmodule Nex.Agent.Capability.Tool.Core.ApplyPatch do
     end
   end
 
-  defp rollback_move_destination(destination) do
-    case File.rm(destination) do
+  defp rollback_move_destination(destination_info) do
+    case FileSystem.remove(destination_info) do
       :ok -> :ok
       {:error, _reason} -> :ok
     end
@@ -481,17 +507,20 @@ defmodule Nex.Agent.Capability.Tool.Core.ApplyPatch do
 
   defp rollback(applied) do
     Enum.each(applied, fn
-      %{undo: :delete, path: path} ->
-        File.rm(path)
+      %{undo: :delete, path_info: info} ->
+        FileSystem.remove(info)
 
-      %{undo: :restore, path: path, content: content} ->
-        File.mkdir_p(Path.dirname(path))
-        File.write(path, content)
+      %{undo: :restore, path_info: info, content: content} ->
+        FileSystem.write_file(info, content)
 
-      %{undo: :move_restore, source: source, destination: destination, content: content} ->
-        File.rm(destination)
-        File.mkdir_p(Path.dirname(source))
-        File.write(source, content)
+      %{
+        undo: :move_restore,
+        source_info: source_info,
+        destination_info: destination_info,
+        content: content
+      } ->
+        FileSystem.remove(destination_info)
+        FileSystem.write_file(source_info, content)
     end)
   end
 

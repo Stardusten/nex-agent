@@ -8,6 +8,7 @@ defmodule Nex.Agent.Knowledge.Memory do
 
   alias Nex.Agent.{Runtime.Config, Self.Evolution, Runtime.Workspace}
   alias Nex.Agent.Observe.ControlPlane.Log
+  alias Nex.Agent.Sandbox.FileSystem
   alias Nex.Agent.Turn.LLM.ProviderProfile
   require Log
 
@@ -129,17 +130,20 @@ defmodule Nex.Agent.Knowledge.Memory do
           {:ok, map()} | {:error, String.t()}
   def apply_memory_write(action, target, content, opts \\ []) do
     target = normalize_target(target)
-    current = read_target(target, opts)
 
-    case action do
-      "append" ->
-        do_append_memory(target, current, content, opts)
+    with {:ok, current} <- read_target(target, opts) do
+      case action do
+        "append" ->
+          do_append_memory(target, current, content, opts)
 
-      "set" ->
-        do_set_memory(target, content, opts)
+        "set" ->
+          do_set_memory(target, current, content, opts)
 
-      other ->
-        {:error, "Unsupported memory action: #{inspect(other)}"}
+        other ->
+          {:error, "Unsupported memory action: #{inspect(other)}"}
+      end
+    else
+      {:error, reason} -> {:error, file_error_message(reason)}
     end
   end
 
@@ -731,17 +735,36 @@ defmodule Nex.Agent.Knowledge.Memory do
   defp read_target(target, opts) do
     target_file = target_file(target, opts)
 
-    if File.exists?(target_file) do
-      File.read!(target_file)
-    else
-      ""
+    case authorization_ctx(opts) do
+      nil ->
+        {:ok, if(File.exists?(target_file), do: File.read!(target_file), else: "")}
+
+      ctx ->
+        auth_ctx = put_ctx_workspace(ctx, workspace_path(opts))
+
+        with {:ok, info} <- FileSystem.authorize(target_file, :read, auth_ctx),
+             {:ok, exists?} <- FileSystem.exists?(info) do
+          if exists? do
+            FileSystem.read_file(info)
+          else
+            {:ok, ""}
+          end
+        end
     end
   end
 
   defp write_target(target, content, opts) do
-    ensure_workspace(opts)
-    File.write!(target_file(target, opts), content)
-    :ok
+    case authorization_ctx(opts) do
+      nil ->
+        ensure_workspace(opts)
+        File.write!(target_file(target, opts), content)
+        :ok
+
+      ctx ->
+        target_file = target_file(target, opts)
+        auth_ctx = put_ctx_workspace(ctx, workspace_path(opts))
+        FileSystem.write_file(target_file, content, auth_ctx)
+    end
   end
 
   defp do_append_memory(_target, _current, nil, _opts),
@@ -770,46 +793,63 @@ defmodule Nex.Agent.Knowledge.Memory do
 
       changed? = normalize_memory_body(updated) != normalize_memory_body(current)
 
-      if changed? do
-        :ok = write_target(target, updated, opts)
+      with :ok <- maybe_write_target(changed?, target, updated, opts) do
+        {:ok,
+         %{
+           target: target,
+           action: "append",
+           content: trimmed,
+           changed: changed?,
+           before_hash: hash_content(current),
+           after_hash: hash_content(updated),
+           memory_bytes: byte_size(updated)
+         }}
+      else
+        {:error, reason} -> {:error, file_error_message(reason)}
       end
+    end
+  end
 
+  defp do_set_memory(_target, _current, nil, _opts), do: {:error, "content is required for set"}
+  defp do_set_memory(_target, _current, "", _opts), do: {:error, "content is required for set"}
+
+  defp do_set_memory(target, current, content, opts) do
+    updated = String.trim_trailing(content) <> "\n"
+    changed? = normalize_memory_body(updated) != normalize_memory_body(current)
+
+    with :ok <- maybe_write_target(changed?, target, updated, opts) do
       {:ok,
        %{
          target: target,
-         action: "append",
-         content: trimmed,
+         action: "set",
+         content: String.trim(updated),
          changed: changed?,
          before_hash: hash_content(current),
          after_hash: hash_content(updated),
          memory_bytes: byte_size(updated)
        }}
+    else
+      {:error, reason} -> {:error, file_error_message(reason)}
     end
   end
 
-  defp do_set_memory(_target, nil, _opts), do: {:error, "content is required for set"}
-  defp do_set_memory(_target, "", _opts), do: {:error, "content is required for set"}
+  defp maybe_write_target(true, target, content, opts), do: write_target(target, content, opts)
+  defp maybe_write_target(false, _target, _content, _opts), do: :ok
 
-  defp do_set_memory(target, content, opts) do
-    current = read_target(target, opts)
-    updated = String.trim_trailing(content) <> "\n"
-    changed? = normalize_memory_body(updated) != normalize_memory_body(current)
+  defp authorization_ctx(opts), do: Keyword.get(opts, :authorize_ctx)
 
-    if changed? do
-      :ok = write_target(target, updated, opts)
-    end
+  defp put_ctx_workspace(ctx, workspace) when is_map(ctx), do: Map.put(ctx, :workspace, workspace)
 
-    {:ok,
-     %{
-       target: target,
-       action: "set",
-       content: String.trim(updated),
-       changed: changed?,
-       before_hash: hash_content(current),
-       after_hash: hash_content(updated),
-       memory_bytes: byte_size(updated)
-     }}
-  end
+  defp put_ctx_workspace(ctx, workspace) when is_list(ctx),
+    do: Keyword.put(ctx, :workspace, workspace)
+
+  defp put_ctx_workspace(_ctx, workspace), do: %{workspace: workspace}
+
+  defp file_error_message({:file_error, path, reason}),
+    do: "File access failed for #{path}: #{inspect(reason)}"
+
+  defp file_error_message(reason) when is_binary(reason), do: reason
+  defp file_error_message(reason), do: inspect(reason)
 
   defp tool_choice_for(provider, base_url, name) do
     ProviderProfile.forced_tool_choice(provider, name, base_url: base_url)

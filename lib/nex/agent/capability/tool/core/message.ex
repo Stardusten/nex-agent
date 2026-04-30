@@ -6,6 +6,7 @@ defmodule Nex.Agent.Capability.Tool.Core.Message do
   alias Nex.Agent.Interface.Media.Attachment
   alias Nex.Agent.Interface.Outbound
   alias Nex.Agent.Interface.Outbound.Message, as: OutboundMessage
+  alias Nex.Agent.Sandbox.FileSystem
 
   def name, do: "message"
   def description, do: "Send a message to the user immediately."
@@ -208,30 +209,47 @@ defmodule Nex.Agent.Capability.Tool.Core.Message do
   defp build_attachment(path, kind, channel, ctx) when is_binary(path) do
     expanded_path = expand_attachment_path(path, ctx)
 
-    cond do
-      not File.exists?(expanded_path) ->
-        {:error, {:attachment_not_found, expanded_path}}
-
-      not File.regular?(expanded_path) ->
-        {:error, {:attachment_not_regular_file, expanded_path}}
-
-      true ->
-        stat = File.stat!(expanded_path)
-
-        {:ok,
-         %Attachment{
-           id: "out_" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower),
-           channel: channel,
-           kind: kind,
-           mime_type: MIME.from_path(expanded_path) || default_mime_type(kind),
-           filename: Path.basename(expanded_path),
-           local_path: expanded_path,
-           size_bytes: stat.size,
-           source: :generated,
-           platform_ref: %{},
-           metadata: %{}
-         }}
+    with {:ok, info} <- FileSystem.authorize(expanded_path, :stream, ctx),
+         {:ok, regular?} <- FileSystem.regular?(info),
+         :ok <- ensure_attachment_regular(regular?, info),
+         {:ok, stat} <- FileSystem.stat(info) do
+      {:ok,
+       %Attachment{
+         id: "out_" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower),
+         channel: channel,
+         kind: kind,
+         mime_type: MIME.from_path(info.expanded_path) || default_mime_type(kind),
+         filename: Path.basename(info.expanded_path),
+         local_path: info.expanded_path,
+         size_bytes: stat.size,
+         source: :generated,
+         platform_ref: %{},
+         metadata: %{"sandbox_authorization" => sandbox_authorization_metadata(info, :stream)}
+       }}
     end
+  end
+
+  defp ensure_attachment_regular(true, _info), do: :ok
+
+  defp ensure_attachment_regular(false, %{target_exists?: false, expanded_path: path}) do
+    {:error, {:attachment_not_found, path}}
+  end
+
+  defp ensure_attachment_regular(false, %{expanded_path: path}) do
+    {:error, {:attachment_not_regular_file, path}}
+  end
+
+  defp sandbox_authorization_metadata(info, operation) do
+    %{
+      "operation" => Atom.to_string(operation),
+      "input_path" => info.input_path,
+      "expanded_path" => info.expanded_path,
+      "canonical_path" => info.canonical_path,
+      "existing_ancestor" => info.existing_ancestor,
+      "existing_ancestor_realpath" => info.existing_ancestor_realpath,
+      "missing_suffix" => info.missing_suffix,
+      "target_exists" => info.target_exists?
+    }
   end
 
   defp normalize_native_payload(nil), do: {:ok, nil}

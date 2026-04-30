@@ -3,6 +3,7 @@ defmodule Nex.Agent.Capability.Tool.Core.SoulUpdate do
 
   @behaviour Nex.Agent.Capability.Tool.Behaviour
   alias Nex.Agent.Turn.ContextDiagnostics
+  alias Nex.Agent.Sandbox.FileSystem
 
   @legacy_footers [
     "*编辑此文件来自定义助手的行为风格和价值观。身份定义由代码层管理，此处不可重新定义。*",
@@ -59,11 +60,9 @@ defmodule Nex.Agent.Capability.Tool.Core.SoulUpdate do
             )
 
         soul_path = Path.join(workspace, "SOUL.md")
+        auth_ctx = put_ctx_workspace(ctx, workspace)
 
-        dir = Path.dirname(soul_path)
-        File.mkdir_p!(dir)
-
-        case File.write(soul_path, String.trim_trailing(content) <> "\n") do
+        case FileSystem.write_file(soul_path, String.trim_trailing(content) <> "\n", auth_ctx) do
           :ok -> {:ok, "SOUL.md updated successfully."}
           {:error, reason} -> {:error, "Error updating SOUL.md: #{inspect(reason)}"}
         end
@@ -79,4 +78,11 @@ defmodule Nex.Agent.Capability.Tool.Core.SoulUpdate do
     |> String.replace(~r/\n[ \t]*---[ \t]*\n\s*\z/u, "\n")
     |> String.trim_trailing()
   end
+
+  defp put_ctx_workspace(ctx, workspace) when is_map(ctx), do: Map.put(ctx, :workspace, workspace)
+
+  defp put_ctx_workspace(ctx, workspace) when is_list(ctx),
+    do: Keyword.put(ctx, :workspace, workspace)
+
+  defp put_ctx_workspace(_ctx, workspace), do: %{workspace: workspace}
 end

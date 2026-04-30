@@ -12,13 +12,12 @@ defmodule Nex.Agent.Knowledge.ProjectMemory do
   def detect_project(cwd) when is_binary(cwd) do
     cwd = Path.expand(cwd)
 
-    case System.cmd("git", ["rev-parse", "--show-toplevel"], stderr_to_stdout: true, cd: cwd) do
-      {path, 0} ->
+    case git_root(cwd) do
+      path when is_binary(path) ->
         path
-        |> String.trim()
         |> Path.basename()
 
-      _ ->
+      nil ->
         cwd
         |> Path.basename()
         |> blank_to_nil()
@@ -114,6 +113,23 @@ defmodule Nex.Agent.Knowledge.ProjectMemory do
 
   defp blank_to_nil(""), do: nil
   defp blank_to_nil(value), do: value
+
+  defp git_root(path), do: git_root(path, 0)
+
+  defp git_root(path, depth) when depth > 80 or path in [nil, ""], do: nil
+
+  defp git_root(path, depth) do
+    cond do
+      File.dir?(Path.join(path, ".git")) or File.regular?(Path.join(path, ".git")) ->
+        path
+
+      Path.dirname(path) == path ->
+        nil
+
+      true ->
+        path |> Path.dirname() |> git_root(depth + 1)
+    end
+  end
 
   defp stringify_keys(map) do
     Enum.into(map, %{}, fn {key, value} ->
