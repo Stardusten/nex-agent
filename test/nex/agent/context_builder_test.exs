@@ -51,6 +51,11 @@ defmodule Nex.Agent.Turn.ContextBuilderTest do
     assert prompt =~ "`builtin:workbench-app-authoring`"
     assert prompt =~ "load `builtin:memory-and-evolution-routing` before acting"
     assert prompt =~ "Use `ask_advisor` when you need an internal second opinion"
+    assert prompt =~ "## Command Sandbox And Approval"
+    assert prompt =~ "Some commands can appear to fail or return misleading results"
+    assert prompt =~ ~s(sandbox_permissions: "require_escalated")
+    assert prompt =~ "do not first ask the user in prose"
+    assert prompt =~ "Elevated command approval is once-only"
 
     refute prompt =~ "Strict ship checks such as `format`, `credo`, or `dialyzer`"
     refute prompt =~ "ControlPlane observations are the self-observation source of truth"
@@ -611,9 +616,18 @@ defmodule Nex.Agent.Turn.ContextBuilderTest do
     runtime_context =
       ContextBuilder.build_runtime_context("telegram", "1", cwd: workspace)
 
+    [_, actual_repo_root] = Regex.run(~r/Git Repository Root: (.+)/, runtime_context)
+
     assert runtime_context =~ "Working Directory: #{Path.expand(workspace)}"
-    assert runtime_context =~ "Git Repository Root: #{String.trim(expected_repo_root)}"
+
+    assert normalize_macos_tmp_path(actual_repo_root) ==
+             normalize_macos_tmp_path(String.trim(expected_repo_root))
+
     refute runtime_context =~ "Mode:"
     refute runtime_context =~ "Secondary Modes:"
+  end
+
+  defp normalize_macos_tmp_path(path) do
+    String.replace_prefix(path, "/private/var/", "/var/")
   end
 end

@@ -438,15 +438,24 @@ defmodule Nex.Agent.Sandbox.Approval do
 
   defp grant_spec_for_choice(_request, :once), do: {:ok, :once}
 
-  defp grant_spec_for_choice(%Request{} = request, :session) do
+  defp grant_spec_for_choice(%Request{} = request, choice)
+       when choice in [:session, :always, :similar] do
+    if Request.elevated?(request) do
+      {:error, :elevated_approval_is_once_only}
+    else
+      grant_spec_for_non_elevated_choice(request, choice)
+    end
+  end
+
+  defp grant_spec_for_non_elevated_choice(%Request{} = request, :session) do
     {:ok, {:session, request.grant_key, request.subject}}
   end
 
-  defp grant_spec_for_choice(%Request{} = request, :always) do
+  defp grant_spec_for_non_elevated_choice(%Request{} = request, :always) do
     {:ok, {:always, request.grant_key, request.subject}}
   end
 
-  defp grant_spec_for_choice(%Request{} = request, :similar) do
+  defp grant_spec_for_non_elevated_choice(%Request{} = request, :similar) do
     case similar_grant_option(request) do
       nil -> {:error, :no_similar_grant_option}
       option -> {:ok, {:session, option["grant_key"], option["subject"] || request.subject}}

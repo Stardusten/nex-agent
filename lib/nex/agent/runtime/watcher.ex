@@ -67,21 +67,39 @@ defmodule Nex.Agent.Runtime.Watcher do
   end
 
   defp reload_runtime(state, changed_paths) do
-    if Enum.any?(changed_paths, &skills_path?/1), do: state.skills_reload_fun.()
+    if Enum.any?(changed_paths, &skills_path?/1),
+      do: safe_call(:skills_reload, fn -> state.skills_reload_fun.() end)
 
     if Enum.any?(
          changed_paths,
          &(tools_path?(&1) or plugins_path?(&1) or plugin_manifest_path?(&1))
        ),
-       do: state.tools_reload_fun.()
+       do: safe_call(:tools_reload, fn -> state.tools_reload_fun.() end)
 
-    case state.runtime_reload_fun.(runtime_reload_opts(state, changed_paths)) do
+    case safe_call(:runtime_reload, fn ->
+           state.runtime_reload_fun.(runtime_reload_opts(state, changed_paths))
+         end) do
       {:ok, _snapshot} ->
         :ok
 
       {:error, reason} ->
         Logger.warning("[Runtime.Watcher] Runtime reload failed: #{inspect(reason)}")
+
+      _other ->
+        :ok
     end
+  end
+
+  defp safe_call(label, fun) when is_function(fun, 0) do
+    fun.()
+  rescue
+    e ->
+      Logger.warning("[Runtime.Watcher] #{label} failed: #{inspect(e)}")
+      {:error, e}
+  catch
+    kind, reason ->
+      Logger.warning("[Runtime.Watcher] #{label} failed: #{kind} #{inspect(reason)}")
+      {:error, {kind, reason}}
   end
 
   defp schedule_poll(%__MODULE__{poll_interval_ms: interval}) when interval in [nil, false] do

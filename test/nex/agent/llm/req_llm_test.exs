@@ -4,6 +4,7 @@ defmodule Nex.Agent.Turn.LLM.ReqLLMTest do
   alias Nex.Agent.Turn.LLM.ReqLLM, as: AgentReqLLM
   alias Nex.Agent.LLM.Providers.OpenAICodex.Stream
   alias ReqLLM.Message
+  alias ReqLLM.StreamResponse.MetadataHandle
 
   test "ollama requests use a non-empty placeholder api key" do
     previous_openai_key = System.get_env("OPENAI_API_KEY")
@@ -191,6 +192,81 @@ defmodule Nex.Agent.Turn.LLM.ReqLLMTest do
     assert_receive {:stream_event, {:delta, "ok"}}
     assert_receive {:stream_event, {:done, metadata}}
     assert metadata[:finish_reason] == "stop"
+  end
+
+  test "map streaming responses preserve provider incomplete metadata" do
+    stream_text_fun = fn _model_spec, _messages, _opts ->
+      {:ok,
+       %{
+         stream: [],
+         finish_reason: :incomplete,
+         status: "incomplete",
+         incomplete_details: %{reason: "max_output_tokens"}
+       }}
+    end
+
+    callback = fn event -> send(self(), {:stream_event, event}) end
+
+    assert :ok =
+             AgentReqLLM.stream(
+               [%{"role" => "user", "content" => "hello"}],
+               [
+                 provider: :openai_codex,
+                 model: "gpt-5.5",
+                 api_key: "oauth-access-token",
+                 req_llm_stream_text_fun: stream_text_fun
+               ],
+               callback
+             )
+
+    assert_receive {:stream_event, {:done, metadata}}
+    assert metadata[:finish_reason] == "incomplete"
+    assert metadata[:status] == "incomplete"
+    assert metadata[:incomplete_details] == %{reason: "max_output_tokens"}
+  end
+
+  test "StreamResponse metadata is preserved without response headers" do
+    {:ok, metadata_handle} =
+      MetadataHandle.start_link(fn ->
+        %{
+          finish_reason: :incomplete,
+          status: 200,
+          headers: %{"authorization" => "secret"},
+          incomplete_details: %{reason: "max_output_tokens"}
+        }
+      end)
+
+    stream_text_fun = fn _model_spec, _messages, _opts ->
+      {:ok,
+       %ReqLLM.StreamResponse{
+         stream: [ReqLLM.StreamChunk.text("ok")],
+         metadata_handle: metadata_handle,
+         cancel: fn -> :ok end,
+         model: %{id: "gpt-5.5"},
+         context: nil
+       }}
+    end
+
+    callback = fn event -> send(self(), {:stream_event, event}) end
+
+    assert :ok =
+             AgentReqLLM.stream(
+               [%{"role" => "user", "content" => "hello"}],
+               [
+                 provider: :openai_codex,
+                 model: "gpt-5.5",
+                 api_key: "oauth-access-token",
+                 req_llm_stream_text_fun: stream_text_fun
+               ],
+               callback
+             )
+
+    assert_receive {:stream_event, {:delta, "ok"}}
+    assert_receive {:stream_event, {:done, metadata}}
+    assert metadata[:finish_reason] == "incomplete"
+    assert metadata[:status] == 200
+    assert metadata[:incomplete_details] == %{reason: "max_output_tokens"}
+    refute Map.has_key?(metadata, :headers)
   end
 
   test "openai-codex stream adapter writes instructions into codex request body" do

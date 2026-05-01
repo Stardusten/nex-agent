@@ -59,15 +59,22 @@ defmodule Nex.Agent.Interface.Outbound.Approval do
 
   @spec actions(Request.t()) :: [action()]
   def actions(%Request{} = request) do
-    [
-      action("approve_once", "Approve once", "/approve #{request.id}", "success"),
-      action("approve_session", "Allow command", "/approve #{request.id} session", "primary")
-    ] ++
-      similar_actions(request) ++
+    if Request.elevated?(request) do
       [
-        action("approve_always", "Always allow", "/approve #{request.id} always", "secondary"),
+        action("approve_once", "Approve once", "/approve #{request.id}", "success"),
         action("deny_once", "Decline", "/deny #{request.id}", "danger")
       ]
+    else
+      [
+        action("approve_once", "Approve once", "/approve #{request.id}", "success"),
+        action("approve_session", "Allow command", "/approve #{request.id} session", "primary")
+      ] ++
+        similar_actions(request) ++
+        [
+          action("approve_always", "Always allow", "/approve #{request.id} always", "secondary"),
+          action("deny_once", "Decline", "/deny #{request.id}", "danger")
+        ]
+    end
   end
 
   @spec custom_id(String.t(), String.t()) :: String.t()

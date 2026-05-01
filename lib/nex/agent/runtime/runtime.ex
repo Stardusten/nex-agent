@@ -150,111 +150,145 @@ defmodule Nex.Agent.Runtime do
 
   defp build_snapshot(%__MODULE__{} = state, opts, version) do
     with {:ok, config} <- call_builder(config_loader(opts, state), [opts]),
-         {:ok, workspace} <- resolve_workspace(config, opts),
-         {:ok, plugins_result} <-
-           call_builder(plugins_builder(opts, state), [
-             opts
-             |> Keyword.put(:workspace, workspace)
-             |> Keyword.put(:config, config)
-           ]),
-         plugins_data = normalize_plugins_data(plugins_result),
-         plugins_data = merge_plugin_config_diagnostics(config, plugins_data),
-         {:ok, command_definitions} <-
-           call_command_builder(command_builder(opts), [
-             opts
-             |> Keyword.put(:workspace, workspace)
-             |> Keyword.put(:config, config)
-             |> Keyword.put(:plugin_data, plugins_data)
-           ]),
-         subagent_profiles = SubagentProfiles.load(config, workspace: workspace),
-         {:ok, skills_result} <-
-           call_builder(skills_builder(opts, state), [
-             opts
-             |> Keyword.put(:workspace, workspace)
-             |> Keyword.put(:config, config)
-             |> Keyword.put(:plugin_data, plugins_data)
-           ]),
-         skills_data = normalize_skills_data(skills_result),
-         {:ok, prompt, diagnostics} <-
-           call_prompt_builder(prompt_builder(opts, state), [
-             opts
-             |> Keyword.put(:workspace, workspace)
-             |> Keyword.put(:skill_catalog_prompt, skills_data.catalog_prompt)
-           ]),
-         {:ok, definitions_all} <-
-           call_tool_definitions_builder(
-             tool_definitions_builder(opts, state),
-             :all,
-             tool_definition_opts(config, workspace, :all, subagent_profiles, plugins_data)
-           ),
-         {:ok, definitions_follow_up} <-
-           call_tool_definitions_builder(
-             tool_definitions_builder(opts, state),
-             :follow_up,
-             tool_definition_opts(config, workspace, :follow_up, subagent_profiles, plugins_data)
-           ),
-         {:ok, definitions_subagent} <-
-           call_tool_definitions_builder(
-             tool_definitions_builder(opts, state),
-             :subagent,
-             tool_definition_opts(config, workspace, :subagent, subagent_profiles, plugins_data)
-           ),
-         {:ok, definitions_cron} <-
-           call_tool_definitions_builder(
-             tool_definitions_builder(opts, state),
-             :cron,
-             tool_definition_opts(config, workspace, :cron, subagent_profiles, plugins_data)
-           ),
-         {:ok, hooks_data} <-
-           call_builder(hooks_builder(opts, state), [Keyword.put(opts, :workspace, workspace)]) do
-      prompt_data = %{
-        system_prompt: prompt,
-        diagnostics: diagnostics,
-        hash: hash({prompt, diagnostics})
-      }
+         {:ok, workspace} <- resolve_workspace(config, opts) do
+      plugins_data =
+        optional_runtime_data(
+          :plugins,
+          fallback_plugins_data(state.snapshot),
+          fn ->
+            with {:ok, plugins_result} <-
+                   call_builder(plugins_builder(opts, state), [
+                     opts
+                     |> Keyword.put(:workspace, workspace)
+                     |> Keyword.put(:config, config)
+                   ]) do
+              {:ok, normalize_plugins_data(plugins_result)}
+            end
+          end
+        )
+        |> then(&merge_plugin_config_diagnostics(config, &1))
 
-      commands_data = %{
-        definitions: command_definitions,
-        hash: hash(command_definitions)
-      }
+      command_definitions =
+        optional_runtime_value(
+          :commands,
+          fallback_command_definitions(state.snapshot),
+          fn ->
+            call_command_builder(command_builder(opts), [
+              opts
+              |> Keyword.put(:workspace, workspace)
+              |> Keyword.put(:config, config)
+              |> Keyword.put(:plugin_data, plugins_data)
+            ])
+          end
+        )
 
-      tools_data = %{
-        definitions_all: definitions_all,
-        definitions_follow_up: definitions_follow_up,
-        definitions_subagent: definitions_subagent,
-        definitions_cron: definitions_cron,
-        hash:
-          hash({definitions_all, definitions_follow_up, definitions_subagent, definitions_cron})
-      }
+      subagent_profiles =
+        optional_runtime_value(
+          :subagents,
+          fallback_subagent_profiles(state.snapshot),
+          fn -> {:ok, SubagentProfiles.load(config, workspace: workspace)} end
+        )
 
-      subagent_definitions = SubagentProfiles.definitions(subagent_profiles)
+      skills_data =
+        optional_runtime_data(
+          :skills,
+          fallback_skills_data(state.snapshot),
+          fn ->
+            with {:ok, skills_result} <-
+                   call_builder(skills_builder(opts, state), [
+                     opts
+                     |> Keyword.put(:workspace, workspace)
+                     |> Keyword.put(:config, config)
+                     |> Keyword.put(:plugin_data, plugins_data)
+                   ]) do
+              {:ok, normalize_skills_data(skills_result)}
+            end
+          end
+        )
 
-      subagents_data = %{
-        profiles: subagent_profiles,
-        definitions: subagent_definitions,
-        hash: hash(subagent_profiles)
-      }
+      with {:ok, prompt, diagnostics} <-
+             call_prompt_builder(prompt_builder(opts, state), [
+               opts
+               |> Keyword.put(:workspace, workspace)
+               |> Keyword.put(:skill_catalog_prompt, skills_data.catalog_prompt)
+             ]) do
+        definition_opts = fn surface ->
+          tool_definition_opts(config, workspace, surface, subagent_profiles, plugins_data)
+        end
 
-      workbench_data = workbench_data(config, workspace)
+        definitions_all = optional_tool_definitions(state, opts, :all, definition_opts.(:all))
 
-      {:ok,
-       %Snapshot{
-         version: version,
-         config_path: Config.config_path(opts),
-         config: config,
-         workspace: workspace,
-         sandbox: Config.sandbox_runtime(config, workspace: workspace),
-         channels: Config.channels_runtime(config, plugin_data: plugins_data),
-         commands: commands_data,
-         prompt: prompt_data,
-         tools: tools_data,
-         subagents: subagents_data,
-         skills: skills_data,
-         hooks: hooks_data,
-         plugins: plugins_data,
-         workbench: workbench_data,
-         changed_paths: changed_paths(opts)
-       }}
+        definitions_follow_up =
+          optional_tool_definitions(state, opts, :follow_up, definition_opts.(:follow_up))
+
+        definitions_subagent =
+          optional_tool_definitions(state, opts, :subagent, definition_opts.(:subagent))
+
+        definitions_cron = optional_tool_definitions(state, opts, :cron, definition_opts.(:cron))
+
+        hooks_data =
+          optional_runtime_data(
+            :hooks,
+            fallback_hooks_data(state.snapshot),
+            fn ->
+              call_builder(hooks_builder(opts, state), [Keyword.put(opts, :workspace, workspace)])
+            end
+          )
+
+        prompt_data = %{
+          system_prompt: prompt,
+          diagnostics: diagnostics,
+          hash: hash({prompt, diagnostics})
+        }
+
+        commands_data = %{
+          definitions: command_definitions,
+          hash: hash(command_definitions)
+        }
+
+        tools_data = %{
+          definitions_all: definitions_all,
+          definitions_follow_up: definitions_follow_up,
+          definitions_subagent: definitions_subagent,
+          definitions_cron: definitions_cron,
+          hash:
+            hash({definitions_all, definitions_follow_up, definitions_subagent, definitions_cron})
+        }
+
+        subagent_definitions = SubagentProfiles.definitions(subagent_profiles)
+
+        subagents_data = %{
+          profiles: subagent_profiles,
+          definitions: subagent_definitions,
+          hash: hash(subagent_profiles)
+        }
+
+        workbench_data =
+          optional_runtime_data(
+            :workbench,
+            fallback_workbench_data(state.snapshot),
+            fn -> {:ok, workbench_data(config, workspace)} end
+          )
+
+        {:ok,
+         %Snapshot{
+           version: version,
+           config_path: Config.config_path(opts),
+           config: config,
+           workspace: workspace,
+           sandbox: Config.sandbox_runtime(config, workspace: workspace),
+           channels: Config.channels_runtime(config, plugin_data: plugins_data),
+           commands: commands_data,
+           prompt: prompt_data,
+           tools: tools_data,
+           subagents: subagents_data,
+           skills: skills_data,
+           hooks: hooks_data,
+           plugins: plugins_data,
+           workbench: workbench_data,
+           changed_paths: changed_paths(opts)
+         }}
+      end
     end
   end
 
@@ -298,6 +332,111 @@ defmodule Nex.Agent.Runtime do
   catch
     kind, reason -> {:error, {kind, reason}}
   end
+
+  defp optional_runtime_value(label, fallback, fun) when is_function(fun, 0) do
+    case fun.() do
+      {:ok, value} ->
+        value
+
+      {:error, reason} ->
+        warn_optional_runtime_failure(label, reason)
+        fallback
+    end
+  rescue
+    e ->
+      warn_optional_runtime_failure(label, e)
+      fallback
+  catch
+    kind, reason ->
+      warn_optional_runtime_failure(label, {kind, reason})
+      fallback
+  end
+
+  defp optional_runtime_data(label, fallback, fun) when is_function(fun, 0) do
+    case fun.() do
+      {:ok, value} ->
+        value
+
+      {:error, reason} ->
+        warn_optional_runtime_failure(label, reason)
+        append_runtime_diagnostic(fallback, label, reason)
+    end
+  rescue
+    e ->
+      warn_optional_runtime_failure(label, e)
+      append_runtime_diagnostic(fallback, label, e)
+  catch
+    kind, reason ->
+      failure = {kind, reason}
+      warn_optional_runtime_failure(label, failure)
+      append_runtime_diagnostic(fallback, label, failure)
+  end
+
+  defp optional_tool_definitions(state, opts, surface, definition_opts) do
+    optional_runtime_value(
+      {:tools, surface},
+      fallback_tool_definitions(state.snapshot, surface),
+      fn ->
+        call_tool_definitions_builder(
+          tool_definitions_builder(opts, state),
+          surface,
+          definition_opts
+        )
+      end
+    )
+  end
+
+  defp warn_optional_runtime_failure(label, reason) do
+    Logger.warning(
+      "[Runtime] Optional #{format_optional_label(label)} projection failed; using fallback: #{inspect(reason)}"
+    )
+  end
+
+  defp format_optional_label({label, value}), do: "#{label}.#{value}"
+  defp format_optional_label(label), do: to_string(label)
+
+  defp append_runtime_diagnostic(data, label, reason) when is_map(data) do
+    diagnostics = Map.get(data, :diagnostics) || Map.get(data, "diagnostics") || []
+    diagnostic = runtime_diagnostic(label, reason)
+
+    data
+    |> Map.put(:diagnostics, diagnostics ++ [diagnostic])
+    |> maybe_rehash_runtime_data()
+  end
+
+  defp append_runtime_diagnostic(data, _label, _reason), do: data
+
+  defp runtime_diagnostic(label, reason) do
+    %{
+      "code" => "optional_runtime_projection_failed",
+      "component" => format_optional_label(label),
+      "message" => Exception.format_banner(:error, reason)
+    }
+  end
+
+  defp maybe_rehash_runtime_data(
+         %{manifests: manifests, enabled: enabled, contributions: contributions} = data
+       ) do
+    diagnostics = Map.get(data, :diagnostics, [])
+    Map.put(data, :hash, hash({manifests, enabled, contributions, diagnostics}))
+  end
+
+  defp maybe_rehash_runtime_data(%{cards: cards, catalog_prompt: catalog_prompt} = data) do
+    diagnostics = Map.get(data, :diagnostics, [])
+    Map.put(data, :hash, hash({cards, catalog_prompt, diagnostics}))
+  end
+
+  defp maybe_rehash_runtime_data(%{entries: entries, version: version} = data) do
+    diagnostics = Map.get(data, :diagnostics, [])
+    Map.put(data, :hash, hash({entries, diagnostics, version}))
+  end
+
+  defp maybe_rehash_runtime_data(%{runtime: runtime, apps: apps} = data) do
+    diagnostics = Map.get(data, :diagnostics, [])
+    Map.put(data, :hash, hash({runtime, apps, diagnostics}))
+  end
+
+  defp maybe_rehash_runtime_data(data), do: data
 
   defp call_tool_definitions_builder(fun, filter, definition_opts) when is_function(fun, 2) do
     call_builder(fun, [filter, definition_opts])
@@ -361,6 +500,9 @@ defmodule Nex.Agent.Runtime do
     }
   end
 
+  defp fallback_skills_data(%Snapshot{skills: %{} = skills}), do: normalize_skills_data(skills)
+  defp fallback_skills_data(_snapshot), do: normalize_skills_data(%{})
+
   defp normalize_plugins_data(%{} = plugins) do
     manifests = Map.get(plugins, :manifests) || Map.get(plugins, "manifests") || []
     enabled = Map.get(plugins, :enabled) || Map.get(plugins, "enabled") || []
@@ -388,6 +530,49 @@ defmodule Nex.Agent.Runtime do
       diagnostics: [],
       hash: hash({[], [], contributions, []})
     }
+  end
+
+  defp fallback_plugins_data(%Snapshot{plugins: %{} = plugins}),
+    do: normalize_plugins_data(plugins)
+
+  defp fallback_plugins_data(_snapshot), do: normalize_plugins_data(%{})
+
+  defp fallback_command_definitions(%Snapshot{commands: %{definitions: definitions}})
+       when is_list(definitions),
+       do: definitions
+
+  defp fallback_command_definitions(_snapshot), do: []
+
+  defp fallback_subagent_profiles(%Snapshot{subagents: %{profiles: profiles}})
+       when is_map(profiles),
+       do: profiles
+
+  defp fallback_subagent_profiles(_snapshot), do: SubagentProfiles.load(nil)
+
+  defp fallback_tool_definitions(%Snapshot{tools: tools}, :all),
+    do: Map.get(tools, :definitions_all, [])
+
+  defp fallback_tool_definitions(%Snapshot{tools: tools}, :follow_up),
+    do: Map.get(tools, :definitions_follow_up, [])
+
+  defp fallback_tool_definitions(%Snapshot{tools: tools}, :subagent),
+    do: Map.get(tools, :definitions_subagent, [])
+
+  defp fallback_tool_definitions(%Snapshot{tools: tools}, :cron),
+    do: Map.get(tools, :definitions_cron, [])
+
+  defp fallback_tool_definitions(_snapshot, _surface), do: []
+
+  defp fallback_hooks_data(%Snapshot{hooks: %{} = hooks}), do: hooks
+
+  defp fallback_hooks_data(_snapshot),
+    do: %{entries: [], diagnostics: [], path: nil, version: 1, hash: hash({[], [], 1})}
+
+  defp fallback_workbench_data(%Snapshot{workbench: %{} = workbench}), do: workbench
+
+  defp fallback_workbench_data(_snapshot) do
+    runtime = %{"enabled" => false, "host" => "127.0.0.1", "port" => 50_051, "apps" => %{}}
+    %{runtime: runtime, apps: [], diagnostics: [], hash: hash({runtime, [], []})}
   end
 
   defp normalize_plugin_contributions(plugins) do

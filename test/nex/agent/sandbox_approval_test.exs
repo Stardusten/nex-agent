@@ -81,6 +81,44 @@ defmodule Nex.Agent.SandboxApprovalTest do
     assert Approval.request(follow_up, server: server) == {:ok, :approved}
   end
 
+  test "elevated command approval is once-only", %{workspace: workspace, server: server} do
+    request =
+      request(workspace,
+        grant_key: "command:execute:escalated:abc",
+        metadata: %{"sandbox_permissions" => "require_escalated"},
+        grant_options: [
+          %{
+            "level" => "exact",
+            "grant_key" => "command:execute:escalated:abc",
+            "subject" => "npm install"
+          },
+          %{
+            "level" => "similar",
+            "grant_key" => "command:execute:family:npm:install",
+            "subject" => "npm install"
+          }
+        ]
+      )
+
+    task = Task.async(fn -> Approval.request(request, server: server) end)
+    wait_for(fn -> Approval.pending?(workspace, "feishu:chat", server: server) end)
+
+    assert {:error, :elevated_approval_is_once_only} =
+             Approval.approve(workspace, "feishu:chat", :session, server: server)
+
+    assert {:error, :elevated_approval_is_once_only} =
+             Approval.approve(workspace, "feishu:chat", :similar, server: server)
+
+    assert {:error, :elevated_approval_is_once_only} =
+             Approval.approve(workspace, "feishu:chat", :always, server: server)
+
+    assert {:ok, %{approved: 1, granted: nil, choice: :once}} =
+             Approval.approve(workspace, "feishu:chat", :once, server: server)
+
+    assert Task.await(task) == {:ok, :approved}
+    refute Approval.approved?(workspace, "feishu:chat", request, server: server)
+  end
+
   test "request id approval resolves the selected pending request only", %{
     workspace: workspace,
     server: server

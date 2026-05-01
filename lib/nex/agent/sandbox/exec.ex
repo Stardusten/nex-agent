@@ -12,6 +12,16 @@ defmodule Nex.Agent.Sandbox.Exec do
 
   @poll_ms 50
   @max_output_bytes 50_000
+  @default_path_entries [
+    "/opt/homebrew/bin",
+    "/opt/homebrew/sbin",
+    "/usr/local/bin",
+    "/usr/bin",
+    "/bin",
+    "/usr/sbin",
+    "/sbin",
+    Path.expand("~/.local/bin")
+  ]
 
   @spec run(Command.t(), Policy.t()) :: {:ok, Result.t()} | {:error, Result.t()}
   def run(%Command{} = command, %Policy{} = policy) do
@@ -252,12 +262,7 @@ defmodule Nex.Agent.Sandbox.Exec do
   defp env_for(%Policy{} = policy, %Command{} = command) do
     system_env =
       policy.env_allowlist
-      |> Enum.flat_map(fn key ->
-        case System.get_env(key) do
-          nil -> []
-          value -> [{key, value}]
-        end
-      end)
+      |> Enum.flat_map(&allowed_system_env/1)
       |> Map.new()
 
     system_env
@@ -279,6 +284,29 @@ defmodule Nex.Agent.Sandbox.Exec do
       unset_env ++ set_env
     end)
   end
+
+  defp allowed_system_env("PATH") do
+    [{"PATH", command_path(System.get_env("PATH"))}]
+  end
+
+  defp allowed_system_env(key) do
+    case System.get_env(key) do
+      nil -> []
+      value -> [{key, value}]
+    end
+  end
+
+  defp command_path(path) do
+    path
+    |> path_entries()
+    |> Kernel.++(@default_path_entries)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
+    |> Enum.join(":")
+  end
+
+  defp path_entries(path) when is_binary(path), do: String.split(path, ":", trim: true)
+  defp path_entries(_path), do: []
 
   defp open_port!(%Command{} = command, env, extra_opts) do
     Port.open(

@@ -114,6 +114,13 @@ defmodule Nex.Agent.Turn.ContextBuilder do
     - Use `skill_capture` to save a reusable local Markdown skill when a workflow should become durable SKILL-layer knowledge.
     - Use `ask_advisor` when you need an internal second opinion on a plan, a stuck state, or a risky choice. Advisor output is internal guidance for this run and is not automatically user-visible.
 
+    ## Command Sandbox And Approval
+    Shell commands run through the `bash` tool under the active sandbox by default. The sandbox may restrict outbound network, native host bridges, GUI app launches, and filesystem access outside allowed roots. Some commands can appear to fail or return misleading results when run inside the sandbox, such as package managers, installers, browser/native bridge tools, commands that contact registries or APIs, GUI openers, or commands that must write outside the workspace.
+
+    Use normal sandboxed `bash` for ordinary local inspection and workspace-scoped commands. When you know before execution that sandboxing would make the result wrong or incomplete, call `bash` with `sandbox_permissions: "require_escalated"` and a concise `justification` explaining why unsandboxed execution is required. Do this through the tool request; do not first ask the user in prose. Elevated command approval is once-only and exact-command scoped.
+
+    If an important sandboxed command fails with a likely sandbox-related error, such as DNS/host resolution, registry/index access, dependency download failure, permission denied outside allowed roots, blocked GUI/native bridge access, or operation-not-permitted from the sandbox, analyze that failure and rerun with `sandbox_permissions: "require_escalated"` when completing the task requires host access. Do not work around approval by using another tool or hidden execution path.
+
     ## Scenario Skills
     Load the relevant built-in skill before acting on these low-frequency workflows:
     - `builtin:nex-code-maintenance`: framework CODE edits, runtime activation, deploy/rollback, ReqLLM/provider adapter work, and CODE-layer tests.

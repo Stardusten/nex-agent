@@ -221,6 +221,142 @@ defmodule Nex.Agent.BashToolTest do
     assert message =~ "Sandbox approval required"
   end
 
+  test "bash requires explicit approval before unsandboxed execution" do
+    parent = self()
+
+    approval_server =
+      String.to_atom("sandbox_bash_escalation_#{System.unique_integer([:positive])}")
+
+    start_supervised!({Approval, name: approval_server})
+
+    workspace =
+      Path.join(
+        System.tmp_dir!(),
+        "nex-agent-bash-escalation-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(workspace)
+    on_exit(fn -> File.rm_rf!(workspace) end)
+
+    config =
+      Config.from_map(%{
+        "tools" => %{
+          "sandbox" => %{
+            "backend" => "linux",
+            "approval" => %{"default" => "allow"}
+          }
+        }
+      })
+
+    stream_sink = fn event ->
+      send(parent, {:stream_event, event})
+      :ok
+    end
+
+    ctx = %{
+      cwd: workspace,
+      workspace: workspace,
+      config: config,
+      session_key: "feishu:bash-escalation",
+      channel: "feishu",
+      chat_id: "bash-escalation",
+      approval_server: approval_server,
+      stream_sink: stream_sink,
+      tool_result_format: :envelope
+    }
+
+    task =
+      Task.async(fn ->
+        Bash.execute(
+          %{
+            "command" => "printf escalated",
+            "sandbox_permissions" => "require_escalated",
+            "justification" => "needs host network/native bridge access",
+            "timeout" => 2
+          },
+          ctx
+        )
+      end)
+
+    assert eventually(fn ->
+             case Approval.pending(workspace, "feishu:bash-escalation", server: approval_server) do
+               [_request] -> true
+               _ -> false
+             end
+           end)
+
+    assert_receive {:stream_event, {:action, waiting_payload}}
+    assert waiting_payload.content =~ "Allow unsandboxed shell command"
+    assert waiting_payload.content =~ "needs host network/native bridge access"
+    assert waiting_payload.content =~ "/approve"
+    assert waiting_payload.content =~ "/deny"
+    refute waiting_payload.content =~ "session"
+    refute waiting_payload.content =~ "always"
+    refute waiting_payload.content =~ "similar"
+
+    approval = waiting_payload.metadata["_nex_approval"]
+    assert approval["request_metadata"]["sandbox_permissions"] == "require_escalated"
+    assert approval["risk_hint"] =~ "outside the OS sandbox"
+    assert Enum.map(approval["actions"], & &1["id"]) == ["approve_once", "deny_once"]
+    refute Enum.any?(approval["actions"], &(&1["id"] == "approve_similar"))
+
+    assert {:error, :elevated_approval_is_once_only} =
+             Approval.approve(workspace, "feishu:bash-escalation", :session,
+               server: approval_server
+             )
+
+    assert {:ok, %{approved: 1, choice: :once}} =
+             Approval.approve(workspace, "feishu:bash-escalation", :once, server: approval_server)
+
+    assert {:ok, %{content: "escalated", metadata: metadata}} = Task.await(task, 1_000)
+    assert get_in(metadata, ["sandbox", "approval_status"]) == "escalated_after_request"
+    assert get_in(metadata, ["sandbox", "permissions"]) == "require_escalated"
+    assert get_in(metadata, ["sandbox", "llm_note"]) =~ "unsandboxed execution"
+  end
+
+  test "bash rejects escalation without a justification" do
+    assert {:error, message} =
+             Bash.execute(
+               %{
+                 "command" => "printf nope",
+                 "sandbox_permissions" => "require_escalated",
+                 "timeout" => 2
+               },
+               %{cwd: File.cwd!(), config: Config.default()}
+             )
+
+    assert message =~ "justification is required"
+  end
+
+  test "bash explains sandbox-restricted network failures" do
+    config =
+      Config.from_map(%{
+        "tools" => %{
+          "sandbox" => %{
+            "backend" => "noop",
+            "network" => "restricted",
+            "approval" => %{"default" => "allow"}
+          }
+        }
+      })
+
+    assert {:error, message} =
+             Bash.execute(
+               %{
+                 "command" =>
+                   "printf 'curl: (6) Could not resolve host: registry.npmjs.org'; exit 6",
+                 "timeout" => 2
+               },
+               %{
+                 cwd: File.cwd!(),
+                 config: config
+               }
+             )
+
+    assert message =~ "Could not resolve host"
+    assert message =~ "outbound network is restricted"
+  end
+
   defp eventually(fun, attempts \\ 20)
 
   defp eventually(fun, attempts) when attempts > 0 do

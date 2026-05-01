@@ -106,6 +106,47 @@ defmodule Nex.Agent.RuntimeWatcherTest do
     refute_receive {:event, :tools_reload}, 50
   end
 
+  test "watcher keeps running when optional reload callback fails", %{
+    workspace: workspace,
+    config_path: config_path
+  } do
+    parent = self()
+    name = :"runtime_watcher_fail_soft_#{System.unique_integer([:positive])}"
+
+    start_supervised!(
+      {Watcher,
+       name: name,
+       workspace: workspace,
+       config_path: config_path,
+       builtin_plugins_dir: Path.join(workspace, "unused-builtin-plugins"),
+       poll_interval_ms: false,
+       runtime_reload_fun: fn opts ->
+         send(parent, {:event, :runtime_reload, Keyword.fetch!(opts, :changed_paths)})
+         {:ok, :snapshot}
+       end,
+       skills_reload_fun: fn ->
+         send(parent, {:event, :skills_reload_attempted})
+         raise "bad skill reload"
+       end,
+       tools_reload_fun: fn -> :ok end}
+    )
+
+    File.mkdir_p!(Path.join(workspace, "skills/broken"))
+    File.write!(Path.join(workspace, "skills/broken/SKILL.md"), "# Broken\n")
+    send(Process.whereis(name), :poll)
+
+    assert_receive {:event, :skills_reload_attempted}
+    assert_receive {:event, :runtime_reload, changed_paths}
+    assert Enum.any?(changed_paths, &String.contains?(&1, "/skills/"))
+    assert Process.alive?(Process.whereis(name))
+
+    File.write!(Path.join(workspace, "IDENTITY.md"), "# Identity\nstill alive\n")
+    send(Process.whereis(name), :poll)
+
+    assert_receive {:event, :runtime_reload, second_changed_paths}
+    assert Enum.any?(second_changed_paths, &String.ends_with?(&1, "IDENTITY.md"))
+  end
+
   test "watcher triggers runtime reload when hooks registry changes", %{
     workspace: workspace,
     config_path: config_path

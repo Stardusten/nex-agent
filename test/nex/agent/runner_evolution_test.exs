@@ -42,6 +42,28 @@ defmodule Nex.Agent.Test.SecretFailTool do
   def execute(_args, _ctx), do: {:error, "forced failure"}
 end
 
+defmodule Nex.Agent.Test.BigOutputTool do
+  @behaviour Nex.Agent.Capability.Tool.Behaviour
+
+  def name, do: "big_output_tool"
+  def description, do: "Returns a large deterministic output"
+  def category, do: :base
+
+  def definition do
+    %{
+      name: name(),
+      description: description(),
+      parameters: %{
+        type: "object",
+        properties: %{},
+        required: []
+      }
+    }
+  end
+
+  def execute(_args, _ctx), do: {:ok, String.duplicate("a", 5_000)}
+end
+
 defmodule Nex.Agent.Turn.RunnerEvolutionTest do
   use ExUnit.Case, async: false
 
@@ -324,6 +346,123 @@ defmodule Nex.Agent.Turn.RunnerEvolutionTest do
     assert finished["attrs"]["finish_reason"] == "stop"
     assert finished["attrs"]["tool_call_count"] == 0
     refute inspect(finished) =~ "cancel_ref"
+  end
+
+  test "runner treats incomplete LLM response as failure and records context evidence", %{
+    workspace: workspace
+  } do
+    llm_client = fn _messages, _opts ->
+      {:ok,
+       %{
+         content: "",
+         finish_reason: "incomplete",
+         incomplete_reason: "max_output_tokens",
+         usage: %{
+           input_tokens: 100,
+           cached_input_tokens: 0,
+           output_tokens: 4096,
+           reasoning_output_tokens: 4000,
+           total_tokens: 4196
+         },
+         tool_calls: []
+       }}
+    end
+
+    assert {:error, result, session} =
+             Runner.run(Session.new("runner-incomplete"), "hello",
+               llm_stream_client: stream_client_from_response(llm_client),
+               workspace: workspace,
+               skip_consolidation: true,
+               run_id: "run_lifecycle_incomplete",
+               session_key: "session:incomplete",
+               channel: "discord",
+               chat_id: "chat-incomplete"
+             )
+
+    assert result =~ "incomplete response"
+    refute Enum.any?(session.messages, &(&1["role"] == "assistant"))
+
+    assert [incomplete] =
+             control_plane_logs(workspace,
+               tag: "runner.llm.call.incomplete",
+               run_id: "run_lifecycle_incomplete"
+             )
+
+    assert incomplete["attrs"]["finish_reason"] == "incomplete"
+    assert incomplete["attrs"]["incomplete_reason"] == "max_output_tokens"
+
+    assert %{"last_incomplete" => %{"reason" => "max_output_tokens"}} =
+             session.metadata["context_window_v2"]
+  end
+
+  test "runner truncates tool output using context window token budget", %{
+    workspace: workspace
+  } do
+    Nex.Agent.Capability.Tool.Registry.register(Nex.Agent.Test.BigOutputTool)
+    wait_for_registry_tool("big_output_tool", Nex.Agent.Test.BigOutputTool)
+
+    on_exit(fn ->
+      Nex.Agent.Capability.Tool.Registry.unregister("big_output_tool")
+      Nex.Agent.Capability.Tool.Registry.list()
+    end)
+
+    {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+    llm_client = fn _messages, _opts ->
+      turn = Agent.get_and_update(counter, &{&1, &1 + 1})
+
+      case turn do
+        0 ->
+          {:ok,
+           %{
+             content: "",
+             finish_reason: nil,
+             tool_calls: [
+               %{
+                 id: "call_big_output",
+                 function: %{
+                   name: "big_output_tool",
+                   arguments: %{}
+                 }
+               }
+             ]
+           }}
+
+        _ ->
+          {:ok, %{content: "done", finish_reason: nil, tool_calls: []}}
+      end
+    end
+
+    assert {:ok, "done", session} =
+             Runner.run(Session.new("runner-tool-output-budget"), "run big output",
+               llm_stream_client: stream_client_from_response(llm_client),
+               workspace: workspace,
+               skip_consolidation: true,
+               run_id: "run_tool_output_budget",
+               session_key: "session:tool-output-budget",
+               channel: "discord",
+               chat_id: "chat-tool-output-budget",
+               model_runtime: %{
+                 provider: :anthropic,
+                 model_id: "claude-sonnet-4-20250514",
+                 provider_options: [],
+                 context_window: 5_000
+               },
+               provider_options: [max_tokens: 100]
+             )
+
+    assert Enum.any?(session.messages, fn
+             %{"role" => "tool", "content" => content} -> content =~ "truncated to"
+             _ -> false
+           end)
+
+    assert [truncated] =
+             control_plane_logs(workspace,
+               tag: "runner.context_window.tool_output.truncated",
+               run_id: "run_tool_output_budget"
+             )
+
+    assert truncated["attrs"]["tool_name"] == "big_output_tool"
   end
 
   test "runner records runner.tool.call.failed control-plane observation for tool errors", %{
@@ -1244,14 +1383,21 @@ defmodule Nex.Agent.Turn.RunnerEvolutionTest do
       callback.({:tool_calls, tool_calls})
     end
 
-    callback.(
-      {:done,
-       %{
-         finish_reason: Map.get(response, :finish_reason) || Map.get(response, "finish_reason"),
-         usage: Map.get(response, :usage) || Map.get(response, "usage"),
-         model: Map.get(response, :model) || Map.get(response, "model")
-       }}
-    )
+    metadata =
+      response
+      |> Map.take([
+        :incomplete_reason,
+        "incomplete_reason",
+        :incomplete_details,
+        "incomplete_details"
+      ])
+      |> Map.merge(%{
+        finish_reason: Map.get(response, :finish_reason) || Map.get(response, "finish_reason"),
+        usage: Map.get(response, :usage) || Map.get(response, "usage"),
+        model: Map.get(response, :model) || Map.get(response, "model")
+      })
+
+    callback.({:done, metadata})
   end
 
   defp render_mock_content(nil), do: ""

@@ -189,6 +189,48 @@ defmodule Nex.Agent.RuntimeTest do
     assert updated.workbench.hash != old_hash
   end
 
+  test "optional runtime projections fail soft and keep previous snapshot data", %{
+    workspace: workspace
+  } do
+    assert {:ok, %Snapshot{} = previous} = Runtime.current()
+
+    assert {:ok, %Snapshot{} = updated} =
+             Runtime.reload(
+               workspace: workspace,
+               skills_builder: fn _opts -> raise "skill catalog exploded" end,
+               plugins_builder: fn _opts -> raise "plugin catalog exploded" end,
+               hooks_builder: fn _opts -> raise "hooks exploded" end,
+               tool_definitions_builder: fn _surface, _opts -> raise "tools exploded" end
+             )
+
+    assert updated.version == previous.version + 1
+    assert updated.skills.cards == previous.skills.cards
+    assert updated.plugins.contributions == previous.plugins.contributions
+    assert updated.hooks.entries == previous.hooks.entries
+    assert updated.prompt.system_prompt == previous.prompt.system_prompt
+    assert updated.tools.definitions_all == previous.tools.definitions_all
+
+    assert Enum.any?(
+             updated.skills.diagnostics,
+             &(&1["component"] == "skills" and
+                 &1["code"] == "optional_runtime_projection_failed")
+           )
+
+    assert Enum.any?(
+             updated.plugins.diagnostics,
+             &(&1["component"] == "plugins" and
+                 &1["code"] == "optional_runtime_projection_failed")
+           )
+
+    assert Enum.any?(
+             updated.hooks.diagnostics,
+             &(&1["component"] == "hooks" and
+                 &1["code"] == "optional_runtime_projection_failed")
+           )
+
+    assert updated.prompt.diagnostics == previous.prompt.diagnostics
+  end
+
   test "snapshot loads enabled workspace plugins and tracks hash changes", %{workspace: workspace} do
     config = runtime_config(workspace)
 

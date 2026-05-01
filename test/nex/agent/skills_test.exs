@@ -126,6 +126,79 @@ defmodule Nex.Agent.Capability.SkillsTest do
     refute prompt =~ "<name>normal-guide</name>"
   end
 
+  test "catalog accepts folded description block scalars with chomp indicators", %{
+    workspace: workspace
+  } do
+    File.mkdir_p!(Path.join(workspace, "skills/dokobot"))
+
+    File.write!(
+      Path.join(workspace, "skills/dokobot/SKILL.md"),
+      """
+      ---
+      name: dokobot
+      description: >-
+        Read and extract content from any web page using a real browser.
+        Use when fetching pages that headless tools cannot render.
+      read_when:
+        - Reading web pages that require JavaScript rendering
+        - Extracting content from single-page applications
+      allowed-tools: Bash
+      metadata:
+        author: dokobot
+      ---
+
+      # Dokobot
+
+      Body should load only after skill_get.
+      """
+    )
+
+    cards = Skills.catalog(workspace: workspace)
+
+    assert %{"description" => description} =
+             Enum.find(cards, &(&1["id"] == "workspace:dokobot"))
+
+    assert description ==
+             "Read and extract content from any web page using a real browser. Use when fetching pages that headless tools cannot render."
+  end
+
+  test "invalid workspace skill is skipped without blocking the catalog", %{
+    workspace: workspace
+  } do
+    File.mkdir_p!(Path.join(workspace, "skills/broken"))
+    File.mkdir_p!(Path.join(workspace, "skills/healthy"))
+
+    File.write!(
+      Path.join(workspace, "skills/broken/SKILL.md"),
+      """
+      ---
+      name: broken
+      description:
+        - list descriptions are invalid for Nex skill cards
+      ---
+
+      This malformed skill should not block runtime reload.
+      """
+    )
+
+    File.write!(
+      Path.join(workspace, "skills/healthy/SKILL.md"),
+      """
+      ---
+      name: healthy
+      description: Use when validating fail-soft skill loading.
+      ---
+
+      Healthy skill.
+      """
+    )
+
+    cards = Skills.catalog(workspace: workspace)
+
+    assert Enum.any?(cards, &(&1["id"] == "workspace:healthy"))
+    refute Enum.any?(cards, &(&1["id"] == "workspace:broken"))
+  end
+
   test "builtin workbench authoring skill is loadable by id", %{
     workspace: workspace
   } do

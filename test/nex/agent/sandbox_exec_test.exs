@@ -72,6 +72,29 @@ defmodule Nex.Agent.SandboxExecTest do
     assert result.stdout == "payload|:public:kept"
   end
 
+  test "run supplies common command path entries when PATH is sparse", %{workspace: workspace} do
+    previous_path = System.get_env("PATH")
+    System.put_env("PATH", "/usr/bin:/bin")
+
+    on_exit(fn -> restore_env("PATH", previous_path) end)
+
+    policy = %Policy{noop_policy() | env_allowlist: ["PATH"]}
+
+    assert {:ok, result} =
+             Exec.run(
+               command("sh",
+                 args: ["-c", "printf '%s' \"$PATH\""],
+                 metadata: %{observe_context: %{workspace: workspace}}
+               ),
+               policy
+             )
+
+    path_entries = String.split(result.stdout, ":")
+    assert "/usr/bin" in path_entries
+    assert "/bin" in path_entries
+    assert "/opt/homebrew/bin" in path_entries
+  end
+
   test "run reports nonzero exits, timeouts, and missing executables", %{workspace: workspace} do
     assert {:error, exit_result} =
              Exec.run(

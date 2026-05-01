@@ -9,6 +9,7 @@ defmodule Nex.Agent.Turn.LLM.ReqLLM do
   alias ReqLLM.Response.Stream, as: ResponseStream
   alias ReqLLM.StreamChunk
   alias ReqLLM.StreamResponse
+  alias ReqLLM.StreamResponse.MetadataHandle
   alias ReqLLM.Tool
   alias ReqLLM.ToolCall
   alias Nex.Agent.Turn.LLM.ProviderProfile
@@ -47,14 +48,23 @@ defmodule Nex.Agent.Turn.LLM.ReqLLM do
             end)
 
           tool_calls = summarized_tool_calls(state)
-          metadata = summarized_metadata(state)
+          response_metadata = stream_response_metadata(response)
+
+          metadata =
+            state
+            |> summarized_metadata()
+            |> Map.merge(safe_response_metadata(response_metadata))
 
           emit_stream_done(
             callback,
             tool_calls,
             Map.merge(metadata, %{
-              finish_reason: normalize_finish_reason(StreamResponse.finish_reason(response)),
-              usage: StreamResponse.usage(response),
+              finish_reason:
+                normalize_finish_reason(
+                  metadata_finish_reason(response_metadata) ||
+                    StreamResponse.finish_reason(response)
+                ),
+              usage: metadata_usage(response_metadata) || StreamResponse.usage(response),
               model: extract_stream_model(response)
             })
           )
@@ -79,7 +89,11 @@ defmodule Nex.Agent.Turn.LLM.ReqLLM do
             )
 
           tool_calls = summarized_tool_calls(state)
-          metadata = summarized_metadata(state)
+
+          metadata =
+            state
+            |> summarized_metadata()
+            |> Map.merge(map_response_metadata(response))
 
           emit_stream_done(
             callback,
@@ -284,6 +298,53 @@ defmodule Nex.Agent.Turn.LLM.ReqLLM do
 
     callback.({:done, metadata})
   end
+
+  defp stream_response_metadata(%StreamResponse{metadata_handle: handle}) when is_pid(handle) do
+    MetadataHandle.await(handle)
+  rescue
+    _ -> %{}
+  catch
+    :exit, _reason -> %{}
+  end
+
+  defp stream_response_metadata(_response), do: %{}
+
+  defp safe_response_metadata(metadata) when is_map(metadata) do
+    metadata
+    |> Map.drop([:headers, "headers"])
+  end
+
+  defp safe_response_metadata(_metadata), do: %{}
+
+  defp map_response_metadata(response) when is_map(response) do
+    response
+    |> Map.drop([
+      :stream,
+      "stream",
+      :content,
+      "content",
+      :tool_calls,
+      "tool_calls",
+      :finish_reason,
+      "finish_reason",
+      :usage,
+      "usage",
+      :model,
+      "model"
+    ])
+  end
+
+  defp metadata_finish_reason(metadata) when is_map(metadata) do
+    Map.get(metadata, :finish_reason) || Map.get(metadata, "finish_reason")
+  end
+
+  defp metadata_finish_reason(_metadata), do: nil
+
+  defp metadata_usage(metadata) when is_map(metadata) do
+    Map.get(metadata, :usage) || Map.get(metadata, "usage")
+  end
+
+  defp metadata_usage(_metadata), do: nil
 
   defp handle_stream_chunk(chunk, callback, state) do
     state = %{state | stream_chunks: [summary_chunk(chunk) | Map.get(state, :stream_chunks, [])]}

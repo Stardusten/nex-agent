@@ -21,11 +21,11 @@ defmodule Nex.Agent.Turn.Runner do
   require ControlPlaneLog
   alias Nex.Agent.Runtime.Snapshot
   alias Nex.Agent.Capability.Tool.Registry, as: ToolRegistry
+  alias Nex.Agent.Turn.LLM.ResponseInfo
 
   @default_max_iterations 10
   @max_iterations_hard_limit 50
   @memory_window 50
-  @max_tool_result_length 8000
   @skill_complexity_tool_calls 4
   @skill_complexity_tool_rounds 2
   @user_correction_terms [
@@ -118,9 +118,13 @@ defmodule Nex.Agent.Turn.Runner do
            runtime_config,
            opts
          ) do
-      {:ok, messages, history_message_count} ->
+      {:ok, messages, history_message_count, context_window_attrs} ->
         provider_options = ContextWindow.prepare_provider_options(opts, session)
-        opts = Keyword.put(opts, :provider_options, provider_options)
+
+        opts =
+          opts
+          |> Keyword.put(:provider_options, provider_options)
+          |> Keyword.put(:_context_window_projection_attrs, context_window_attrs)
 
         do_run_with_messages(
           session,
@@ -270,7 +274,7 @@ defmodule Nex.Agent.Turn.Runner do
         )
 
         {:ok, ContextBuilder.build_messages(history, prompt, channel, chat_id, media, build_opts),
-         length(history)}
+         length(history), context_window_attrs}
 
       {:error, reason} ->
         {:error, reason}
@@ -397,7 +401,7 @@ defmodule Nex.Agent.Turn.Runner do
         case llm_result do
           {:ok, response} ->
             content = response.content
-            finish_reason = Map.get(response, :finish_reason)
+            finish_reason = ResponseInfo.finish_reason(response)
             trace_llm_response(iteration + 1, response, llm_duration, opts)
 
             reasoning_content =
@@ -405,68 +409,110 @@ defmodule Nex.Agent.Turn.Runner do
 
             tool_calls = Map.get(response, :tool_calls) || Map.get(response, "tool_calls")
 
-            if finish_reason == "error" do
-              # Nanobot parity: keep the user turn, but never persist the assistant error response.
-              iter_total = System.monotonic_time(:millisecond) - iter_start
-
-              reason = "LLM returned an error"
-
-              emit_control_plane_failure("runner.llm.call.failed", opts, %{
-                "provider" => Keyword.get(opts, :provider) |> to_string(),
-                "model" => Keyword.get(opts, :model) |> to_string(),
-                "iteration" => iteration + 1,
-                "max_iterations" => max_iterations,
-                "duration_ms" => llm_duration,
-                "tool_call_count" => tool_call_count(tool_calls),
-                "finish_reason" => "error",
-                "result_status" => "error",
-                "reason_type" => "finish_reason_error",
-                "error_summary" => reason,
-                "actor" => llm_actor(opts),
-                "classifier" => %{"family" => "llm", "retryable" => false},
-                "evidence" => %{"error_text" => reason}
-              })
-
-              emit_iteration_finished(:error, iteration, max_iterations, iter_total, opts)
-              emit_stream_error(opts, reason)
-              {:error, stream_result(:error, opts, nil, %{error: reason}), session}
-            else
-              emit_runner_lifecycle(
-                :info,
-                "runner.llm.call.finished",
-                llm_attrs
-                |> Map.put("duration_ms", llm_duration)
-                |> Map.put("finish_reason", to_string(finish_reason || "stop"))
-                |> Map.put("tool_call_count", tool_call_count(tool_calls))
-                |> Map.put("result_status", "ok"),
-                opts
+            {session, ledger_attrs} =
+              ContextWindow.record_response(session, response, opts,
+                iteration: iteration + 1,
+                projection: Keyword.get(opts, :_context_window_projection_attrs)
               )
 
-              opts =
-                if Map.get(response, :streamed_text, false) do
-                  Keyword.put(opts, :_llm_text_streamed, true)
-                else
-                  opts
-                end
+            emit_runner_lifecycle(
+              :info,
+              "runner.context_window.ledger.updated",
+              ledger_attrs,
+              opts
+            )
 
-              result =
-                handle_response(
-                  session,
-                  messages,
-                  content,
-                  tool_calls,
-                  reasoning_content,
-                  response,
-                  iteration,
-                  max_iterations,
-                  _on_progress = nil,
+            cond do
+              finish_reason == "error" ->
+                # Nanobot parity: keep the user turn, but never persist the assistant error response.
+                iter_total = System.monotonic_time(:millisecond) - iter_start
+
+                reason = "LLM returned an error"
+
+                emit_control_plane_failure("runner.llm.call.failed", opts, %{
+                  "provider" => Keyword.get(opts, :provider) |> to_string(),
+                  "model" => Keyword.get(opts, :model) |> to_string(),
+                  "iteration" => iteration + 1,
+                  "max_iterations" => max_iterations,
+                  "duration_ms" => llm_duration,
+                  "tool_call_count" => tool_call_count(tool_calls),
+                  "finish_reason" => "error",
+                  "result_status" => "error",
+                  "reason_type" => "finish_reason_error",
+                  "error_summary" => reason,
+                  "actor" => llm_actor(opts),
+                  "classifier" => %{"family" => "llm", "retryable" => false},
+                  "evidence" => %{"error_text" => reason}
+                })
+
+                emit_iteration_finished(:error, iteration, max_iterations, iter_total, opts)
+                emit_stream_error(opts, reason)
+                {:error, stream_result(:error, opts, nil, %{error: reason}), session}
+
+              incomplete_finish_reason?(finish_reason) ->
+                iter_total = System.monotonic_time(:millisecond) - iter_start
+                incomplete_reason = ResponseInfo.incomplete_reason(response)
+                reason = incomplete_error_message(incomplete_reason)
+
+                emit_control_plane_failure("runner.llm.call.incomplete", opts, %{
+                  "provider" => Keyword.get(opts, :provider) |> to_string(),
+                  "model" => Keyword.get(opts, :model) |> to_string(),
+                  "iteration" => iteration + 1,
+                  "max_iterations" => max_iterations,
+                  "duration_ms" => llm_duration,
+                  "tool_call_count" => tool_call_count(tool_calls),
+                  "finish_reason" => to_string(finish_reason),
+                  "incomplete_reason" => incomplete_reason || "unknown",
+                  "result_status" => "error",
+                  "reason_type" => "finish_reason_incomplete",
+                  "error_summary" => reason,
+                  "actor" => llm_actor(opts),
+                  "classifier" => %{"family" => "llm", "retryable" => true},
+                  "evidence" => %{"error_text" => reason}
+                })
+
+                emit_iteration_finished(:error, iteration, max_iterations, iter_total, opts)
+                emit_stream_error(opts, reason)
+                {:error, stream_result(:error, opts, nil, %{error: reason}), session}
+
+              true ->
+                emit_runner_lifecycle(
+                  :info,
+                  "runner.llm.call.finished",
+                  llm_attrs
+                  |> Map.put("duration_ms", llm_duration)
+                  |> Map.put("finish_reason", to_string(finish_reason || "stop"))
+                  |> Map.put("tool_call_count", tool_call_count(tool_calls))
+                  |> Map.merge(llm_usage_attrs(ledger_attrs))
+                  |> Map.put("result_status", "ok"),
                   opts
                 )
 
-              iter_total = System.monotonic_time(:millisecond) - iter_start
-              emit_iteration_finished(:ok, iteration, max_iterations, iter_total, opts)
+                opts =
+                  if Map.get(response, :streamed_text, false) do
+                    Keyword.put(opts, :_llm_text_streamed, true)
+                  else
+                    opts
+                  end
 
-              result
+                result =
+                  handle_response(
+                    session,
+                    messages,
+                    content,
+                    tool_calls,
+                    reasoning_content,
+                    response,
+                    iteration,
+                    max_iterations,
+                    _on_progress = nil,
+                    opts
+                  )
+
+                iter_total = System.monotonic_time(:millisecond) - iter_start
+                emit_iteration_finished(:ok, iteration, max_iterations, iter_total, opts)
+
+                result
             end
 
           {:error, reason} ->
@@ -1038,7 +1084,7 @@ defmodule Nex.Agent.Turn.Runner do
         Bus.publish(:tool_result, %{
           tool: tool_name,
           success: success,
-          result: truncate_result(result),
+          result: render_text(result),
           args: summarize_args(tool_name, args),
           channel: Keyword.get(opts, :channel),
           chat_id: Keyword.get(opts, :chat_id)
@@ -1046,14 +1092,6 @@ defmodule Nex.Agent.Turn.Runner do
       end)
     end
   end
-
-  defp truncate_result(result)
-       when is_binary(result) and byte_size(result) > @max_tool_result_length do
-    String.slice(result, 0, @max_tool_result_length) <> "\n... (truncated)"
-  end
-
-  defp truncate_result(result) when is_binary(result), do: result
-  defp truncate_result(result), do: inspect(result)
 
   defp summarize_args("bash", %{"command" => cmd}) when is_binary(cmd), do: %{"command" => cmd}
   defp summarize_args("bash", %{command: cmd}) when is_binary(cmd), do: %{"command" => cmd}
@@ -1611,12 +1649,23 @@ defmodule Nex.Agent.Turn.Runner do
             result =
               execute_tool(tool_name, parsed_args, Map.put(ctx, :tool_call_id, tool_call_id))
 
-            truncated = truncate_result(result)
+            {truncated, truncate_attrs} = ContextWindow.truncate_tool_result(result, opts)
             tool_duration_ms = System.monotonic_time(:millisecond) - tool_started_at
 
             result_attrs =
               call_attrs
               |> Map.put("duration_ms", tool_duration_ms)
+
+            if Map.get(truncate_attrs, "truncated?") == true do
+              emit_runner_lifecycle(
+                :warning,
+                "runner.context_window.tool_output.truncated",
+                result_attrs
+                |> Map.put("tool_name", to_string(tool_name))
+                |> Map.merge(truncate_attrs),
+                tool_opts
+              )
+            end
 
             if String.starts_with?(render_text(truncated), "Error:") do
               emit_runner_lifecycle(
@@ -2037,6 +2086,34 @@ defmodule Nex.Agent.Turn.Runner do
     }
   end
 
+  defp llm_usage_attrs(attrs) when is_map(attrs) do
+    attrs
+    |> Map.take([
+      "usage_available",
+      "usage_source",
+      "usage_missing_fields",
+      "incomplete_reason",
+      "has_successful_anchor"
+    ])
+    |> maybe_put_usage_summary(Map.get(attrs, "usage"))
+  end
+
+  defp llm_usage_attrs(_attrs), do: %{}
+
+  defp maybe_put_usage_summary(attrs, nil), do: attrs
+  defp maybe_put_usage_summary(attrs, usage), do: Map.put(attrs, "usage", usage)
+
+  defp incomplete_finish_reason?(reason) when reason in ["incomplete", :incomplete], do: true
+  defp incomplete_finish_reason?(_reason), do: false
+
+  defp incomplete_error_message(nil) do
+    "LLM returned incomplete response without a provider reason."
+  end
+
+  defp incomplete_error_message(reason) do
+    "LLM returned incomplete response: #{reason}."
+  end
+
   defp tool_call_attrs(tool_name, tool_call_id, args) do
     %{
       "tool_name" => to_string(tool_name),
@@ -2152,7 +2229,7 @@ defmodule Nex.Agent.Turn.Runner do
           :info,
           "runner.consolidation.llm.call.finished",
           %{
-            "finish_reason" => to_string(Map.get(response, :finish_reason) || "stop"),
+            "finish_reason" => to_string(ResponseInfo.finish_reason(response) || "stop"),
             "has_tool_calls" =>
               is_list(Map.get(response, :tool_calls) || Map.get(response, "tool_calls")),
             "content_summary" => String.slice(to_string(Map.get(response, :content, "")), 0, 100)
@@ -2547,8 +2624,7 @@ defmodule Nex.Agent.Turn.Runner do
         "iteration" => iteration,
         "content" => Map.get(response, :content) || Map.get(response, "content"),
         "tool_calls" => Map.get(response, :tool_calls) || Map.get(response, "tool_calls") || [],
-        "finish_reason" =>
-          Map.get(response, :finish_reason) || Map.get(response, "finish_reason"),
+        "finish_reason" => ResponseInfo.finish_reason(response),
         "duration_ms" => duration_ms
       },
       opts

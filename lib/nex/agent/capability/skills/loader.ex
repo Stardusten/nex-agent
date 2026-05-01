@@ -3,6 +3,8 @@ defmodule Nex.Agent.Capability.Skills.Loader do
   Skills loader - parses Markdown SKILL.md files.
   """
 
+  require Logger
+
   alias Nex.Agent.Runtime.Workspace
 
   @spec load_from_dir(String.t(), keyword()) :: list(map())
@@ -34,7 +36,7 @@ defmodule Nex.Agent.Capability.Skills.Loader do
     path = Path.expand(path)
 
     if File.regular?(path) do
-      parse_skill_file(path)
+      safe_parse_skill_file(path)
     end
   end
 
@@ -97,20 +99,35 @@ defmodule Nex.Agent.Capability.Skills.Loader do
 
     cond do
       File.dir?(Path.join(base_path, name)) and File.exists?(skill_path) ->
-        [parse_skill_file(skill_path)]
+        skill_path |> safe_parse_skill_file() |> List.wrap()
 
       File.exists?(skill_path) ->
-        [parse_skill_file(skill_path)]
+        skill_path |> safe_parse_skill_file() |> List.wrap()
 
       String.ends_with?(name, ".md") ->
-        [parse_skill_file(Path.join(base_path, name))]
+        base_path |> Path.join(name) |> safe_parse_skill_file() |> List.wrap()
 
       true ->
         []
     end
   end
 
-  defp parse_skill_file(path) do
+  defp safe_parse_skill_file(path) do
+    parse_skill_file!(path)
+  rescue
+    exception ->
+      Logger.warning(
+        "[Skills.Loader] Skipping invalid skill #{path}: #{Exception.message(exception)}"
+      )
+
+      nil
+  catch
+    kind, reason ->
+      Logger.warning("[Skills.Loader] Skipping invalid skill #{path}: #{kind} #{inspect(reason)}")
+      nil
+  end
+
+  defp parse_skill_file!(path) do
     content = File.read!(path)
 
     case Regex.run(~r/^---\n(.*?)\n---\n?(.*)$/s, content) do
@@ -122,13 +139,23 @@ defmodule Nex.Agent.Capability.Skills.Loader do
   defp parse_skill(frontmatter, body, path) do
     metadata = parse_frontmatter(frontmatter)
     requires = parse_requires(metadata["requires"])
-    description = metadata["description"] || extract_first_paragraph(body)
+
+    description =
+      metadata_string(
+        "description",
+        metadata["description"] || extract_first_paragraph(body),
+        path
+      )
+
     draft = draft?(description, body)
+    fallback_name = path |> Path.dirname() |> Path.basename()
 
     name =
-      metadata["name"] ||
-        path |> Path.dirname() |> Path.basename() ||
-        Path.basename(path, ".md")
+      metadata_string(
+        "name",
+        metadata["name"] || fallback_name || Path.basename(path, ".md"),
+        path
+      )
 
     content = String.trim(body)
 
@@ -150,6 +177,15 @@ defmodule Nex.Agent.Capability.Skills.Loader do
       argument_hint: metadata["argument-hint"],
       path: path
     }
+  end
+
+  defp metadata_string(_field, nil, _path), do: ""
+
+  defp metadata_string(_field, value, _path) when is_binary(value), do: value
+
+  defp metadata_string(field, value, path) do
+    raise ArgumentError,
+          "invalid #{field} in #{path}: expected string, got #{inspect(value, limit: 20)}"
   end
 
   defp parse_requires(nil), do: %{}
@@ -267,7 +303,7 @@ defmodule Nex.Agent.Capability.Skills.Loader do
                 is_nil(next_line) or indentation(next_line) <= current_indent ->
                   {"", rest}
 
-                String.trim(next_line) in ["|", ">"] ->
+                block_scalar_header?(String.trim(next_line)) ->
                   parse_yaml_multiline(
                     tl(rest),
                     indentation(next_line) + 2,
@@ -287,18 +323,21 @@ defmodule Nex.Agent.Capability.Skills.Loader do
             value = String.trim(value)
 
             {parsed, remaining} =
-              case value do
-                "|" ->
+              cond do
+                block_scalar_header?(value) and block_scalar_style(value) == :literal ->
                   parse_yaml_multiline(rest, current_indent + 2, :literal)
 
-                ">" ->
+                block_scalar_header?(value) and block_scalar_style(value) == :folded ->
                   parse_yaml_multiline(rest, current_indent + 2, :folded)
 
-                _ ->
+                true ->
                   {parse_scalar(value), rest}
               end
 
             do_parse_yaml_block(remaining, indent, Map.put(acc, key, parsed))
+
+          [_invalid_line] ->
+            do_parse_yaml_block(rest, indent, acc)
         end
     end
   end
@@ -386,8 +425,11 @@ defmodule Nex.Agent.Capability.Skills.Loader do
     end)
   end
 
-  defp block_scalar_style("|"), do: :literal
-  defp block_scalar_style(">"), do: :folded
+  defp block_scalar_header?(value) when is_binary(value),
+    do: Regex.match?(~r/\A[>|][+-]?\z/, value)
+
+  defp block_scalar_style("|" <> _), do: :literal
+  defp block_scalar_style(">" <> _), do: :folded
 
   defp indentation(line) do
     line

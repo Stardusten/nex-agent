@@ -71,6 +71,29 @@ defmodule Nex.Agent.Sandbox.Approval.Request do
     }
   end
 
+  @spec elevated?(t() | map() | nil) :: boolean()
+  def elevated?(%__MODULE__{metadata: metadata}), do: elevated_metadata?(metadata)
+
+  def elevated?(%{} = request) do
+    metadata =
+      Map.get(request, "request_metadata") ||
+        Map.get(request, :request_metadata) ||
+        Map.get(request, "metadata") ||
+        Map.get(request, :metadata) ||
+        request
+
+    elevated_metadata?(metadata)
+  end
+
+  def elevated?(_request), do: false
+
+  defp elevated_metadata?(metadata) when is_map(metadata) do
+    Map.get(metadata, "sandbox_permissions") == "require_escalated" or
+      Map.get(metadata, :sandbox_permissions) == "require_escalated"
+  end
+
+  defp elevated_metadata?(_metadata), do: false
+
   defp stringify_keys(map) do
     Map.new(map, fn {key, value} -> {to_string(key), value} end)
   end

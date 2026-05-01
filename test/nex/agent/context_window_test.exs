@@ -128,6 +128,131 @@ defmodule Nex.Agent.Turn.ContextWindowTest do
            ]
   end
 
+  test "record_response stores provider usage anchor when usage is complete" do
+    session =
+      Session.new("ctx-usage")
+      |> Session.add_message("user", "question")
+
+    response = %{
+      finish_reason: "stop",
+      response_metadata: %{response_id: "resp_123"},
+      usage: %{
+        input_tokens: 10,
+        cached_input_tokens: 2,
+        output_tokens: 5,
+        reasoning_output_tokens: 1,
+        total_tokens: 15
+      }
+    }
+
+    {session, attrs} =
+      ContextWindow.record_response(session, response,
+        provider: :openai_codex,
+        model: "gpt-5.5",
+        model_runtime: %{model_key: "gpt-5.5-xhigh-fast"}
+      )
+
+    assert attrs["usage_available"] == true
+    assert attrs["usage_source"] == "provider"
+
+    assert %{
+             "provider" => "openai_codex",
+             "model" => "gpt-5.5",
+             "model_key" => "gpt-5.5-xhigh-fast",
+             "last_successful_anchor" => %{
+               "response_id" => "resp_123",
+               "usage" => %{"source" => "provider", "total_tokens" => 15}
+             }
+           } = session.metadata["context_window_v2"]
+  end
+
+  test "record_response degrades to mixed usage without writing fake provider anchor" do
+    session =
+      Session.new("ctx-mixed")
+      |> Session.add_message("user", "question")
+
+    response = %{
+      finish_reason: "stop",
+      usage: %{input_tokens: 10, output_tokens: 5}
+    }
+
+    {session, attrs} =
+      ContextWindow.record_response(session, response,
+        provider: :openai_compatible,
+        model: "remote-model"
+      )
+
+    assert attrs["usage_available"] == true
+    assert attrs["usage_source"] == "mixed"
+    refute Map.has_key?(session.metadata["context_window_v2"], "last_successful_anchor")
+  end
+
+  test "record_response stores incomplete evidence without usage" do
+    session =
+      Session.new("ctx-incomplete")
+      |> Session.add_message("user", "question")
+
+    response = %{
+      finish_reason: "incomplete",
+      response_metadata: %{incomplete_reason: "max_output_tokens"}
+    }
+
+    {session, attrs} =
+      ContextWindow.record_response(session, response,
+        provider: :openai_codex,
+        model: "gpt-5.5"
+      )
+
+    assert attrs["usage_available"] == false
+    assert attrs["usage_source"] == "estimate"
+
+    assert %{"last_incomplete" => %{"reason" => "max_output_tokens", "usage" => %{}}} =
+             session.metadata["context_window_v2"]
+  end
+
+  test "truncate_tool_result derives limit from small model context budget" do
+    result = String.duplicate("a", 10_000)
+
+    {visible, attrs} =
+      ContextWindow.truncate_tool_result(result,
+        model_runtime: %{context_window: 5_000},
+        provider_options: [max_tokens: 100]
+      )
+
+    assert attrs["truncated?"] == true
+    assert attrs["token_limit"] == 512
+    assert attrs["token_limit_source"] == "context_budget"
+    assert attrs["visible_tokens_estimate"] <= attrs["token_limit"] + 5
+    assert visible =~ "truncated to"
+  end
+
+  test "truncate_tool_result allows larger output for large model context budget" do
+    result = String.duplicate("a", 10_000)
+
+    {_visible, attrs} =
+      ContextWindow.truncate_tool_result(result,
+        model_runtime: %{context_window: 250_000},
+        provider_options: [max_tokens: 4_096]
+      )
+
+    assert attrs["truncated?"] == false
+    assert attrs["token_limit"] == 16_000
+  end
+
+  test "truncate_tool_result honors explicit tool output token limit" do
+    result = String.duplicate("a", 1_000)
+
+    {visible, attrs} =
+      ContextWindow.truncate_tool_result(result,
+        model_runtime: %{context_window: 250_000, tool_output_token_limit: 50}
+      )
+
+    assert attrs["truncated?"] == true
+    assert attrs["token_limit"] == 50
+    assert attrs["token_limit_source"] == "config"
+    assert visible =~ "truncated to 50 estimated tokens"
+  end
+
   defp add_pair(session, user, assistant) do
     session
     |> Session.add_message("user", user)
