@@ -395,6 +395,63 @@ defmodule Nex.Agent.Turn.RunnerEvolutionTest do
              session.metadata["context_window_v2"]
   end
 
+  test "runner retries terminal-event incomplete once with trimmed history", %{
+    workspace: workspace
+  } do
+    {:ok, counter} = Agent.start_link(fn -> 0 end)
+    parent = self()
+
+    llm_client = fn messages, _opts ->
+      send(parent, {:messages, length(messages)})
+      turn = Agent.get_and_update(counter, &{&1, &1 + 1})
+
+      case turn do
+        0 ->
+          {:ok,
+           %{
+             content: "",
+             finish_reason: "incomplete",
+             incomplete_reason: "stream_ended_without_terminal_event",
+             tool_calls: []
+           }}
+
+        _ ->
+          {:ok, %{content: "ok after retry", finish_reason: nil, tool_calls: []}}
+      end
+    end
+
+    session =
+      Enum.reduce(1..20, Session.new("runner-incomplete-retry"), fn idx, session ->
+        session
+        |> Session.add_message("user", "question #{idx}")
+        |> Session.add_message("assistant", String.duplicate("answer #{idx} ", 200))
+      end)
+
+    assert {:ok, "ok after retry", _session} =
+             Runner.run(session, "hello",
+               llm_stream_client: stream_client_from_response(llm_client),
+               workspace: workspace,
+               skip_consolidation: true,
+               run_id: "run_lifecycle_incomplete_retry",
+               session_key: "session:incomplete-retry",
+               channel: "discord",
+               chat_id: "chat-incomplete-retry"
+             )
+
+    assert_receive {:messages, first_count}
+    assert_receive {:messages, second_count}
+    assert second_count < first_count
+
+    assert [retry] =
+             control_plane_logs(workspace,
+               tag: "runner.llm.incomplete_retry",
+               run_id: "run_lifecycle_incomplete_retry"
+             )
+
+    assert retry["attrs"]["retry_strategy"] == "trim_history"
+    assert retry["attrs"]["incomplete_reason"] == "stream_ended_without_terminal_event"
+  end
+
   test "runner truncates tool output using context window token budget", %{
     workspace: workspace
   } do

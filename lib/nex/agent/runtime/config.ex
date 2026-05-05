@@ -1136,18 +1136,13 @@ defmodule Nex.Agent.Runtime.Config do
     approval = stringify_map_keys(approval)
 
     %{
-      "default" => normalize_sandbox_approval_default(Map.get(approval, "default")),
-      "allow_session_grants" =>
-        normalize_boolean(Map.get(approval, "allow_session_grants"), true),
-      "allow_always_grants" => normalize_boolean(Map.get(approval, "allow_always_grants"), true)
+      "default" => normalize_sandbox_approval_default(Map.get(approval, "default"))
     }
   end
 
   defp normalize_sandbox_approval(_approval) do
     %{
-      "default" => "ask",
-      "allow_session_grants" => true,
-      "allow_always_grants" => true
+      "default" => "ask"
     }
   end
 

@@ -1258,6 +1258,7 @@ defmodule Nex.Agent.Channel.Discord do
               [
                 %{"type" => 10, "content" => approval_row_content(request, :pending)}
               ] ++
+                approval_rule_components(request) ++
                 approval_risk_components(request) ++
                 [
                   %{"type" => 1, "components" => buttons}
@@ -1396,6 +1397,13 @@ defmodule Nex.Agent.Channel.Discord do
     case approval_risk_hint(request) do
       nil -> []
       hint -> [%{"type" => 10, "content" => "_Risk: #{hint}_"}]
+    end
+  end
+
+  defp approval_rule_components(request) do
+    case OutboundApproval.recommended_rule_summary(request) do
+      nil -> []
+      summary -> [%{"type" => 10, "content" => summary}]
     end
   end
 

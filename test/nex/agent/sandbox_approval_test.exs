@@ -4,6 +4,8 @@ defmodule Nex.Agent.SandboxApprovalTest do
   alias Nex.Agent.App.Bus
   alias Nex.Agent.Sandbox.Approval
   alias Nex.Agent.Sandbox.Approval.Request
+  alias Nex.Agent.Sandbox.PermissionRule
+  alias Nex.Agent.Sandbox.PermissionRuleStore
 
   setup do
     workspace =
@@ -34,11 +36,12 @@ defmodule Nex.Agent.SandboxApprovalTest do
     refute Approval.approved?(workspace, "feishu:chat", request, server: server)
   end
 
-  test "session grant suppresses repeated request in the same session", %{
+  test "session path rule suppresses repeated path request in the same session", %{
     workspace: workspace,
     server: server
   } do
-    request = request(workspace, grant_key: "command:execute:exact:session")
+    path = Path.join([workspace, "notes", "a.md"])
+    request = path_request(workspace, subject: path)
     task = Task.async(fn -> Approval.request(request, server: server) end)
 
     wait_for(fn -> Approval.pending?(workspace, "feishu:chat", server: server) end)
@@ -51,37 +54,33 @@ defmodule Nex.Agent.SandboxApprovalTest do
     assert Approval.request(request, server: server) == {:ok, :approved}
   end
 
-  test "similar grant uses a safe family grant option", %{workspace: workspace, server: server} do
+  test "similar path rule allows sibling paths under the same directory", %{
+    workspace: workspace,
+    server: server
+  } do
+    first_path = Path.join([workspace, "notes", "a.md"])
+    second_path = Path.join([workspace, "notes", "b.md"])
+
     request =
-      request(workspace,
-        grant_key: "command:execute:exact:abc",
-        grant_options: [
-          %{
-            "level" => "similar",
-            "grant_key" => "command:execute:family:git:status",
-            "subject" => "git status"
-          }
-        ]
-      )
+      path_request(workspace, subject: first_path)
 
     task = Task.async(fn -> Approval.request(request, server: server) end)
     wait_for(fn -> Approval.pending?(workspace, "feishu:chat", server: server) end)
 
-    assert {:ok, %{approved: 1, granted: %{"grant_key" => "command:execute:family:git:status"}}} =
+    assert {:ok, %{approved: 1, granted: %{"kind" => "permission_rule"}}} =
              Approval.approve(workspace, "feishu:chat", :similar, server: server)
 
     assert Task.await(task) == {:ok, :approved}
 
-    follow_up =
-      request(workspace,
-        grant_key: "command:execute:exact:def",
-        grant_options: [%{"grant_key" => "command:execute:family:git:status"}]
-      )
+    follow_up = path_request(workspace, subject: second_path)
 
     assert Approval.request(follow_up, server: server) == {:ok, :approved}
   end
 
-  test "elevated command approval is once-only", %{workspace: workspace, server: server} do
+  test "legacy command grant options are not accepted as durable rules", %{
+    workspace: workspace,
+    server: server
+  } do
     request =
       request(workspace,
         grant_key: "command:execute:escalated:abc",
@@ -94,7 +93,7 @@ defmodule Nex.Agent.SandboxApprovalTest do
           },
           %{
             "level" => "similar",
-            "grant_key" => "command:execute:family:npm:install",
+            "grant_key" => "legacy-command-family:npm:install",
             "subject" => "npm install"
           }
         ]
@@ -103,20 +102,19 @@ defmodule Nex.Agent.SandboxApprovalTest do
     task = Task.async(fn -> Approval.request(request, server: server) end)
     wait_for(fn -> Approval.pending?(workspace, "feishu:chat", server: server) end)
 
-    assert {:error, :elevated_approval_is_once_only} =
+    assert {:error, :permission_approval_requires_rule} =
              Approval.approve(workspace, "feishu:chat", :session, server: server)
 
-    assert {:error, :elevated_approval_is_once_only} =
-             Approval.approve(workspace, "feishu:chat", :similar, server: server)
-
-    assert {:error, :elevated_approval_is_once_only} =
+    assert {:error, :permission_approval_requires_rule} =
              Approval.approve(workspace, "feishu:chat", :always, server: server)
 
-    assert {:ok, %{approved: 1, granted: nil, choice: :once}} =
+    assert {:error, :permission_approval_requires_rule} =
+             Approval.approve(workspace, "feishu:chat", :similar, server: server)
+
+    assert {:ok, %{approved: 1, choice: :once}} =
              Approval.approve(workspace, "feishu:chat", :once, server: server)
 
     assert Task.await(task) == {:ok, :approved}
-    refute Approval.approved?(workspace, "feishu:chat", request, server: server)
   end
 
   test "request id approval resolves the selected pending request only", %{
@@ -181,24 +179,19 @@ defmodule Nex.Agent.SandboxApprovalTest do
 
     Bus.subscribe(:sandbox_approval_resolved)
 
-    grant_option = %{
-      "level" => "similar",
-      "grant_key" => "command:execute:family:git:read",
-      "subject" => "git read family"
-    }
+    first_path = Path.join([workspace, "notes", "first.md"])
+    second_path = Path.join([workspace, "notes", "second.md"])
 
     first =
-      request(workspace,
+      path_request(workspace,
         id: "approval_grant_first",
-        grant_key: "command:execute:exact:first",
-        grant_options: [grant_option]
+        subject: first_path
       )
 
     second =
-      request(workspace,
+      path_request(workspace,
         id: "approval_grant_second",
-        grant_key: "command:execute:exact:second",
-        grant_options: [grant_option]
+        subject: second_path
       )
 
     first_task = Task.async(fn -> Approval.request(first, server: server, publish?: false) end)
@@ -226,7 +219,7 @@ defmodule Nex.Agent.SandboxApprovalTest do
     workspace: workspace,
     server: server
   } do
-    request = request(workspace, grant_key: "path:read:exact:notes")
+    request = path_request(workspace, subject: Path.join([workspace, "notes", "a.md"]))
     task = Task.async(fn -> Approval.request(request, server: server) end)
     wait_for(fn -> Approval.pending?(workspace, "feishu:chat", server: server) end)
 
@@ -235,8 +228,9 @@ defmodule Nex.Agent.SandboxApprovalTest do
 
     assert Task.await(task) == {:ok, :approved}
 
-    grants_path = Path.join([workspace, "permissions", "grants.json"])
-    assert File.exists?(grants_path)
+    paths = PermissionRuleStore.paths(workspace)
+    assert File.exists?(paths.chain)
+    assert File.exists?(paths.manifest)
 
     next_server = String.to_atom("approval_reload_#{System.unique_integer([:positive])}")
 
@@ -247,6 +241,61 @@ defmodule Nex.Agent.SandboxApprovalTest do
 
     assert Approval.approved?(workspace, "feishu:chat", request, server: next_server)
     assert Approval.request(request, server: next_server) == {:ok, :approved}
+  end
+
+  test "command always approval persists and reloads through permission rules", %{
+    workspace: workspace,
+    server: server
+  } do
+    event = %{
+      channel: "discord",
+      chat_id: "thread-1",
+      workspace: workspace,
+      command: "dokobot get https://example.com/a",
+      requested_execution: :sandboxed
+    }
+
+    request =
+      request(workspace,
+        session_key: "discord:thread-1",
+        channel: "discord",
+        chat_id: "thread-1",
+        subject: event.command,
+        grant_options: PermissionRule.grant_options(event)
+      )
+
+    task = Task.async(fn -> Approval.request(request, server: server) end)
+    wait_for(fn -> Approval.pending?(workspace, "discord:thread-1", server: server) end)
+
+    assert {:ok, %{approved: 1, granted: %{"scope" => "always"}}} =
+             Approval.approve(workspace, "discord:thread-1", :always, server: server)
+
+    assert Task.await(task) == {:ok, :approved}
+
+    paths = PermissionRuleStore.paths(workspace)
+    assert File.exists?(paths.chain)
+    assert File.exists?(paths.manifest)
+
+    refute File.exists?(Path.join([workspace, "permissions", "grants.json"]))
+
+    next_server = String.to_atom("approval_rule_reload_#{System.unique_integer([:positive])}")
+
+    start_supervised!(%{
+      id: next_server,
+      start: {Approval, :start_link, [[name: next_server]]}
+    })
+
+    follow_up =
+      request(workspace,
+        session_key: "discord:thread-1",
+        channel: "discord",
+        chat_id: "thread-1",
+        subject: event.command,
+        grant_options: PermissionRule.grant_options(event)
+      )
+
+    assert Approval.approved?(workspace, "discord:thread-1", follow_up, server: next_server)
+    assert Approval.request(follow_up, server: next_server) == {:ok, :approved}
   end
 
   test "deny and reset resolve pending callers", %{workspace: workspace, server: server} do
@@ -279,6 +328,41 @@ defmodule Nex.Agent.SandboxApprovalTest do
           operation: :execute,
           subject: "git status",
           description: "run git status"
+        ],
+        attrs
+      )
+
+    Request.new(attrs)
+  end
+
+  defp path_request(workspace, attrs) do
+    channel = Keyword.get(attrs, :channel, "feishu_test")
+    chat_id = Keyword.get(attrs, :chat_id, "chat")
+    operation = Keyword.get(attrs, :operation, :read)
+    subject = Keyword.get(attrs, :subject, Path.join(workspace, "notes"))
+
+    rule_options =
+      PermissionRule.grant_options(%{
+        tool_name: "filesystem",
+        params: %{"path" => subject, "operation" => operation},
+        workspace: workspace,
+        channel: channel,
+        chat_id: chat_id
+      })
+
+    attrs =
+      Keyword.merge(
+        [
+          workspace: workspace,
+          session_key: "feishu:chat",
+          channel: channel,
+          chat_id: chat_id,
+          kind: :path,
+          operation: operation,
+          subject: subject,
+          description: "read #{subject}",
+          grant_key: rule_options |> List.first(%{}) |> Map.get("grant_key", ""),
+          grant_options: rule_options
         ],
         attrs
       )

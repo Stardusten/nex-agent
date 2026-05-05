@@ -22,4 +22,5 @@ When a design settles, promote the stable decision into `docs/dev/findings/`. Wh
 - [2026-04-28 Workbench App Authoring Guide](./2026-04-28-workbench-app-authoring-guide.md)
 - [2026-04-28 Workbench App Runtime Design](./2026-04-28-workbench-app-runtime.md)
 - [2026-04-29 Plugin Runtime Foundation](./2026-04-29-plugin-runtime-foundation.md)
-- [2026-04-30 Command Sandbox And Approval](./2026-04-30-command-sandbox-and-approval.md)
+- [2026-04-30 Command Sandbox And Approval](./2026-04-30-command-sandbox-and-approval.md) (superseded for approval rules by 2026-05-01)
+- [2026-05-01 Unified Permission Rule Engine](./2026-05-01-unified-permission-rule-engine.md)

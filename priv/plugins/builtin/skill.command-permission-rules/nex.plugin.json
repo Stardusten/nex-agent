@@ -1,0 +1,16 @@
+{
+  "id": "builtin:skill.command-permission-rules",
+  "title": "Permission Rules Skill",
+  "version": "0.1.0",
+  "enabled": true,
+  "source": "builtin",
+  "description": "Builtin sandbox approval, Allow rule, path permissions, elevated execution, and durable permission-rule workflow skill.",
+  "contributes": {
+    "skills": [
+      {
+        "id": "builtin:command-permission-rules",
+        "path": "skills/command-permission-rules/SKILL.md"
+      }
+    ]
+  }
+}

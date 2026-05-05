@@ -77,7 +77,7 @@ defmodule Nex.Agent.Sandbox.FileSystemTest do
     assert message =~ "Path not within allowed roots"
   end
 
-  test "interactive path approval supports once and session grants" do
+  test "interactive path approval supports once and session rules" do
     workspace = tmp_dir("approval-workspace")
     outside_root = external_root("approval-outside")
     outside_file = Path.join(outside_root, "note.txt")

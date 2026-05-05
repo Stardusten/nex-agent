@@ -37,6 +37,7 @@ defmodule Nex.Agent.Interface.Outbound.Approval do
         "request_metadata" => request.metadata,
         "risk_class" => Map.get(request.metadata, "risk_class"),
         "risk_hint" => Map.get(request.metadata, "risk_hint"),
+        "recommended_rule" => recommended_rule_metadata(request),
         "actions" => actions(request)
       },
       "_approval_request_id" => request.id
@@ -59,22 +60,11 @@ defmodule Nex.Agent.Interface.Outbound.Approval do
 
   @spec actions(Request.t()) :: [action()]
   def actions(%Request{} = request) do
-    if Request.elevated?(request) do
+    maybe_once_action(request) ++
+      rule_actions(request) ++
       [
-        action("approve_once", "Approve once", "/approve #{request.id}", "success"),
         action("deny_once", "Decline", "/deny #{request.id}", "danger")
       ]
-    else
-      [
-        action("approve_once", "Approve once", "/approve #{request.id}", "success"),
-        action("approve_session", "Allow command", "/approve #{request.id} session", "primary")
-      ] ++
-        similar_actions(request) ++
-        [
-          action("approve_always", "Always allow", "/approve #{request.id} always", "secondary"),
-          action("deny_once", "Decline", "/deny #{request.id}", "danger")
-        ]
-    end
   end
 
   @spec custom_id(String.t(), String.t()) :: String.t()
@@ -115,6 +105,8 @@ defmodule Nex.Agent.Interface.Outbound.Approval do
 
   @spec choice_for_action(String.t()) :: {:approve, atom()} | {:deny, atom()} | :error
   def choice_for_action("approve_once"), do: {:approve, :once}
+  def choice_for_action("approve_rule_session"), do: {:approve, :session}
+  def choice_for_action("approve_rule_similar"), do: {:approve, :similar}
   def choice_for_action("approve_session"), do: {:approve, :session}
   def choice_for_action("approve_similar"), do: {:approve, :similar}
   def choice_for_action("approve_always"), do: {:approve, :always}
@@ -124,10 +116,10 @@ defmodule Nex.Agent.Interface.Outbound.Approval do
   @spec status_label(atom(), atom()) :: String.t()
   def status_label(:approved, :once), do: "Allowed"
   def status_label(:approved, :all), do: "Allowed"
-  def status_label(:approved, :session), do: "Allowed for session"
-  def status_label(:approved, :similar), do: "Allowed similar"
-  def status_label(:approved, :always), do: "Always allowed"
-  def status_label(:approved, :grant), do: "Allowed by grant"
+  def status_label(:approved, :session), do: "Allowed rule"
+  def status_label(:approved, :similar), do: "Allowed rule"
+  def status_label(:approved, :always), do: "Allowed rule"
+  def status_label(:approved, :grant), do: "Allowed by rule"
   def status_label(:approved, _choice), do: "Allowed"
   def status_label(:denied, _choice), do: "Declined"
   def status_label(:timeout, _choice), do: "Timed out"
@@ -136,11 +128,42 @@ defmodule Nex.Agent.Interface.Outbound.Approval do
 
   @spec command_for_action(String.t()) :: {:ok, String.t()} | :error
   def command_for_action("approve_once"), do: {:ok, "/approve"}
+  def command_for_action("approve_rule_session"), do: {:ok, "/approve session"}
+  def command_for_action("approve_rule_similar"), do: {:ok, "/approve similar"}
   def command_for_action("approve_session"), do: {:ok, "/approve session"}
   def command_for_action("approve_similar"), do: {:ok, "/approve similar"}
   def command_for_action("approve_always"), do: {:ok, "/approve always"}
   def command_for_action("deny_once"), do: {:ok, "/deny"}
   def command_for_action(_action_id), do: :error
+
+  @spec recommended_rule_summary(Request.t() | map() | nil) :: String.t() | nil
+  def recommended_rule_summary(%Request{} = request) do
+    case recommended_rule_option(request) do
+      nil ->
+        nil
+
+      option ->
+        option
+        |> rule_subject()
+        |> case do
+          nil -> nil
+          subject -> "Rule: #{subject}."
+        end
+    end
+  end
+
+  def recommended_rule_summary(%{} = metadata) do
+    case request(metadata) || stringify_keys(metadata) do
+      %{"recommended_rule" => %{"summary" => summary}}
+      when is_binary(summary) and summary != "" ->
+        summary
+
+      _ ->
+        nil
+    end
+  end
+
+  def recommended_rule_summary(_request), do: nil
 
   defp action_id_for_custom_id(custom_id) when is_binary(custom_id) do
     case custom_id_parts(custom_id) do
@@ -149,11 +172,53 @@ defmodule Nex.Agent.Interface.Outbound.Approval do
     end
   end
 
-  defp similar_actions(%Request{} = request) do
-    if Enum.any?(request.grant_options, &similar_option?/1) do
-      [action("approve_similar", "Allow similar", "/approve #{request.id} similar", "primary")]
-    else
+  defp maybe_once_action(%Request{} = request) do
+    if rule_approval_required?(request) do
       []
+    else
+      [action("approve_once", "Allow once", "/approve #{request.id}", "success")]
+    end
+  end
+
+  defp rule_approval_required?(%Request{metadata: metadata}) when is_map(metadata) do
+    Map.get(metadata, "requires_rule_approval") == true or
+      Map.get(metadata, :requires_rule_approval) == true
+  end
+
+  defp rule_approval_required?(_request), do: false
+
+  defp recommended_rule_metadata(%Request{} = request) do
+    with %{} = option <- recommended_rule_option(request),
+         summary when is_binary(summary) <- recommended_rule_summary(request) do
+      choice = rule_choice(option)
+
+      %{
+        "summary" => summary,
+        "choice" => Atom.to_string(choice),
+        "command" => "/approve #{request.id} #{choice}",
+        "grant_key" => option["grant_key"] || option[:grant_key],
+        "scope" => option["scope"] || option[:scope],
+        "proposal_id" => option["proposal_id"] || option[:proposal_id]
+      }
+    else
+      _ -> nil
+    end
+  end
+
+  defp rule_actions(%Request{} = request) do
+    case recommended_rule_option(request) do
+      nil ->
+        []
+
+      option ->
+        id =
+          case rule_choice(option) do
+            :similar -> "approve_rule_similar"
+            :always -> "approve_always"
+            :session -> "approve_rule_session"
+          end
+
+        [action(id, "Allow rule", "/approve #{request.id} #{rule_choice(option)}", "primary")]
     end
   end
 
@@ -166,6 +231,42 @@ defmodule Nex.Agent.Interface.Outbound.Approval do
   end
 
   defp similar_option?(_option), do: false
+
+  defp recommended_rule_option(%Request{} = request) do
+    Enum.find(request.grant_options, &similar_option?/1) ||
+      Enum.find(request.grant_options, &exact_rule_option?/1)
+  end
+
+  defp exact_rule_option?(option) when is_map(option) do
+    (option["level"] || option[:level]) == "exact" and
+      is_map(option["rule"] || option[:rule])
+  end
+
+  defp exact_rule_option?(_option), do: false
+
+  defp rule_choice(option) do
+    cond do
+      similar_option?(option) ->
+        :similar
+
+      option["approval_choice"] in ["always", :always] or
+          option[:approval_choice] in ["always", :always] ->
+        :always
+
+      option["scope"] in ["always", :always] or option[:scope] in ["always", :always] ->
+        :always
+
+      true ->
+        :session
+    end
+  end
+
+  defp rule_subject(option) when is_map(option) do
+    case option["subject"] || option[:subject] do
+      value when is_binary(value) and value != "" -> value
+      _ -> nil
+    end
+  end
 
   defp action(id, label, command, style) do
     %{

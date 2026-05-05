@@ -454,26 +454,51 @@ defmodule Nex.Agent.Turn.Runner do
                 incomplete_reason = ResponseInfo.incomplete_reason(response)
                 reason = incomplete_error_message(incomplete_reason)
 
-                emit_control_plane_failure("runner.llm.call.incomplete", opts, %{
-                  "provider" => Keyword.get(opts, :provider) |> to_string(),
-                  "model" => Keyword.get(opts, :model) |> to_string(),
-                  "iteration" => iteration + 1,
-                  "max_iterations" => max_iterations,
-                  "duration_ms" => llm_duration,
-                  "tool_call_count" => tool_call_count(tool_calls),
-                  "finish_reason" => to_string(finish_reason),
-                  "incomplete_reason" => incomplete_reason || "unknown",
-                  "result_status" => "error",
-                  "reason_type" => "finish_reason_incomplete",
-                  "error_summary" => reason,
-                  "actor" => llm_actor(opts),
-                  "classifier" => %{"family" => "llm", "retryable" => true},
-                  "evidence" => %{"error_text" => reason}
-                })
+                if retry_incomplete_with_trim?(messages, response, incomplete_reason, opts) do
+                  trimmed = trim_messages(messages)
 
-                emit_iteration_finished(:error, iteration, max_iterations, iter_total, opts)
-                emit_stream_error(opts, reason)
-                {:error, stream_result(:error, opts, nil, %{error: reason}), session}
+                  emit_runner_lifecycle(
+                    :warning,
+                    "runner.llm.incomplete_retry",
+                    %{
+                      "iteration" => iteration + 1,
+                      "message_count" => length(messages),
+                      "trimmed_message_count" => length(trimmed),
+                      "incomplete_reason" => incomplete_reason,
+                      "retry_strategy" => "trim_history"
+                    },
+                    opts
+                  )
+
+                  run_loop(
+                    session,
+                    trimmed,
+                    iteration,
+                    max_iterations,
+                    Keyword.put(opts, :_incomplete_retry, true)
+                  )
+                else
+                  emit_control_plane_failure("runner.llm.call.incomplete", opts, %{
+                    "provider" => Keyword.get(opts, :provider) |> to_string(),
+                    "model" => Keyword.get(opts, :model) |> to_string(),
+                    "iteration" => iteration + 1,
+                    "max_iterations" => max_iterations,
+                    "duration_ms" => llm_duration,
+                    "tool_call_count" => tool_call_count(tool_calls),
+                    "finish_reason" => to_string(finish_reason),
+                    "incomplete_reason" => incomplete_reason || "unknown",
+                    "result_status" => "error",
+                    "reason_type" => "finish_reason_incomplete",
+                    "error_summary" => reason,
+                    "actor" => llm_actor(opts),
+                    "classifier" => %{"family" => "llm", "retryable" => true},
+                    "evidence" => %{"error_text" => reason}
+                  })
+
+                  emit_iteration_finished(:error, iteration, max_iterations, iter_total, opts)
+                  emit_stream_error(opts, reason)
+                  {:error, stream_result(:error, opts, nil, %{error: reason}), session}
+                end
 
               true ->
                 emit_runner_lifecycle(
@@ -1449,8 +1474,9 @@ defmodule Nex.Agent.Turn.Runner do
     call_llm_stream(messages, opts)
   end
 
-  # Tool names must start with a letter and contain only letters, numbers, underscores, dashes.
-  @valid_tool_name ~r/^[a-zA-Z][a-zA-Z0-9_-]*$/
+  # Common provider floor for function tool names: letters, numbers, underscores, dashes.
+  # Colons and dots are intentionally excluded by major tool-calling APIs.
+  @valid_tool_name ~r/^[a-zA-Z0-9_-]{1,64}$/
 
   defp registry_definitions(filter, opts) do
     if Process.whereis(ToolRegistry) do
@@ -2105,6 +2131,13 @@ defmodule Nex.Agent.Turn.Runner do
 
   defp incomplete_finish_reason?(reason) when reason in ["incomplete", :incomplete], do: true
   defp incomplete_finish_reason?(_reason), do: false
+
+  defp retry_incomplete_with_trim?(messages, response, reason, opts) do
+    reason == "stream_ended_without_terminal_event" and
+      not Keyword.get(opts, :_incomplete_retry, false) and
+      not Map.get(response, :streamed_text, false) and
+      length(trim_messages(messages)) < length(messages)
+  end
 
   defp incomplete_error_message(nil) do
     "LLM returned incomplete response without a provider reason."

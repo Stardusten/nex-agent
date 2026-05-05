@@ -7,6 +7,7 @@ defmodule Nex.Agent.Channel.DiscordTest do
   alias Nex.Agent.Interface.Outbound.Action, as: OutboundAction
   alias Nex.Agent.Interface.Outbound.Approval, as: OutboundApproval
   alias Nex.Agent.Sandbox.Approval.Request
+  alias Nex.Agent.Sandbox.PermissionRule
 
   @instance_id "discord_test"
 
@@ -171,6 +172,15 @@ defmodule Nex.Agent.Channel.DiscordTest do
   end
 
   test "approval outbound renders Discord components v2 buttons", %{pid: pid} do
+    grant_options =
+      PermissionRule.grant_options(%{
+        channel: @instance_id,
+        chat_id: "123",
+        workspace: File.cwd!(),
+        command: "git status",
+        requested_execution: :sandboxed
+      })
+
     request =
       Request.new(%{
         id: "approval_component_test",
@@ -178,11 +188,8 @@ defmodule Nex.Agent.Channel.DiscordTest do
         operation: :execute,
         subject: "git status",
         description: "Allow shell command: read command using git",
-        grant_key: "command:execute:exact:test",
-        grant_options: [
-          %{"level" => "exact", "grant_key" => "command:execute:exact:test"},
-          %{"level" => "similar", "grant_key" => "command:execute:family:git:git-read"}
-        ],
+        grant_key: grant_options |> List.first() |> Map.fetch!("grant_key"),
+        grant_options: grant_options,
         workspace: File.cwd!(),
         session_key: "#{@instance_id}:123",
         channel: @instance_id,
@@ -206,21 +213,26 @@ defmodule Nex.Agent.Channel.DiscordTest do
     assert_receive {:http_post, url, %{"flags" => 32_768, "components" => components}, _headers}
     assert url =~ "/channels/123/messages"
 
-    assert [%{"type" => 10, "content" => content}, %{"type" => 1, "components" => buttons}] =
+    assert [
+             %{"type" => 10, "content" => content},
+             %{"type" => 10, "content" => rule_content},
+             %{"type" => 1, "components" => buttons}
+           ] =
              components
 
     assert content == "⚙️ Bash - git status _(Waiting approval)_"
+    assert rule_content == "Rule: Allow exact `git status` in this thread."
     refute content =~ "/approve"
 
     labels = Enum.map(buttons, & &1["label"])
-    assert "Approve once" in labels
-    assert "Allow command" in labels
-    assert "Allow similar" in labels
-    assert "Always allow" in labels
+    assert "Allow once" in labels
+    assert "Allow rule" in labels
     assert "Decline" in labels
+    refute "Allow similar" in labels
+    refute "Always allow" in labels
 
     assert Enum.any?(buttons, fn button ->
-             button["custom_id"] == "nex.approval:approval_component_test:approve_session"
+             button["custom_id"] == "nex.approval:approval_component_test:approve_rule_session"
            end)
   end
 
@@ -308,6 +320,15 @@ defmodule Nex.Agent.Channel.DiscordTest do
       %{state | ws_pid: ws_pid}
     end)
 
+    grant_options =
+      PermissionRule.grant_options(%{
+        channel: @instance_id,
+        chat_id: "123",
+        workspace: File.cwd!(),
+        command: "git status",
+        requested_execution: :sandboxed
+      })
+
     request =
       Request.new(%{
         id: "approval_component_test",
@@ -315,7 +336,8 @@ defmodule Nex.Agent.Channel.DiscordTest do
         operation: :execute,
         subject: "git status",
         description: "Allow shell command: read command using git",
-        grant_key: "command:execute:exact:test",
+        grant_key: grant_options |> List.first() |> Map.fetch!("grant_key"),
+        grant_options: grant_options,
         workspace: File.cwd!(),
         session_key: "#{@instance_id}:123",
         channel: @instance_id,
@@ -345,7 +367,7 @@ defmodule Nex.Agent.Channel.DiscordTest do
            "member" => %{"user" => %{"id" => "user-1", "username" => "alice"}},
            "data" => %{
              "component_type" => 2,
-             "custom_id" => "nex.approval:approval_component_test:approve_session"
+             "custom_id" => "nex.approval:approval_component_test:approve_rule_session"
            },
            "message" => %{
              "id" => "approval-msg-1",
@@ -359,8 +381,8 @@ defmodule Nex.Agent.Channel.DiscordTest do
                  "components" => [
                    %{
                      "type" => 2,
-                     "custom_id" => "nex.approval:approval_component_test:approve_session",
-                     "label" => "Allow command",
+                     "custom_id" => "nex.approval:approval_component_test:approve_rule_session",
+                     "label" => "Allow rule",
                      "style" => 1
                    }
                  ]
@@ -379,7 +401,7 @@ defmodule Nex.Agent.Channel.DiscordTest do
 
     assert patch_url =~ "/channels/123/messages/approval-msg-1"
     assert [%{"type" => 10, "content" => status_text}] = components
-    assert status_text == "⚙️ Bash - git status _(Allowed for session)_"
+    assert status_text == "⚙️ Bash - git status _(Allowed rule)_"
     assert Task.await(task) == {:ok, :approved}
     refute_received {:bus_message, :inbound, _inbound}
   end

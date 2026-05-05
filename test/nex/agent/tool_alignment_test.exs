@@ -103,6 +103,20 @@ defmodule Nex.Agent.ToolAlignmentTest do
     refute Enum.any?(builtins, &String.starts_with?(&1["name"], "feishu_"))
   end
 
+  test "permission tools use provider-safe namespace names" do
+    names = Registry.definitions(:base) |> Enum.map(& &1["name"])
+
+    assert "permission__add_rule" in names
+    assert "permission__list_rules" in names
+    assert "permission__revoke_rule" in names
+    assert "permission__debug__decision" in names
+    refute "add_permission_rule" in names
+    refute "permission_rule_debug" in names
+
+    permission_names = Enum.filter(names, &String.starts_with?(&1, "permission__"))
+    assert Enum.all?(permission_names, &Regex.match?(~r/^[a-zA-Z0-9_-]{1,64}$/, &1))
+  end
+
   test "skills stay discoverable resources instead of expanding into synthetic tools", %{
     workspace: workspace
   } do

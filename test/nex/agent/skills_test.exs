@@ -118,6 +118,7 @@ defmodule Nex.Agent.Capability.SkillsTest do
     assert prompt =~ ~s(<skill id="builtin:runtime-observability">)
     assert prompt =~ ~s(<skill id="builtin:memory-and-evolution-routing">)
     assert prompt =~ ~s(<skill id="builtin:lark-feishu-ops">)
+    assert prompt =~ ~s(<skill id="builtin:command-permission-rules">)
     assert prompt =~ ~s(<skill id="workspace:normal-guide">)
     assert prompt =~ "<description>Use for ordinary skill catalog tests.</description>"
     refute prompt =~ "Body should load only after skill_get."
@@ -279,5 +280,12 @@ defmodule Nex.Agent.Capability.SkillsTest do
     assert {:ok, feishu_skill} = Skills.read_catalog_skill(feishu_card)
     assert feishu_skill["content"] =~ "lark-cli"
     assert feishu_skill["content"] =~ "local_image_path"
+
+    assert {:ok, permission_card} =
+             Skills.resolve_catalog_skill("builtin:command-permission-rules", workspace: workspace)
+
+    assert {:ok, permission_skill} = Skills.read_catalog_skill(permission_card)
+    assert permission_skill["content"] =~ "Allow rule"
+    assert permission_skill["content"] =~ ~s(sandbox_permissions": "require_escalated)
   end
 end

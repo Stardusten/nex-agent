@@ -8,6 +8,7 @@ defmodule Nex.Agent.Sandbox.Security do
   alias Nex.Agent.Runtime.{Config, Workspace}
   alias Nex.Agent.Sandbox.Approval
   alias Nex.Agent.Sandbox.Approval.Request
+  alias Nex.Agent.Sandbox.PermissionRule
   alias Nex.Agent.Sandbox.Policy
 
   @blocked_commands [
@@ -422,8 +423,9 @@ defmodule Nex.Agent.Sandbox.Security do
 
   defp path_approval_request(info, operation, ctx) do
     grant_operation = grant_operation(operation)
-    grant_key = path_grant_key(grant_operation, :exact, info.canonical_path)
-    parent = Path.dirname(info.canonical_path)
+    permission_event = path_permission_event(info, grant_operation, ctx)
+    grant_options = PermissionRule.grant_options(permission_event)
+    grant_key = grant_options |> List.first(%{}) |> Map.get("grant_key", "")
 
     Request.new(%{
       kind: :path,
@@ -431,38 +433,32 @@ defmodule Nex.Agent.Sandbox.Security do
       subject: info.canonical_path,
       description: "Allow #{grant_operation} access to #{info.canonical_path}",
       grant_key: grant_key,
-      grant_options: [
-        %{
-          "level" => "exact",
-          "grant_key" => grant_key,
-          "subject" => info.canonical_path
-        },
-        %{
-          "level" => "similar",
-          "scope" => "similar",
-          "grant_key" => path_grant_key(grant_operation, :directory, parent),
-          "subject" => "#{grant_operation} under #{parent}"
-        }
-      ],
+      grant_options: grant_options,
       workspace: workspace_from_ctx(ctx) || Workspace.root(),
       session_key: session_key_from_ctx(ctx),
       channel: ctx_value(ctx, :channel),
       chat_id: ctx_value(ctx, :chat_id),
-      authorized_actor: actor_from_ctx(ctx)
+      authorized_actor: actor_from_ctx(ctx),
+      metadata: %{"permission_event" => PermissionRule.raw_event_to_map(permission_event)}
     })
   end
 
   defp grant_operation(operation) when operation in @read_operations, do: :read
   defp grant_operation(_operation), do: :write
 
-  defp path_grant_key(operation, level, subject) do
-    digest =
-      subject
-      |> to_string()
-      |> then(&:crypto.hash(:sha256, &1))
-      |> Base.encode16(case: :lower)
-
-    "path:#{operation}:#{level}:#{digest}"
+  defp path_permission_event(info, operation, ctx) do
+    %{
+      tool_name: "filesystem",
+      params: %{
+        "path" => info.input_path,
+        "operation" => operation
+      },
+      workspace: workspace_from_ctx(ctx) || Workspace.root(),
+      cwd: ctx_value(ctx, :cwd),
+      channel: ctx_value(ctx, :channel),
+      chat_id: ctx_value(ctx, :chat_id),
+      actor: actor_from_ctx(ctx)
+    }
   end
 
   defp interactive_approval_context?(%Request{} = request) do

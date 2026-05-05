@@ -2,7 +2,7 @@ defmodule Nex.Agent.Sandbox.Approval do
   @moduledoc """
   Deterministic approval state for sandbox and permission requests.
 
-  Session grants are in-memory. Always grants are persisted under the workspace
+  Session rules are in-memory. Durable rules are persisted under the workspace
   permissions directory. Requests are resolved FIFO per workspace/session.
   """
 
@@ -13,14 +13,14 @@ defmodule Nex.Agent.Sandbox.Approval do
   alias Nex.Agent.Interface.Outbound
   alias Nex.Agent.Interface.Outbound.Approval, as: OutboundApproval
   alias Nex.Agent.Observe.ControlPlane.Log
-  alias Nex.Agent.Runtime.Workspace
-  alias Nex.Agent.Sandbox.Approval.{Grant, Request}
+  alias Nex.Agent.Sandbox.Approval.Request
+  alias Nex.Agent.Sandbox.{PermissionRule, PermissionRuleStore}
   require Log
 
   defstruct pending_by_session: %{},
             pending_by_id: %{},
-            session_grants: %{},
-            always_grants: %{},
+            session_rules: %{},
+            always_rules: %{},
             loaded_workspaces: MapSet.new()
 
   @type approval_result ::
@@ -98,18 +98,27 @@ defmodule Nex.Agent.Sandbox.Approval do
     )
   end
 
-  @spec grant_session(String.t(), String.t(), map(), keyword()) :: {:ok, map()} | {:error, term()}
-  def grant_session(workspace, session_key, grant, opts \\ []) do
+  @spec debug_decision(String.t(), String.t(), PermissionRule.RawToolEvent.t() | map(), keyword()) ::
+          PermissionRule.Decision.t()
+  def debug_decision(workspace, session_key, raw_event, opts \\ []) do
     GenServer.call(
       server(opts),
-      {:grant_session, Path.expand(workspace), session_key, grant},
-      :infinity
+      {:debug_decision, Path.expand(workspace), session_key, raw_event, opts}
     )
   end
 
-  @spec grant_always(String.t(), map(), keyword()) :: {:ok, map()} | {:error, term()}
-  def grant_always(workspace, grant, opts \\ []) do
-    GenServer.call(server(opts), {:grant_always, Path.expand(workspace), grant}, :infinity)
+  @spec list_rules(String.t(), String.t(), keyword()) :: [map()]
+  def list_rules(workspace, session_key, opts \\ []) do
+    GenServer.call(server(opts), {:list_rules, Path.expand(workspace), session_key})
+  end
+
+  @spec revoke_rule(String.t(), String.t(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def revoke_rule(workspace, session_key, rule_ref, opts \\ []) when is_binary(rule_ref) do
+    GenServer.call(
+      server(opts),
+      {:revoke_rule, Path.expand(workspace), session_key, rule_ref},
+      :infinity
+    )
   end
 
   @spec cancel_pending(String.t(), String.t(), atom(), keyword()) :: {:ok, map()}
@@ -119,11 +128,6 @@ defmodule Nex.Agent.Sandbox.Approval do
       {:cancel_pending, Path.expand(workspace), session_key, reason},
       :infinity
     )
-  end
-
-  @spec clear_session_grants(String.t(), String.t(), keyword()) :: :ok
-  def clear_session_grants(workspace, session_key, opts \\ []) do
-    GenServer.call(server(opts), {:clear_session_grants, Path.expand(workspace), session_key})
   end
 
   @spec reset_session(String.t(), String.t(), atom(), keyword()) :: {:ok, map()}
@@ -142,25 +146,39 @@ defmodule Nex.Agent.Sandbox.Approval do
   def handle_call({:request, %Request{} = request, opts}, from, state) do
     state = ensure_workspace_loaded(state, request.workspace)
 
-    if approved_in_state?(state, request.workspace, request.session_key, request) do
-      {:reply, {:ok, :approved}, state}
-    else
-      request = %{request | from: from}
-      state = add_pending(state, request)
-      observe_request("sandbox.approval.requested", request, %{"status" => "pending"})
-      notify_pending(request, opts)
-      if Keyword.get(opts, :publish?, true), do: publish_request(request)
-      {:noreply, state}
+    case decision_in_state(state, request.workspace, request.session_key, request) do
+      :allow ->
+        {:reply, {:ok, :approved}, state}
+
+      :deny ->
+        {:reply, {:error, :denied}, state}
+
+      :ask ->
+        request = %{request | from: from}
+        state = add_pending(state, request)
+        observe_request("sandbox.approval.requested", request, %{"status" => "pending"})
+        notify_pending(request, opts)
+        if Keyword.get(opts, :publish?, true), do: publish_request(request)
+        {:noreply, state}
     end
   end
 
   def handle_call({:approve, workspace, session_key, :all, _opts}, _from, state) do
     state = ensure_workspace_loaded(state, workspace)
     {requests, state} = pop_all_pending(state, workspace, session_key)
+    {rule_required, approvable} = Enum.split_with(requests, &rule_approval_required?/1)
+    state = Enum.reduce(rule_required, state, &add_pending(&2, &1))
 
-    Enum.each(requests, &resolve_request(&1, :approved, :all, nil))
+    Enum.each(approvable, &resolve_request(&1, :approved, :all, nil))
 
-    {:reply, {:ok, %{approved: length(requests), granted: nil, choice: :all}}, state}
+    {:reply,
+     {:ok,
+      %{
+        approved: length(approvable),
+        skipped_rule_required: length(rule_required),
+        granted: nil,
+        choice: :all
+      }}, state}
   end
 
   def handle_call({:approve, workspace, session_key, choice, _opts}, _from, state)
@@ -276,36 +294,29 @@ defmodule Nex.Agent.Sandbox.Approval do
     {:reply, approved_in_state?(state, workspace, session_key, request_or_grant_key), state}
   end
 
-  def handle_call({:grant_session, workspace, session_key, grant}, _from, state) do
-    case Grant.normalize(grant) do
-      nil ->
-        {:reply, {:error, :invalid_grant}, state}
-
-      grant ->
-        state = put_session_grant(state, workspace, session_key, grant)
-        observe_grant("sandbox.approval.granted", workspace, session_key, grant)
-        {:reply, {:ok, grant}, state}
-    end
+  def handle_call({:debug_decision, workspace, session_key, raw_event, opts}, _from, state) do
+    state = ensure_workspace_loaded(state, workspace)
+    extra_rules = Keyword.get(opts, :extra_rules, [])
+    rules = session_rules(state, workspace, session_key) ++ always_rules(state, workspace)
+    decision = PermissionRule.decide(raw_event, rules ++ extra_rules)
+    {:reply, decision, state}
   end
 
-  def handle_call({:grant_always, workspace, grant}, _from, state) do
+  def handle_call({:list_rules, workspace, session_key}, _from, state) do
+    state = ensure_workspace_loaded(state, workspace)
+    {:reply, rule_entries(state, workspace, session_key), state}
+  end
+
+  def handle_call({:revoke_rule, workspace, session_key, rule_ref}, _from, state) do
     state = ensure_workspace_loaded(state, workspace)
 
-    case Grant.normalize(grant) do
-      nil ->
-        {:reply, {:error, :invalid_grant}, state}
+    case revoke_rule_in_state(state, workspace, session_key, rule_ref) do
+      {:ok, state, entry} ->
+        observe_rule_revoked(workspace, session_key, entry)
+        {:reply, {:ok, entry}, state}
 
-      grant ->
-        state = put_always_grant(state, workspace, grant)
-
-        case save_always_grants(workspace, always_grants(state, workspace)) do
-          :ok ->
-            observe_grant("sandbox.approval.granted", workspace, nil, grant)
-            {:reply, {:ok, grant}, state}
-
-          {:error, reason} ->
-            {:reply, {:error, reason}, state}
-        end
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
     end
   end
 
@@ -316,17 +327,17 @@ defmodule Nex.Agent.Sandbox.Approval do
     {:reply, {:ok, %{cancelled: length(requests), reason: reason}}, state}
   end
 
-  def handle_call({:clear_session_grants, workspace, session_key}, _from, state) do
-    state = update_in(state.session_grants, &delete_session_grants(&1, workspace, session_key))
-    {:reply, :ok, state}
-  end
-
   def handle_call({:reset_session, workspace, session_key, reason}, _from, state) do
     {requests, state} = pop_all_pending(state, workspace, session_key)
     Enum.each(requests, &reply_request(&1, {:error, {:cancelled, reason}}))
     Enum.each(requests, &observe_request("sandbox.approval.cancelled", &1, %{"reason" => reason}))
-    state = update_in(state.session_grants, &delete_session_grants(&1, workspace, session_key))
-    {:reply, {:ok, %{cancelled: length(requests), cleared_session_grants: true}}, state}
+
+    state = %{
+      state
+      | session_rules: delete_session_rules(state.session_rules, workspace, session_key)
+    }
+
+    {:reply, {:ok, %{cancelled: length(requests), cleared_session_rules: true}}, state}
   end
 
   defp normalize_request(%Request{} = request),
@@ -436,30 +447,45 @@ defmodule Nex.Agent.Sandbox.Approval do
     end)
   end
 
-  defp grant_spec_for_choice(_request, :once), do: {:ok, :once}
-
-  defp grant_spec_for_choice(%Request{} = request, choice)
-       when choice in [:session, :always, :similar] do
-    if Request.elevated?(request) do
-      {:error, :elevated_approval_is_once_only}
+  defp grant_spec_for_choice(%Request{} = request, :once) do
+    if rule_approval_required?(request) do
+      {:error, :permission_approval_requires_rule}
     else
-      grant_spec_for_non_elevated_choice(request, choice)
+      {:ok, :once}
     end
   end
 
-  defp grant_spec_for_non_elevated_choice(%Request{} = request, :session) do
-    {:ok, {:session, request.grant_key, request.subject}}
-  end
-
-  defp grant_spec_for_non_elevated_choice(%Request{} = request, :always) do
-    {:ok, {:always, request.grant_key, request.subject}}
-  end
-
-  defp grant_spec_for_non_elevated_choice(%Request{} = request, :similar) do
+  defp grant_spec_for_choice(%Request{} = request, :similar) do
     case similar_grant_option(request) do
-      nil -> {:error, :no_similar_grant_option}
-      option -> {:ok, {:session, option["grant_key"], option["subject"] || request.subject}}
+      nil ->
+        {:error, :no_permission_rule_option}
+
+      %{"rule" => rule} = option ->
+        {:ok, {:session_rule, rule, option["subject"] || request.subject}}
+
+      _option ->
+        {:error, :permission_approval_requires_rule}
     end
+  end
+
+  defp grant_spec_for_choice(%Request{} = request, :session) do
+    case exact_rule_option(request) do
+      nil -> {:error, :permission_approval_requires_rule}
+      option -> {:ok, {:session_rule, option["rule"], option["subject"] || request.subject}}
+    end
+  end
+
+  defp grant_spec_for_choice(%Request{} = request, :always) do
+    case exact_rule_option(request) do
+      nil -> {:error, :permission_approval_requires_rule}
+      option -> {:ok, {:always_rule, option["rule"], option["subject"] || request.subject}}
+    end
+  end
+
+  defp exact_rule_option(%Request{} = request) do
+    Enum.find(request.grant_options, fn option ->
+      option["level"] == "exact" and is_map(option["rule"])
+    end)
   end
 
   defp similar_grant_option(%Request{} = request) do
@@ -480,10 +506,19 @@ defmodule Nex.Agent.Sandbox.Approval do
          workspace,
          session_key,
          %Request{} = request,
-         {:session, grant_key, subject}
+         {:session_rule, rule, subject}
        ) do
-    grant = Grant.new(request, :session, grant_key: grant_key, subject: subject)
-    {:ok, put_session_grant(state, workspace, session_key, grant), grant}
+    rule = rule_from_grant(request, rule)
+
+    grant = rule_grant_summary(request, rule, :session, subject)
+
+    existing_rules =
+      session_rules(state, workspace, session_key) ++ always_rules(state, workspace)
+
+    with :ok <- PermissionRule.validate_new_rule(rule, existing_rules) do
+      state = put_session_rule(state, workspace, session_key, rule)
+      {:ok, state, grant}
+    end
   end
 
   defp apply_grant_spec(
@@ -491,29 +526,54 @@ defmodule Nex.Agent.Sandbox.Approval do
          workspace,
          _session_key,
          %Request{} = request,
-         {:always, grant_key, subject}
+         {:always_rule, rule, subject}
        ) do
-    grant = Grant.new(request, :always, grant_key: grant_key, subject: subject)
-    state = put_always_grant(state, workspace, grant)
+    rule = rule_from_grant(request, rule)
 
-    case save_always_grants(workspace, always_grants(state, workspace)) do
-      :ok -> {:ok, state, grant}
-      {:error, reason} -> {:error, reason}
+    grant = rule_grant_summary(request, rule, :always, subject)
+
+    with :ok <- PermissionRule.validate_new_rule(rule, always_rules(state, workspace)) do
+      state = put_always_rule(state, workspace, rule)
+
+      with :ok <- PermissionRuleStore.save(workspace, always_rules(state, workspace)) do
+        {:ok, state, grant}
+      else
+        {:error, reason} -> {:error, reason}
+      end
     end
   end
 
-  defp approved_in_state?(state, workspace, session_key, %Request{} = request) do
-    keys = request_grant_keys(request)
-    grants = session_grants(state, workspace, session_key) ++ always_grants(state, workspace)
-    Enum.any?(grants, &(Map.get(&1, "grant_key") in keys))
+  defp rule_grant_summary(%Request{} = request, rule, scope, subject) do
+    %{
+      "kind" => "permission_rule",
+      "operation" => Atom.to_string(request.operation),
+      "subject" => subject,
+      "grant_key" => PermissionRule.grant_key(rule),
+      "scope" => Atom.to_string(scope),
+      "created_at" => DateTime.utc_now() |> DateTime.to_iso8601()
+    }
   end
 
-  defp approved_in_state?(state, workspace, session_key, grant_key) when is_binary(grant_key) do
-    grants = session_grants(state, workspace, session_key) ++ always_grants(state, workspace)
-    Enum.any?(grants, &(Map.get(&1, "grant_key") == grant_key))
+  defp decision_in_state(state, workspace, session_key, %Request{} = request) do
+    rules = session_rules(state, workspace, session_key) ++ always_rules(state, workspace)
+
+    case PermissionRule.decide(PermissionRule.event_from_request(request), rules).action do
+      :allow -> :allow
+      :deny -> :deny
+      :ask -> :ask
+    end
   end
 
-  defp approved_in_state?(_state, _workspace, _session_key, _request_or_grant_key), do: false
+  defp decision_in_state(_state, _workspace, _session_key, request_or_grant_key)
+       when is_binary(request_or_grant_key) do
+    :ask
+  end
+
+  defp decision_in_state(_state, _workspace, _session_key, _request_or_grant_key), do: :ask
+
+  defp approved_in_state?(state, workspace, session_key, request_or_grant_key) do
+    decision_in_state(state, workspace, session_key, request_or_grant_key) == :allow
+  end
 
   defp sweep_approved_pending(_state, _workspace, _session_key, nil), do: []
 
@@ -537,59 +597,151 @@ defmodule Nex.Agent.Sandbox.Approval do
     end)
   end
 
-  defp request_grant_keys(%Request{} = request) do
-    request.grant_options
-    |> Enum.map(&Map.get(&1, "grant_key"))
-    |> Enum.reject(&is_nil/1)
-    |> then(&[request.grant_key | &1])
-    |> Enum.uniq()
-  end
-
-  defp put_session_grant(state, workspace, session_key, grant) do
+  defp put_session_rule(state, workspace, session_key, rule) do
     workspace = Path.expand(workspace)
+    rule = PermissionRule.Rule.new(rule)
 
     session_table =
-      state.session_grants
+      state.session_rules
       |> Map.get(workspace, %{})
-      |> Map.update(session_key, [grant], &uniq_grants([grant | &1]))
+      |> Map.update(session_key, [rule], &uniq_rules([rule | &1]))
 
-    %{state | session_grants: Map.put(state.session_grants, workspace, session_table)}
+    %{state | session_rules: Map.put(state.session_rules, workspace, session_table)}
   end
 
-  defp session_grants(state, workspace, session_key) do
-    state.session_grants
+  defp session_rules(state, workspace, session_key) do
+    state.session_rules
     |> Map.get(Path.expand(workspace), %{})
     |> Map.get(session_key, [])
   end
 
-  defp delete_session_grants(session_grants, workspace, session_key) do
+  defp rule_entries(state, workspace, session_key) do
+    session_entries =
+      state
+      |> session_rules(workspace, session_key)
+      |> Enum.map(&rule_entry(&1, :session))
+
+    always_entries =
+      state
+      |> always_rules(workspace)
+      |> Enum.map(&rule_entry(&1, :always))
+
+    session_entries ++ always_entries
+  end
+
+  defp rule_entry(rule, persistence) do
+    rule = PermissionRule.Rule.new(rule)
+
+    %{
+      rule_ref: PermissionRule.grant_key(rule),
+      persistence: persistence,
+      rule: rule
+    }
+  end
+
+  defp revoke_rule_in_state(state, workspace, session_key, rule_ref) do
     workspace = Path.expand(workspace)
 
-    case Map.get(session_grants, workspace) do
+    with {:ok, persistence, rule} <- find_revocable_rule(state, workspace, session_key, rule_ref),
+         :ok <- validate_revocable_rule(rule) do
+      case persistence do
+        :session ->
+          {:ok, revoke_session_rule(state, workspace, session_key, rule_ref),
+           rule_entry(rule, :session)}
+
+        :always ->
+          rules = always_rules(state, workspace)
+          remaining = Enum.reject(rules, &(PermissionRule.grant_key(&1) == rule_ref))
+
+          with :ok <- PermissionRuleStore.save(workspace, remaining) do
+            {:ok, %{state | always_rules: Map.put(state.always_rules, workspace, remaining)},
+             rule_entry(rule, :always)}
+          end
+      end
+    end
+  end
+
+  defp find_revocable_rule(state, workspace, session_key, rule_ref) do
+    session_rule =
+      state
+      |> session_rules(workspace, session_key)
+      |> Enum.find(&(PermissionRule.grant_key(&1) == rule_ref))
+
+    always_rule =
+      state
+      |> always_rules(workspace)
+      |> Enum.find(&(PermissionRule.grant_key(&1) == rule_ref))
+
+    cond do
+      session_rule -> {:ok, :session, session_rule}
+      always_rule -> {:ok, :always, always_rule}
+      true -> {:error, :permission_rule_not_found}
+    end
+  end
+
+  defp validate_revocable_rule(%PermissionRule.Rule{effect: :allow, level: 0, source: :owner_grant}),
+    do: :ok
+
+  defp validate_revocable_rule(%PermissionRule.Rule{effect: effect}) when effect != :allow,
+    do: {:error, :permission_rule_revoke_cannot_remove_non_allow_rule}
+
+  defp validate_revocable_rule(_rule), do: {:error, :permission_rule_revoke_not_allowed}
+
+  defp revoke_session_rule(state, workspace, session_key, rule_ref) do
+    workspace = Path.expand(workspace)
+
+    session_table =
+      state.session_rules
+      |> Map.get(workspace, %{})
+      |> Map.update(session_key, [], fn rules ->
+        Enum.reject(rules, &(PermissionRule.grant_key(&1) == rule_ref))
+      end)
+      |> drop_empty_session_rules(session_key)
+
+    session_rules =
+      if map_size(session_table) == 0,
+        do: Map.delete(state.session_rules, workspace),
+        else: Map.put(state.session_rules, workspace, session_table)
+
+    %{state | session_rules: session_rules}
+  end
+
+  defp drop_empty_session_rules(session_table, session_key) do
+    case Map.get(session_table, session_key) do
+      [] -> Map.delete(session_table, session_key)
+      _rules -> session_table
+    end
+  end
+
+  defp delete_session_rules(session_rules, workspace, session_key) do
+    workspace = Path.expand(workspace)
+
+    case Map.get(session_rules, workspace) do
       nil ->
-        session_grants
+        session_rules
 
       sessions ->
         sessions = Map.delete(sessions, session_key)
 
         if map_size(sessions) == 0,
-          do: Map.delete(session_grants, workspace),
-          else: Map.put(session_grants, workspace, sessions)
+          do: Map.delete(session_rules, workspace),
+          else: Map.put(session_rules, workspace, sessions)
     end
   end
 
-  defp put_always_grant(state, workspace, grant) do
+  defp put_always_rule(state, workspace, rule) do
     workspace = Path.expand(workspace)
-    grants = state.always_grants |> Map.get(workspace, []) |> then(&uniq_grants([grant | &1]))
-    %{state | always_grants: Map.put(state.always_grants, workspace, grants)}
+    rule = PermissionRule.Rule.new(rule)
+    rules = state.always_rules |> Map.get(workspace, []) |> then(&uniq_rules([rule | &1]))
+    %{state | always_rules: Map.put(state.always_rules, workspace, rules)}
   end
 
-  defp always_grants(state, workspace) do
-    Map.get(state.always_grants, Path.expand(workspace), [])
+  defp always_rules(state, workspace) do
+    Map.get(state.always_rules, Path.expand(workspace), [])
   end
 
-  defp uniq_grants(grants) do
-    Enum.uniq_by(grants, &Map.get(&1, "grant_key"))
+  defp uniq_rules(rules) do
+    Enum.uniq_by(rules, &PermissionRule.grant_key/1)
   end
 
   defp ensure_workspace_loaded(state, workspace) do
@@ -598,55 +750,52 @@ defmodule Nex.Agent.Sandbox.Approval do
     if MapSet.member?(state.loaded_workspaces, workspace) do
       state
     else
-      grants = load_always_grants(workspace)
+      rules = load_always_rules(workspace)
 
       %{
         state
-        | always_grants: Map.put(state.always_grants, workspace, grants),
+        | always_rules: Map.put(state.always_rules, workspace, rules),
           loaded_workspaces: MapSet.put(state.loaded_workspaces, workspace)
       }
     end
   end
 
-  defp load_always_grants(workspace) do
-    path = grants_path(workspace)
-
-    with true <- File.exists?(path),
-         {:ok, body} <- File.read(path),
-         {:ok, decoded} <- Jason.decode(body),
-         grants when is_list(grants) <- grants_from_decoded(decoded) do
-      grants
-      |> Enum.map(&Grant.normalize/1)
-      |> Enum.reject(&is_nil/1)
-      |> Enum.filter(&(Map.get(&1, "scope") == "always"))
-      |> uniq_grants()
-    else
-      false ->
-        []
-
-      error ->
-        Logger.warning("[Sandbox.Approval] Could not load grants from #{path}: #{inspect(error)}")
-        []
-    end
+  defp rule_from_grant(%Request{} = request, rule) when is_map(rule) do
+    rule
+    |> Map.put("created_at", DateTime.utc_now() |> DateTime.to_iso8601())
+    |> Map.put("created_by", request.authorized_actor)
+    |> PermissionRule.Rule.new()
   end
 
-  defp grants_from_decoded(%{"grants" => grants}) when is_list(grants), do: grants
-  defp grants_from_decoded(grants) when is_list(grants), do: grants
-  defp grants_from_decoded(_decoded), do: []
+  defp rule_from_grant(%Request{} = _request, rule), do: PermissionRule.Rule.new(rule)
 
-  defp save_always_grants(workspace, grants) do
-    Workspace.ensure!(workspace: workspace)
-    path = grants_path(workspace)
-
-    with {:ok, encoded} <- Jason.encode(%{"version" => 1, "grants" => grants}, pretty: true),
-         :ok <- File.write(path, encoded) do
-      :ok
-    end
-  rescue
-    e -> {:error, e}
+  defp rule_approval_required?(%Request{metadata: metadata}) when is_map(metadata) do
+    Map.get(metadata, "requires_rule_approval") == true or
+      Map.get(metadata, :requires_rule_approval) == true
   end
 
-  defp grants_path(workspace), do: Path.join([workspace, "permissions", "grants.json"])
+  defp rule_approval_required?(_request), do: false
+
+  defp load_always_rules(workspace) do
+    case PermissionRuleStore.load(workspace) do
+      {:ok, rules} ->
+        uniq_rules(rules)
+
+      {:error, {:tampered, reason}, valid_prefix} ->
+        Logger.warning(
+          "[Sandbox.Approval] Permission rules tamper detected for #{workspace}: #{inspect(reason)}"
+        )
+
+        Log.warning(
+          "permission.rules.tamper_detected",
+          %{"reason" => inspect(reason), "valid_prefix_count" => length(valid_prefix)},
+          context: %{workspace: workspace},
+          workspace: workspace
+        )
+
+        uniq_rules(valid_prefix)
+    end
+  end
 
   defp session_scope_key(workspace, session_key), do: {Path.expand(workspace), session_key}
 
@@ -722,12 +871,57 @@ defmodule Nex.Agent.Sandbox.Approval do
   defp render_request(%Request{} = request) do
     [
       "Approval required: #{request.description}",
+      approval_rule_hint(request),
       request_risk_hint(request),
-      "Use `/approve #{request.id}`, `/approve #{request.id} session`, `/approve #{request.id} similar`, `/approve #{request.id} always`, `/deny #{request.id}`, or `/deny all`."
+      approval_command_help(request)
     ]
     |> Enum.reject(&is_nil/1)
     |> Enum.join("\n\n")
   end
+
+  defp approval_command_help(%Request{} = request) do
+    command_approval_help(request)
+  end
+
+  defp command_approval_help(%Request{} = request) do
+    approve_commands =
+      maybe_once_approval_command(request) ++ maybe_rule_approval_command(request)
+
+    "Use #{Enum.join(approve_commands, ", ")}, `/deny #{request.id}`, or `/deny all`."
+  end
+
+  defp maybe_once_approval_command(%Request{} = request) do
+    if rule_approval_required?(request), do: [], else: ["`/approve #{request.id}`"]
+  end
+
+  defp maybe_rule_approval_command(%Request{} = request) do
+    case OutboundApproval.recommended_rule_summary(request) do
+      nil ->
+        []
+
+      _summary ->
+        ["`/approve #{request.id} #{rule_approval_choice(request)}` (allow rule)"]
+    end
+  end
+
+  defp rule_approval_choice(%Request{} = request) do
+    if Enum.any?(request.grant_options, &similar_grant_option?/1) do
+      :similar
+    else
+      case exact_rule_option(request) do
+        %{"approval_choice" => "always"} -> :always
+        %{"scope" => "always"} -> :always
+        _option -> :session
+      end
+    end
+  end
+
+  defp similar_grant_option?(option) when is_map(option) do
+    option["level"] == "similar" or option["scope"] == "similar" or
+      String.contains?(to_string(option["grant_key"] || ""), ":family:")
+  end
+
+  defp similar_grant_option?(_option), do: false
 
   defp request_risk_hint(%Request{metadata: %{"risk_hint" => hint}})
        when is_binary(hint) and hint != "" do
@@ -735,6 +929,9 @@ defmodule Nex.Agent.Sandbox.Approval do
   end
 
   defp request_risk_hint(_request), do: nil
+
+  defp approval_rule_hint(%Request{} = request),
+    do: OutboundApproval.recommended_rule_summary(request)
 
   defp approval_attrs(choice, nil), do: %{"choice" => Atom.to_string(choice)}
 
@@ -765,20 +962,19 @@ defmodule Nex.Agent.Sandbox.Approval do
     )
   end
 
-  defp observe_grant(tag, workspace, session_key, grant) do
+  defp stringify_observe_attrs(attrs) do
+    Map.new(attrs, fn {key, value} -> {to_string(key), to_string(value)} end)
+  end
+
+  defp observe_rule_revoked(workspace, session_key, %{rule_ref: rule_ref, persistence: persistence}) do
     Log.info(
-      tag,
+      "permission.rule.revoked",
       %{
-        "kind" => Map.get(grant, "kind"),
-        "operation" => Map.get(grant, "operation"),
-        "scope" => Map.get(grant, "scope")
+        "rule_ref" => rule_ref,
+        "persistence" => Atom.to_string(persistence)
       },
       context: %{workspace: workspace, session_key: session_key},
       workspace: workspace
     )
-  end
-
-  defp stringify_observe_attrs(attrs) do
-    Map.new(attrs, fn {key, value} -> {to_string(key), to_string(value)} end)
   end
 end

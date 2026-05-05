@@ -609,8 +609,7 @@ defmodule Nex.Agent.Runtime.ConfigTest do
               "deny_read" => [denied_root],
               "env_allowlist" => [" PATH ", "PATH", "CUSTOM_TOKEN"],
               "approval" => %{
-                "default" => "deny",
-                "allow_session_grants" => "false"
+                "default" => "deny"
               }
             }
           }
@@ -626,8 +625,6 @@ defmodule Nex.Agent.Runtime.ConfigTest do
 
     assert get_in(config.tools, ["sandbox", "default_profile"]) == "read_only"
     assert get_in(config.tools, ["sandbox", "approval", "default"]) == "deny"
-    assert get_in(config.tools, ["sandbox", "approval", "allow_session_grants"]) == false
-    assert get_in(config.tools, ["sandbox", "approval", "allow_always_grants"]) == true
 
     assert %{path: {:special, :workspace}, access: :read} in policy.filesystem
     assert %{path: {:path, legacy_root}, access: :write} in policy.filesystem

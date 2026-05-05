@@ -13,6 +13,10 @@ defmodule Nex.Agent.Capability.Tool.Registry do
   require Log
 
   @core_tools [
+    Nex.Agent.Capability.Tool.Core.AddPermissionRule,
+    Nex.Agent.Capability.Tool.Core.PermissionListRules,
+    Nex.Agent.Capability.Tool.Core.PermissionRevokeRule,
+    Nex.Agent.Capability.Tool.Core.PermissionRuleDebug,
     Nex.Agent.Capability.Tool.Core.Read,
     Nex.Agent.Capability.Tool.Core.Find,
     Nex.Agent.Capability.Tool.Core.ApplyPatch,

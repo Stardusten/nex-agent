@@ -5,8 +5,17 @@ defmodule Nex.Agent.Capability.Tool.Core.Bash do
 
   alias Nex.Agent.Runtime.Config
   alias Nex.Agent.Interface.Outbound.Action, as: OutboundAction
+  alias Nex.Agent.Interface.Outbound.Approval, as: OutboundApproval
   alias Nex.Agent.Sandbox.Approval.Request
-  alias Nex.Agent.Sandbox.{Command, CommandClassifier, Exec, Permission, Policy, Security}
+
+  alias Nex.Agent.Sandbox.{
+    Command,
+    Exec,
+    Permission,
+    PermissionRule,
+    Policy,
+    Security
+  }
 
   def name, do: "bash"
   def description, do: "Execute a shell command"
@@ -104,8 +113,10 @@ defmodule Nex.Agent.Capability.Tool.Core.Bash do
   end
 
   defp authorize_command(command, ctx, %Policy{} = policy, escalation) do
-    classification = CommandClassifier.classify(command)
-    request = command_request(command, classification, ctx, escalation)
+    event = command_event(command, ctx, escalation)
+    enriched = PermissionRule.enrich(event)
+    classification = command_classification(enriched, escalation)
+    request = command_request(command, enriched, classification, ctx, escalation)
 
     cond do
       escalation.requested? and Permission.approved?(request, approval_opts(ctx)) ->
@@ -150,48 +161,80 @@ defmodule Nex.Agent.Capability.Tool.Core.Bash do
     end
   end
 
-  defp command_request(command, classification, ctx, escalation) do
-    family_options =
-      if classification.similar_safe? and not escalation.requested? do
-        [
-          %{
-            "level" => "similar",
-            "scope" => "similar",
-            "grant_key" => classification.family_key,
-            "subject" => "#{classification.program} #{classification.risk_class} family"
-          }
-        ]
-      else
-        []
-      end
+  defp command_request(command, enriched, classification, ctx, escalation) do
+    rule_options = command_rule_grant_options(enriched)
 
     Request.new(%{
       kind: :command,
       operation: :execute,
       subject: command,
       description: command_request_description(classification, escalation),
-      grant_key: command_grant_key(classification, escalation),
-      grant_options:
-        [
-          %{
-            "level" => "exact",
-            "grant_key" => command_grant_key(classification, escalation),
-            "subject" => command
-          },
-          %{
-            "level" => "risk",
-            "grant_key" => classification.risk_key,
-            "subject" => classification.risk_class
-          }
-        ] ++ family_options,
+      grant_key: command_grant_key(rule_options),
+      grant_options: rule_options,
       workspace: Map.get(ctx, :workspace) || Map.get(ctx, "workspace") || File.cwd!(),
       session_key: session_key_from_ctx(ctx),
       channel: Map.get(ctx, :channel) || Map.get(ctx, "channel"),
       chat_id: Map.get(ctx, :chat_id) || Map.get(ctx, "chat_id"),
       authorized_actor: actor_from_ctx(ctx),
-      metadata: command_request_metadata(classification, escalation)
+      metadata:
+        command_request_metadata(classification, escalation)
+        |> Map.put("permission_event", PermissionRule.raw_event_to_map(enriched.raw))
     })
   end
+
+  defp command_event(command, ctx, escalation) do
+    %{
+      tool_name: "bash",
+      params: %{
+        "command" => command,
+        "sandbox_permissions" => escalation.metadata_value,
+        "justification" => escalation.justification
+      },
+      channel: Map.get(ctx, :channel) || Map.get(ctx, "channel"),
+      chat_id: Map.get(ctx, :chat_id) || Map.get(ctx, "chat_id"),
+      workspace: Map.get(ctx, :workspace) || Map.get(ctx, "workspace") || File.cwd!(),
+      cwd: Map.get(ctx, :cwd) || Map.get(ctx, "cwd") || File.cwd!(),
+      command: command,
+      requested_execution: if(escalation.requested?, do: :elevated, else: :sandboxed),
+      actor: actor_from_ctx(ctx)
+    }
+  end
+
+  defp command_rule_grant_options(enriched) do
+    enriched
+    |> PermissionRule.grant_options()
+    |> filter_similar_rule_options(enriched)
+  end
+
+  defp filter_similar_rule_options(options, %{risk_class: risk_class})
+       when risk_class in [:network_fetch] do
+    options
+  end
+
+  defp filter_similar_rule_options(options, _event) do
+    Enum.reject(options, &(&1["level"] == "similar"))
+  end
+
+  defp command_grant_key([%{"level" => "exact", "grant_key" => grant_key} | _]), do: grant_key
+  defp command_grant_key([%{"grant_key" => grant_key} | _]), do: grant_key
+  defp command_grant_key(_options), do: "command:execute:rule:missing"
+
+  defp command_classification(enriched, escalation) do
+    risk_class = Atom.to_string(enriched.risk_class)
+
+    %{
+      program: enriched.command_program,
+      risk_class: risk_class,
+      risk_hint: risk_hint(enriched, escalation),
+      requires_approval?: risk_requires_approval?(enriched.risk_class) or escalation.requested?,
+      summary: command_summary(enriched.command_program, risk_class, command_text(enriched))
+    }
+  end
+
+  defp command_text(%{raw: %{params: %{"command" => command}}}) when is_binary(command),
+    do: command
+
+  defp command_text(_enriched), do: ""
 
   defp command_request_description(classification, %{
          requested?: true,
@@ -207,12 +250,6 @@ defmodule Nex.Agent.Capability.Tool.Core.Bash do
   defp command_request_description(classification, _escalation) do
     "Allow shell command: #{classification.summary}"
   end
-
-  defp command_grant_key(classification, %{requested?: true}) do
-    "command:execute:escalated:#{classification.exact_key}"
-  end
-
-  defp command_grant_key(classification, _escalation), do: classification.exact_key
 
   defp command_request_metadata(classification, escalation) do
     %{
@@ -231,6 +268,27 @@ defmodule Nex.Agent.Capability.Tool.Core.Bash do
   end
 
   defp escalation_risk_hint(classification, _escalation), do: classification.risk_hint
+
+  defp risk_hint(enriched, %{requested?: true}),
+    do: escalation_risk_hint(enriched, %{requested?: true})
+
+  defp risk_hint(%{risk_hints: [hint | _]}, _escalation), do: hint
+  defp risk_hint(_enriched, _escalation), do: nil
+
+  defp risk_requires_approval?(risk_class) do
+    risk_class in [
+      :shell_escape,
+      :interpreter_code,
+      :command_substitution,
+      :process_substitution,
+      :encoded_shell
+    ]
+  end
+
+  defp command_summary(nil, risk_class, command), do: "#{risk_class} command: #{command}"
+
+  defp command_summary(program, risk_class, _command),
+    do: "#{risk_class} command using #{program}"
 
   defp policy_allows_without_prompt?(%Policy{} = policy) do
     approval_default(policy) == "allow" or
@@ -309,6 +367,7 @@ defmodule Nex.Agent.Capability.Tool.Core.Bash do
   defp approval_fallback_content(%Request{} = request) do
     [
       "Approval required: #{request.description}",
+      approval_rule_hint(request),
       request_risk_hint(request),
       approval_command_help(request)
     ]
@@ -317,32 +376,38 @@ defmodule Nex.Agent.Capability.Tool.Core.Bash do
   end
 
   defp approval_command_help(%Request{} = request) do
-    if Request.elevated?(request) do
-      "Use `/approve #{request.id}` or `/deny #{request.id}`."
-    else
-      approval_grant_command_help(request)
-    end
-  end
-
-  defp approval_grant_command_help(%Request{} = request) do
-    approve_commands =
-      [
-        "`/approve #{request.id}`",
-        "`/approve #{request.id} session`"
-      ] ++
-        maybe_similar_approval_command(request) ++
-        ["`/approve #{request.id} always`"]
+    approve_commands = ["`/approve #{request.id}`"] ++ maybe_rule_approval_command(request)
 
     "Use #{Enum.join(approve_commands, ", ")}, or `/deny #{request.id}`."
   end
 
-  defp maybe_similar_approval_command(%Request{} = request) do
-    if Enum.any?(request.grant_options, &similar_grant_option?/1) do
-      ["`/approve #{request.id} similar`"]
-    else
-      []
+  defp maybe_rule_approval_command(%Request{} = request) do
+    case OutboundApproval.recommended_rule_summary(request) do
+      nil ->
+        []
+
+      _summary ->
+        ["`/approve #{request.id} #{rule_approval_choice(request)}` (allow rule)"]
     end
   end
+
+  defp rule_approval_choice(%Request{} = request) do
+    if Enum.any?(request.grant_options, &similar_grant_option?/1) do
+      :similar
+    else
+      case Enum.find(request.grant_options, &exact_rule_option?/1) do
+        %{"approval_choice" => "always"} -> :always
+        %{"scope" => "always"} -> :always
+        _option -> :session
+      end
+    end
+  end
+
+  defp exact_rule_option?(option) when is_map(option) do
+    option["level"] == "exact" and is_map(option["rule"])
+  end
+
+  defp exact_rule_option?(_option), do: false
 
   defp similar_grant_option?(option) when is_map(option) do
     option["level"] == "similar" or option["scope"] == "similar" or
@@ -357,6 +422,9 @@ defmodule Nex.Agent.Capability.Tool.Core.Bash do
   end
 
   defp request_risk_hint(_request), do: nil
+
+  defp approval_rule_hint(%Request{} = request),
+    do: OutboundApproval.recommended_rule_summary(request)
 
   defp exec_metadata(ctx, classification, escalation) do
     %{

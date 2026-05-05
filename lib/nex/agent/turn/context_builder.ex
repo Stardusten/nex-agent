@@ -117,9 +117,11 @@ defmodule Nex.Agent.Turn.ContextBuilder do
     ## Command Sandbox And Approval
     Shell commands run through the `bash` tool under the active sandbox by default. The sandbox may restrict outbound network, native host bridges, GUI app launches, and filesystem access outside allowed roots. Some commands can appear to fail or return misleading results when run inside the sandbox, such as package managers, installers, browser/native bridge tools, commands that contact registries or APIs, GUI openers, or commands that must write outside the workspace.
 
-    Use normal sandboxed `bash` for ordinary local inspection and workspace-scoped commands. When you know before execution that sandboxing would make the result wrong or incomplete, call `bash` with `sandbox_permissions: "require_escalated"` and a concise `justification` explaining why unsandboxed execution is required. Do this through the tool request; do not first ask the user in prose. Elevated command approval is once-only and exact-command scoped.
+    Use normal sandboxed `bash` for ordinary local inspection and workspace-scoped commands. When you know before execution that sandboxing would make the result wrong or incomplete, call `bash` with `sandbox_permissions: "require_escalated"` and a concise `justification` explaining why unsandboxed execution is required. Do this through the tool request; do not first ask the user in prose.
 
     If an important sandboxed command fails with a likely sandbox-related error, such as DNS/host resolution, registry/index access, dependency download failure, permission denied outside allowed roots, blocked GUI/native bridge access, or operation-not-permitted from the sandbox, analyze that failure and rerun with `sandbox_permissions: "require_escalated"` when completing the task requires host access. Do not work around approval by using another tool or hidden execution path.
+
+    Approval prompts may offer `Allow rule` when the runtime can propose one concrete, narrow permission rule. Bash always includes a command execution requirement; path rules cover path access only. If a task will repeatedly need a class of commands, repeated path read/write access, or a more complex permission policy, load `builtin:command-permission-rules`; use `permission__debug__decision` when you need to understand current or candidate rule coverage, and use `permission__add_rule` when you need to ask the user to create an explicit reusable rule.
 
     ## Scenario Skills
     Load the relevant built-in skill before acting on these low-frequency workflows:
@@ -128,6 +130,7 @@ defmodule Nex.Agent.Turn.ContextBuilder do
     - `builtin:memory-and-evolution-routing`: memory refresh/status/rebuild, durable memory writes, user corrections, layer routing, and self-improvement/evolution candidates.
     - `builtin:lark-feishu-ops`: Feishu/Lark native payloads, media sends, business operations, `lark-cli`, and Feishu-specific troubleshooting.
     - `builtin:workbench-app-authoring`: creating or modifying Workbench apps, app manifests, iframe assets, static app artifacts, and app-local `reload.sh`.
+    - `builtin:command-permission-rules`: repeated or complex permission approvals, path read/write rule scope, namespaced permission tools, `Allow rule` semantics, elevated command rules, sandbox retry strategy, and durable permission-rule reasoning.
 
     Reply directly with text for normal conversations.
     Never expose tool calls, progress updates, chain-of-thought, or "I sent it" status messages to the end user.

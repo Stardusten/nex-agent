@@ -107,12 +107,14 @@ defmodule Nex.Agent.RuntimeTest do
     assert Enum.any?(snapshot.skills.cards, &(&1["id"] == "builtin:runtime-observability"))
     assert Enum.any?(snapshot.skills.cards, &(&1["id"] == "builtin:memory-and-evolution-routing"))
     assert Enum.any?(snapshot.skills.cards, &(&1["id"] == "builtin:lark-feishu-ops"))
+    assert Enum.any?(snapshot.skills.cards, &(&1["id"] == "builtin:command-permission-rules"))
     assert Enum.any?(snapshot.skills.cards, &(&1["id"] == "workspace:catalog-guide"))
     assert snapshot.skills.catalog_prompt =~ ~s(<skill id="builtin:workbench-app-authoring">)
     assert snapshot.skills.catalog_prompt =~ ~s(<skill id="builtin:nex-code-maintenance">)
     assert snapshot.skills.catalog_prompt =~ ~s(<skill id="builtin:runtime-observability">)
     assert snapshot.skills.catalog_prompt =~ ~s(<skill id="builtin:memory-and-evolution-routing">)
     assert snapshot.skills.catalog_prompt =~ ~s(<skill id="builtin:lark-feishu-ops">)
+    assert snapshot.skills.catalog_prompt =~ ~s(<skill id="builtin:command-permission-rules">)
     assert snapshot.skills.catalog_prompt =~ ~s(<skill id="workspace:catalog-guide">)
     assert snapshot.skills.catalog_prompt =~ "<description>"
     refute snapshot.prompt.system_prompt =~ "Runtime skill body should stay on demand."
@@ -542,6 +544,7 @@ defmodule Nex.Agent.RuntimeTest do
     assert Enum.any?(snapshot.skills.cards, &(&1["id"] == "builtin:runtime-observability"))
     assert Enum.any?(snapshot.skills.cards, &(&1["id"] == "builtin:memory-and-evolution-routing"))
     assert Enum.any?(snapshot.skills.cards, &(&1["id"] == "builtin:lark-feishu-ops"))
+    assert Enum.any?(snapshot.skills.cards, &(&1["id"] == "builtin:command-permission-rules"))
     assert Enum.any?(snapshot.skills.cards, &(&1["id"] == "workspace:catalog-guide"))
     assert Enum.any?(snapshot.tools.definitions_all, &(&1["name"] == "read"))
 

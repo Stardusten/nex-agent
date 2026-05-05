@@ -7,6 +7,7 @@ defmodule Nex.Agent.SandboxApprovalCommandTest do
   alias Nex.Agent.Runtime.Config
   alias Nex.Agent.Sandbox.Approval
   alias Nex.Agent.Sandbox.Approval.Request
+  alias Nex.Agent.Sandbox.PermissionRule
 
   @channel "feishu_approval_test"
   @topic {:channel_outbound, @channel}
@@ -49,24 +50,13 @@ defmodule Nex.Agent.SandboxApprovalCommandTest do
     {:ok, workspace: workspace, worker_name: worker_name}
   end
 
-  test "/approve session resolves pending request and creates session grant", %{
+  test "/approve session resolves pending command request and creates session rule", %{
     workspace: workspace,
     worker_name: worker_name
   } do
     session_key = "#{@channel}:chat-approval"
 
-    request =
-      Request.new(
-        workspace: workspace,
-        session_key: session_key,
-        channel: @channel,
-        chat_id: "chat-approval",
-        kind: :command,
-        operation: :execute,
-        subject: "git status",
-        description: "run git status",
-        grant_key: "command:execute:exact:approval-command"
-      )
+    request = command_request(workspace, session_key, "chat-approval", "git status")
 
     task = Task.async(fn -> Approval.request(request) end)
 
@@ -167,6 +157,35 @@ defmodule Nex.Agent.SandboxApprovalCommandTest do
         attachments: []
       }
     })
+  end
+
+  defp command_request(workspace, session_key, chat_id, command) do
+    event = %{
+      channel: @channel,
+      chat_id: chat_id,
+      workspace: workspace,
+      cwd: workspace,
+      command: command,
+      requested_execution: :sandboxed,
+      actor: %{kind: :user, channel: @channel, id: "tester"}
+    }
+
+    grant_options = PermissionRule.grant_options(event)
+    exact_option = Enum.find(grant_options, &(&1["level"] == "exact"))
+
+    Request.new(
+      workspace: workspace,
+      session_key: session_key,
+      channel: @channel,
+      chat_id: chat_id,
+      kind: :command,
+      operation: :execute,
+      subject: command,
+      description: "run #{command}",
+      grant_key: exact_option["grant_key"],
+      grant_options: grant_options,
+      metadata: %{"command_event" => event}
+    )
   end
 
   defp config do
