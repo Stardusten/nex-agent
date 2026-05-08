@@ -19,7 +19,8 @@ defmodule Nex.Agent.Runtime.Config do
             model: %{},
             subagents: %{},
             tools: %{},
-            plugins: %{}
+            plugins: %{},
+            self_update: %{}
 
   @type model_runtime :: %{
           model_key: String.t(),
@@ -44,7 +45,8 @@ defmodule Nex.Agent.Runtime.Config do
           model: map(),
           subagents: map(),
           tools: map(),
-          plugins: map()
+          plugins: map(),
+          self_update: map()
         }
 
   @type channel_diagnostic :: %{
@@ -134,7 +136,8 @@ defmodule Nex.Agent.Runtime.Config do
       "model" => config.model,
       "subagents" => config.subagents,
       "tools" => config.tools,
-      "plugins" => config.plugins
+      "plugins" => config.plugins,
+      "self_update" => config.self_update
     }
   end
 
@@ -180,7 +183,8 @@ defmodule Nex.Agent.Runtime.Config do
       },
       subagents: %{"profiles" => %{}},
       tools: %{},
-      plugins: default_plugins()
+      plugins: default_plugins(),
+      self_update: default_self_update()
     }
   end
 
@@ -198,7 +202,8 @@ defmodule Nex.Agent.Runtime.Config do
       model: normalize_model_root(Map.get(data, "model")),
       subagents: normalize_subagents(Map.get(data, "subagents")),
       tools: normalize_tools(Map.get(data, "tools")),
-      plugins: normalize_plugins(Map.get(data, "plugins"))
+      plugins: normalize_plugins(Map.get(data, "plugins")),
+      self_update: normalize_self_update(Map.get(data, "self_update"))
     }
   end
 
@@ -419,6 +424,12 @@ defmodule Nex.Agent.Runtime.Config do
   def plugins_runtime(%__MODULE__{plugins: plugins}) when is_map(plugins), do: plugins
   def plugins_runtime(_config), do: default_plugins()
 
+  @spec self_update_runtime(t() | nil) :: map()
+  def self_update_runtime(%__MODULE__{self_update: self_update}) when is_map(self_update),
+    do: normalize_self_update(self_update)
+
+  def self_update_runtime(_config), do: default_self_update()
+
   @spec file_access_allowed_roots(t() | nil) :: [String.t()]
   def file_access_allowed_roots(%__MODULE__{tools: tools}) when is_map(tools) do
     tools
@@ -561,7 +572,8 @@ defmodule Nex.Agent.Runtime.Config do
       model: %{},
       subagents: %{},
       tools: %{},
-      plugins: default_plugins()
+      plugins: default_plugins(),
+      self_update: default_self_update()
     }
   end
 
@@ -1010,6 +1022,39 @@ defmodule Nex.Agent.Runtime.Config do
   end
 
   defp normalize_tools(_tools), do: %{}
+
+  defp normalize_self_update(%{} = config) do
+    config = stringify_map_keys(config)
+
+    %{
+      "source_repo" => normalize_self_update_source_repo(Map.get(config, "source_repo"))
+    }
+  end
+
+  defp normalize_self_update(_config), do: default_self_update()
+
+  defp default_self_update do
+    %{
+      "source_repo" => %{
+        "path" => nil,
+        "check_consistency" => true
+      }
+    }
+  end
+
+  defp normalize_self_update_source_repo(%{} = config) do
+    config = stringify_map_keys(config)
+
+    %{
+      "path" => normalize_optional_string(Map.get(config, "path")) |> expand_optional_path(),
+      "check_consistency" => normalize_boolean(Map.get(config, "check_consistency"), true)
+    }
+  end
+
+  defp normalize_self_update_source_repo(_config), do: default_self_update()["source_repo"]
+
+  defp expand_optional_path(nil), do: nil
+  defp expand_optional_path(path) when is_binary(path), do: Path.expand(path)
 
   defp maybe_normalize_tool_section(tools, key, normalizer) do
     case Map.fetch(tools, key) do

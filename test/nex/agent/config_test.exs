@@ -31,6 +31,13 @@ defmodule Nex.Agent.Runtime.ConfigTest do
 
     assert Config.plugins_runtime(config) == %{"disabled" => [], "enabled" => %{}}
 
+    assert Config.self_update_runtime(config) == %{
+             "source_repo" => %{
+               "path" => "/tmp/nex-agent-source",
+               "check_consistency" => true
+             }
+           }
+
     assert %{
              model_key: "hy3-preview",
              model_id: "hy3-preview",
@@ -637,6 +644,28 @@ defmodule Nex.Agent.Runtime.ConfigTest do
     assert %{path: {:path, Path.expand("~/.zshrc")}, access: :none} in policy.filesystem
   end
 
+  test "self_update source repo config normalizes path and consistency policy" do
+    repo = Path.expand("../nex-agent-source-root", File.cwd!())
+
+    config =
+      Config.from_map(%{
+        full_config()
+        | "self_update" => %{
+            "source_repo" => %{
+              "path" => " #{repo} ",
+              "check_consistency" => "false"
+            }
+          }
+      })
+
+    assert Config.self_update_runtime(config) == %{
+             "source_repo" => %{
+               "path" => repo,
+               "check_consistency" => false
+             }
+           }
+  end
+
   defp full_config do
     %{
       "max_iterations" => 100,
@@ -708,7 +737,13 @@ defmodule Nex.Agent.Runtime.ConfigTest do
           "providers" => %{"codex" => %{"output_format" => "png"}}
         }
       },
-      "plugins" => %{}
+      "plugins" => %{},
+      "self_update" => %{
+        "source_repo" => %{
+          "path" => "/tmp/nex-agent-source",
+          "check_consistency" => true
+        }
+      }
     }
   end
 

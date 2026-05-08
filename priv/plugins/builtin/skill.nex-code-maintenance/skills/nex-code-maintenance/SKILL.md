@@ -13,7 +13,7 @@ Use this skill for NexAgent framework CODE changes. Workbench app artifacts, not
 Use the CODE lane for framework implementation changes:
 
 ```text
-find/read/reflect -> apply_patch -> self_update status -> self_update deploy
+find/read/reflect -> apply_patch -> self_update status -> self_update deploy -> self_update_commit prepare/commit
 ```
 
 Rules:
@@ -26,8 +26,12 @@ Rules:
 - The current turn may still run old code until deploy succeeds.
 - `self_update status` is the deploy preflight entrypoint.
 - `self_update deploy` is the quick deploy verification path.
+- When `self_update.source_repo.path` is configured, successful deploys may attach a `source_repo_commit` proposal.
+- `self_update_commit prepare` builds the source commit message from release id, candidate id, and ControlPlane evidence.
+- `self_update_commit commit` is a separate Git history step and requires explicit owner approval before `git commit`.
+- The default source consistency check verifies that the configured source repo git root is the runtime repo root and that deployed release files match their `after_sha`.
 - Strict ship checks such as format, credo, dialyzer, or broad suites are explicit extra confidence checks, not mandatory on every quick deploy loop.
-- Subagents may inspect and patch code, but only the owner run may use `self_update status`, `self_update deploy`, or `self_update rollback`.
+- Subagents may inspect and patch code, but only the owner run may use `self_update status`, `self_update deploy`, `self_update rollback`, or `self_update_commit`.
 
 ## Layer Boundary
 

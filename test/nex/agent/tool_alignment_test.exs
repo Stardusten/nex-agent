@@ -82,6 +82,7 @@ defmodule Nex.Agent.ToolAlignmentTest do
     hook = Enum.find(builtins, &(&1["name"] == "hook"))
     reflect = Enum.find(builtins, &(&1["name"] == "reflect"))
     self_update = Enum.find(builtins, &(&1["name"] == "self_update"))
+    self_update_commit = Enum.find(builtins, &(&1["name"] == "self_update_commit"))
     skill_get = Enum.find(builtins, &(&1["name"] == "skill_get"))
     skill_capture = Enum.find(builtins, &(&1["name"] == "skill_capture"))
     tool_create = Enum.find(builtins, &(&1["name"] == "tool_create"))
@@ -93,6 +94,7 @@ defmodule Nex.Agent.ToolAlignmentTest do
     assert hook["layers"] == ["tool"]
     assert reflect["layers"] == ["code"]
     assert self_update["layers"] == ["code"]
+    assert self_update_commit["layers"] == ["code"]
     assert skill_get["layers"] == ["skill"]
     assert skill_capture["layers"] == ["skill"]
     assert tool_create["layers"] == ["tool"]
@@ -190,6 +192,7 @@ defmodule Nex.Agent.ToolAlignmentTest do
     refute "write" in names
     refute "list_dir" in names
     refute "self_update" in names
+    refute "self_update_commit" in names
 
     reflect = Enum.find(Registry.definitions(:subagent), &(&1["name"] == "reflect"))
     action_enum = get_in(reflect, ["input_schema", :properties, :action, :enum])

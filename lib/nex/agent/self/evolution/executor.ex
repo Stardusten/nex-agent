@@ -37,6 +37,7 @@ defmodule Nex.Agent.Self.Evolution.Executor do
            "kind" => candidate["kind"],
            "mode" => mode,
            "summary" => candidate["summary"],
+           "evidence_ids" => candidate["evidence_ids"] || [],
            "execution" => execution
          }}
     end
@@ -62,7 +63,8 @@ defmodule Nex.Agent.Self.Evolution.Executor do
     with {:ok, patch_result} <- apply_patch_fun(ctx).(%{"patch" => patch}, ctx),
          {:ok, deploy_result} <-
            self_update_fun(ctx).(
-             %{"action" => "deploy", "reason" => deploy_reason, "files" => files},
+             %{"action" => "deploy", "reason" => deploy_reason, "files" => files}
+             |> Map.merge(deploy_metadata(realization)),
              ctx
            ),
          :ok <- ensure_deploy_succeeded(deploy_result) do
@@ -427,6 +429,15 @@ defmodule Nex.Agent.Self.Evolution.Executor do
   defp self_update_fun(ctx) do
     Map.get(ctx, :self_update_fun) || Map.get(ctx, "self_update_fun") || (&SelfUpdate.execute/2)
   end
+
+  defp deploy_metadata(realization) do
+    %{}
+    |> maybe_put("candidate_id", Map.get(realization, "candidate_id"))
+    |> maybe_put("evidence_ids", Map.get(realization, "evidence_ids"))
+  end
+
+  defp maybe_put(map, _key, value) when value in [nil, "", []], do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   defp ensure_deploy_succeeded(%{status: :deployed}), do: :ok
   defp ensure_deploy_succeeded(%{"status" => "deployed"}), do: :ok

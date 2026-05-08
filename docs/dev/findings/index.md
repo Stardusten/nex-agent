@@ -21,3 +21,4 @@ Findings are settled architecture or technical conclusions. Draft design notes a
 - [2026-04-28 Workbench App Artifact Reload Contract](./2026-04-28-workbench-app-artifact-reload-contract.md)
 - [2026-04-28 Skill Progressive Disclosure Catalog](./2026-04-28-skill-progressive-disclosure-catalog.md)
 - [2026-04-29 Plugin Runtime Boundary](./2026-04-29-plugin-runtime-boundary.md)
+- [2026-05-06 Self Update Source Repo Commit Lane](./2026-05-06-self-update-source-repo-commit-lane.md)

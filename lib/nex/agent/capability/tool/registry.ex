@@ -37,6 +37,7 @@ defmodule Nex.Agent.Capability.Tool.Registry do
     Nex.Agent.Capability.Tool.Core.SoulUpdate,
     Nex.Agent.Capability.Tool.Core.SpawnTask,
     Nex.Agent.Capability.Tool.Core.SelfUpdate,
+    Nex.Agent.Capability.Tool.Core.SelfUpdateCommit,
     Nex.Agent.Capability.Tool.Core.Reflect
   ]
   @disabled_project_tools [

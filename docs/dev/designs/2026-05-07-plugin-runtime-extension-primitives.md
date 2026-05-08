@@ -1,444 +1,505 @@
-# Plugin Runtime Extension Primitives
+# Plugin System And Hindsight Memory
 
-## 背景
+## 一句话
 
-Phase 20 已经把 channel、provider、tool、skill、command 迁移到 plugin contribution，但这仍然只是第一层插件化。它解决了“能力清单从哪里来”，还没有解决“一个插件如何像长期 runtime 的一部分一样工作”。
+插件不是一套新的 runtime。插件就是一个包，里面放技能、工具、hook、MCP 连接、后台任务、工作区文件模板和权限声明。
 
-新的记忆系统讨论暴露了这个缺口：如果把 memory 做成一个普通插件，而不是 core 里的特殊 subsystem，插件系统必须提供足够通用的 runtime extension primitives。memory plugin 只是这些 primitives 的一个组合，不应该推动新增 `memory` 专用 contribution kind。
-
-当前实现里，`ContextBuilder` 仍然直接读取 `memory/MEMORY.md`，`Runtime.Watcher` 直接 watch 该路径，`MemoryUpdater` 是 hardcoded background worker。这些都是 memory 还没有普通插件化的证据。后续改造目标不是把这些特例换成另一个 memory interface，而是把通用能力补齐，让 memory、notes、tasks、permission rules、Workbench apps、external services 都能使用同一套机制。
-
-## 设计原则
-
-### 插件系统不认识业务语义
-
-Plugin host 不应该知道 memory、notes、task、workflow 这些业务概念。它只认识：
-
-- 插件 manifest、启停、诊断和 runtime projection。
-- 插件贡献的 workspace artifacts、context fragments、tools、skills、commands、resources、services、events、queues、jobs、permissions、migrations。
-- 这些贡献如何进入 `Runtime.Snapshot`，如何热更新，如何观测，如何受安全边界约束。
-
-如果未来出现 `builtin:memory.files`、`builtin:notes.local`、`workspace:mem0`，它们都应是普通插件。
-
-### Runtime.Snapshot 仍是世界观
-
-插件 manifest 和插件本地文件不是长期进程的运行时真相源。长期进程消费的仍是 `Runtime.Snapshot`：
+启用插件以后，这些东西进入 NexAgent 已有的主链：
 
 ```text
-config + workspace + plugin manifests
-  -> normalized plugin contributions
-  -> runtime snapshot projections
-  -> Runner / Gateway / ToolRegistry / ContextBuilder / Workbench / ControlPlane
+插件包
+  -> Runtime.Snapshot
+  -> hooks / ToolRegistry / Skills / PermissionRule / ControlPlane
+  -> Runner 每轮使用
 ```
 
-插件贡献变化必须触发 runtime reload，更新 snapshot hash/version，再由现有长期进程 reconcile 或在下一 turn 读取新 snapshot。
+最终方案的判断标准不是“尽量少改现有代码”，而是改完以后每件事只有一个自然入口：
 
-### ContextBuilder 降级为 renderer
+- prompt 里多放东西，走 hook。
+- 模型能调用什么，走 ToolRegistry。
+- 工具能不能真的执行，走权限规则。
+- 后台维护工作，走 runtime job。
+- 运行事实和失败原因，走 ControlPlane。
+- 插件自己的文件，仍然是 workspace 里的普通文件。
 
-`ContextBuilder` 不应该硬编码读 `memory/MEMORY.md`。它的职责应该收窄为：
+## 为什么要重写
 
-- 渲染 runtime identity / request metadata / channel format prompt。
-- 渲染 runtime snapshot 里的 context fragments。
-- 按 priority、stability、budget、pointcut 选择和排序。
-- 产生 diagnostics。
+旧设计把同一件事拆成了太多名字，比如 `context`、`resources`、`primitives`。这些词让设计看起来很通用，但读起来像在发明一个平行系统。
 
-哪些文件、哪些文本、哪些动态资源进入 system prompt，由插件贡献的 context fragments 决定。
+现在收口成更直接的说法：
 
-### 热更新能力要复用
+- 不再把 `context` 当插件贡献类型。插件想给 prompt 加内容，就声明 hook。
+- 不再把 `resources` 当插件顶层概念。文件就是 workspace 文件；外部对象通过工具或 MCP 读写。
+- 不再把 `allowed_tools` 当权限。它最多表示“这轮给模型看哪些工具”；真正的 allow/ask/deny 归权限规则。
+- 不新增 memory 专用插件接口。Hindsight 是必接的 memory 插件，但它仍然通过 hook、tool、MCP、job、权限这些通用主链接入。
 
-新增插件能力必须接入现有 runtime reload/watch 方向，而不是在每个 consumer 里手写 watcher。插件 manifest、插件声明的 workspace artifacts、context source、service config、queue/job config 变化，都应能投影到 snapshot hash 或对应 runtime component hash。
+## 最终心智模型
 
-## 需要补齐的通用 primitives
+### Plugin
 
-### 1. Workspace Artifacts
+插件是安装、启用、禁用、诊断和升级的单位。
 
-插件需要声明自己拥有或初始化哪些 workspace 文件/目录。
+一个插件可以带这些东西：
 
-用途：
+- `skills`：教 agent 什么时候用、怎么用。
+- `tools`：模型可调用的确定性能力。
+- `hooks`：在某个 runtime 时刻自动做事，比如 prompt 构建前加记忆。
+- `mcpServers`：外部 MCP 服务，例如 Hindsight。
+- `jobs`：后台任务，例如一轮对话结束后把摘要写入 Hindsight。
+- `workspaceFiles`：插件需要的 workspace 文件或目录，例如 `memory/hindsight/status.json`。
+- `permissions`：插件需要哪些网络、文件、工具调用权限。
 
-- 首次启用插件时创建必要目录和模板文件。
-- runtime diagnostics 能报告缺失、损坏、不可写。
-- watcher 能知道哪些 plugin-owned artifacts 会影响 runtime prompt 或后台任务。
-- 插件卸载/禁用时不误删用户数据。
+插件不拥有一套独立世界观。长期进程看的还是 `Runtime.Snapshot`。
 
-草案 shape：
+### Hook
+
+hook 是“什么时候做什么”。
+
+当前代码已经有 `prompt.build.before`，Runner 会在构建初始消息前执行 hook，然后把结果交给 ContextBuilder 拼进 system prompt。这个方向是对的，只是能力不够完整。
+
+目标状态：
+
+- workspace 自己写的 `hooks/hooks.json` 继续有效。
+- enabled plugins 也可以贡献 hooks。
+- runtime 把两边合并成 snapshot 里的有效 hook 列表。
+- Runner 每轮按事件和当前会话信息执行匹配的 hook。
+
+插件注入 prompt 的正确做法就是：
+
+```text
+prompt.build.before hook
+  -> 读文件，或调用工具，或拿到 MCP 返回
+  -> 生成一段有标题、有来源、有长度限制的 prompt 内容
+  -> ContextBuilder 只负责排版
+```
+
+ContextBuilder 不应该知道 Hindsight，也不应该硬编码 `memory/MEMORY.md`。
+
+### Tool
+
+tool 是模型能看到并请求调用的能力。
+
+工具来源可以不同：
+
+- core module
+- builtin plugin module
+- MCP server tool
+- 受控的外部进程
+
+但进入模型和执行时都应该走同一条 ToolRegistry 主链。
+
+目标状态：
+
+```text
+plugin tool declaration
+  -> ToolRegistry definition
+  -> Runner 暴露给模型
+  -> 模型请求 tool call
+  -> PermissionRule 判断
+  -> ToolRegistry 执行 module 或 MCP tool
+  -> ControlPlane 记录
+```
+
+### Permission
+
+权限系统回答的是：这次具体动作能不能发生。
+
+这和“模型这轮能看见哪些工具”不是一回事。
+
+最终设计里，所有实际动作都应该变成权限事件：
+
+- 读文件
+- 写文件
+- 发网络请求
+- 调 MCP tool
+- 启动进程
+- 后台 job 调工具
+- hook 调工具
+- channel 上传文件或发消息
+
+权限规则统一给出 `allow`、`ask`、`deny`。如果现有 `tool_allowlist`、skill frontmatter 里的 `allowed_tools`、插件里的工具声明和权限系统打架，就改掉这些名字或职责，而不是新增一个并存的权限层。
+
+建议最终命名：
+
+- `tool_surfaces`：工具可出现在哪些运行面，例如 owner turn、follow-up、subagent、cron。
+- `visible_tools` 或 `tool_scope`：某一轮 LLM 可以看到哪些工具。
+- `permissions`：实际执行时的 allow/ask/deny。
+
+### Workspace Files
+
+插件需要的可读写路径就是 workspace 文件，不叫 `resources`。
+
+插件声明这些文件的目的只是：
+
+- 首次启用时创建目录或模板。
+- runtime 知道哪些文件变化会影响 prompt 或后台任务。
+- diagnostics 能说明缺文件、不可读、不可写。
+- 禁用或卸载插件时不误删用户数据。
+
+例子：
 
 ```json
 {
   "contributes": {
-    "workspace_artifacts": [
+    "workspaceFiles": [
       {
-        "id": "memory.files.index",
+        "id": "hindsight.status",
+        "path": "memory/hindsight/status.json",
         "kind": "file",
-        "path": "memory/INDEX.md",
-        "template": "templates/INDEX.md",
-        "on_missing": "create",
-        "on_existing": "preserve",
+        "onMissing": "create",
         "watch": true
-      },
-      {
-        "id": "memory.files.dir",
-        "kind": "directory",
-        "path": "memory",
-        "on_missing": "create"
       }
     ]
   }
 }
 ```
 
-约束：
+这和“workspace artifact”没有本质区别。它就是插件声明自己会用到的 workspace artifact。
 
-- `path` 默认相对 workspace。
-- template 只能来自插件目录内的 artifact。
-- `on_existing=preserve` 是默认值。
-- 不允许插件默认覆盖用户编辑。
-- 删除插件不删除 workspace artifacts，除非未来有明确 owner-approved cleanup flow。
+如果 Hindsight 或 MCP 里有自己的外部对象，比如 bank、memory id、operation id，它们不进入 Nex 插件顶层概念。需要读就通过 `hindsight__recall`、`hindsight__operation_status` 这类工具读。
 
-### 2. Context Contributions
+### Background Job
 
-插件需要声明 prompt context fragment，替代硬编码 bootstrap 文件和 `memory/MEMORY.md` 读取。
+后台任务是插件在用户不直接发话时做维护工作的方式。
 
-草案 shape：
-
-```json
-{
-  "contributes": {
-    "context": [
-      {
-        "id": "memory.files.index",
-        "event": "prompt.build.before",
-        "pointcut": {"workspace": "*"},
-        "source": {
-          "kind": "file",
-          "path": "memory/INDEX.md",
-          "base": "workspace"
-        },
-        "title": "Memory Index",
-        "priority": 80,
-        "stability": "stable",
-        "max_chars": 12000,
-        "on_error": "warn"
-      }
-    ]
-  }
-}
-```
-
-需要支持的 source kind：
-
-- `file`：读取 workspace/plugin/project 内文件。
-- `text`：manifest 内短文本。
-- `resource`：读取插件声明的 resource namespace。
-- `module` 或 `service`：仅 builtin/reviewed plugin 可用，后续再冻结。
-
-需要支持的投影属性：
-
-- `priority`：越小越早注入。
-- `stability`：`stable | volatile`，供 ContextBuilder 排序和 cache 友好布局。
-- `max_chars` 和 total budget。
-- `cache_key` 或 content hash。
-- `pointcut`：workspace、session、channel、chat_id、parent_chat_id、surface。
-- `on_error`：`skip | warn | block`。
-
-现有 hooks 系统可作为起点，但它现在是 workspace-local registry，不是 plugin contribution，且只支持 `file/text` 和一个 event。后续应把 hooks 升级为 context contribution consumer，而不是让插件去改 `workspace/hooks/hooks.json`。
-
-### 3. LLM-Facing Capabilities
-
-插件需要以普通贡献暴露模型可见能力：
-
-- `tools`
-- `skills`
-- `commands`
-- `resources`
-
-现有 tools/skills/commands 已有一部分基础，但还不完整：
-
-- builtin plugin tool 可以引用 compiled module。
-- workspace/project plugin 还不能安全贡献 executable tool。
-- skill 已适合教 LLM 怎么使用插件。
-- resource namespace 还没有独立 contribution。
-
-`resources` 的目标不是 memory 专用 URI，而是通用命名空间：
-
-```json
-{
-  "contributes": {
-    "resources": [
-      {
-        "id": "memory.files",
-        "scheme": "memory",
-        "backend": "workspace_files",
-        "root": "memory",
-        "read": true,
-        "write": false
-      }
-    ]
-  }
-}
-```
-
-`read` / `find` / future resource tools 可以通过 resource registry 解析 `memory://INDEX.md`、`notes://daily/2026-05-07.md` 等。底层可以是文件、SQLite、HTTP、MCP、service。
-
-### 4. Runtime Services
-
-插件可能需要长期进程，不只是被动 tool。
-
-草案 shape：
-
-```json
-{
-  "contributes": {
-    "services": [
-      {
-        "id": "memory.files.indexer",
-        "kind": "supervised_module",
-        "module": "Nex.Agent.Plugin.MemoryFiles.Indexer",
-        "restart": "permanent",
-        "source": "builtin",
-        "health_check": "status"
-      }
-    ]
-  }
-}
-```
-
-第一版约束：
-
-- builtin plugin 可声明 compiled module service。
-- workspace/project plugin 不加载任意 VM code。
-- workspace/project plugin 可先声明 `external_process`、`mcp_server`、`http_service` 这类 data-configured service，但需要单独安全设计。
-- service lifecycle 必须由 runtime supervision 管理，不能由 tool 调用偷偷起长期进程。
-
-### 5. Runtime Events
-
-插件需要订阅通用 runtime events，而不是让 core 在 memory path 写调用点。
-
-候选事件：
+Hindsight 必须有后台任务，因为 memory retain 不应该全靠模型每次手动想起来：
 
 ```text
-runtime.started
-runtime.reloaded
-plugin.enabled
-plugin.disabled
-workspace.opened
-conversation.turn.started
-conversation.turn.finished
-conversation.session.idle
-tool.call.started
-tool.call.finished
-file.changed
-queue.job.finished
-schedule.tick
+conversation.turn.finished hook
+  -> enqueue hindsight.retain job
+  -> job 调 hindsight__retain
+  -> 权限规则判断
+  -> 写 ControlPlane
 ```
 
-草案 shape：
+job 默认不对用户发消息。它只维护 runtime 状态，除非插件明确声明某个结果应该投递到 channel。
+
+## Hindsight 插件 demo
+
+这是目标形态，当前代码要改到能吃这个形状。
 
 ```json
 {
+  "id": "builtin:memory.hindsight",
+  "title": "Hindsight Memory",
+  "version": "1.0.0",
+  "enabled": true,
+  "source": "builtin",
+  "description": "Required memory plugin backed by Hindsight.",
+  "config": {
+    "bank": {
+      "scope": "workspace",
+      "template": "nex-{workspace_hash}"
+    }
+  },
+  "secrets": [
+    {
+      "id": "hindsight.api_key",
+      "env": "HINDSIGHT_API_KEY",
+      "required": true
+    }
+  ],
   "contributes": {
-    "event_subscriptions": [
+    "mcpServers": [
       {
-        "id": "memory.files.capture-after-turn",
-        "event": "conversation.turn.finished",
-        "filter": {"owner_run": true, "from_cron": false, "from_subagent": false},
-        "enqueue": {
-          "queue": "memory.files.capture",
-          "coalesce_key": ["workspace", "session_key"],
-          "debounce_ms": 30000
-        }
-      }
-    ]
-  }
-}
-```
-
-Event payload 必须 bounded，不包含完整 prompt、完整 tool output、完整 provider response 或敏感原文。插件若需要原始会话，应通过受权限约束的 session/resource read 能力读取。
-
-### 6. Queues, Jobs, And Schedules
-
-插件需要后台工作能力。Cron 当前偏用户任务：它把 job 转为 inbound cron message，让 LLM 处理并决定是否发消息。这不适合 plugin internal maintenance。
-
-需要新增通用 queue/job primitive：
-
-```json
-{
-  "contributes": {
-    "queues": [
-      {
-        "id": "memory.files.organize",
-        "concurrency": 1,
-        "coalesce_by": ["workspace"],
-        "debounce_ms": 30000,
-        "retry": {"max": 3, "backoff": "exponential"},
-        "budget": {"model_calls": 1, "max_tokens": 20000}
+        "id": "hindsight",
+        "transport": "streamable-http",
+        "url": "${config.endpoint}/mcp",
+        "headers": {
+          "Authorization": "Bearer ${secret:hindsight.api_key}"
+        },
+        "toolPrefix": "hindsight__"
       }
     ],
-    "scheduled_jobs": [
+    "tools": [
       {
-        "id": "memory.files.organize.daily",
-        "schedule": {"type": "cron", "expr": "0 4 * * *"},
-        "queue": "memory.files.organize",
-        "enabled": true
+        "name": "hindsight__recall",
+        "from": "mcp:hindsight/recall",
+        "surfaces": ["owner", "follow_up", "subagent", "cron"]
+      },
+      {
+        "name": "hindsight__retain",
+        "from": "mcp:hindsight/retain",
+        "surfaces": ["owner", "cron"]
+      },
+      {
+        "name": "hindsight__mental_model",
+        "from": "mcp:hindsight/get_mental_model",
+        "surfaces": ["owner", "follow_up", "subagent", "cron"]
+      },
+      {
+        "name": "hindsight__operation_status",
+        "from": "mcp:hindsight/get_operation",
+        "surfaces": ["owner", "cron"]
+      }
+    ],
+    "skills": [
+      {
+        "id": "builtin:hindsight-memory",
+        "path": "skills/hindsight-memory/SKILL.md"
+      }
+    ],
+    "hooks": [
+      {
+        "id": "hindsight.prompt.memory",
+        "event": "prompt.build.before",
+        "action": {
+          "type": "add_tool_result",
+          "tool": "hindsight__recall",
+          "args": {
+            "bank": "{{workspace.hindsight_bank}}",
+            "query": "{{turn.prompt}}",
+            "session": "{{session.key}}",
+            "limit": 8
+          },
+          "title": "Hindsight Memory",
+          "maxChars": 8000,
+          "onError": "warn"
+        }
+      },
+      {
+        "id": "hindsight.after_turn.retain",
+        "event": "conversation.turn.finished",
+        "action": {
+          "type": "enqueue_job",
+          "job": "hindsight.retain",
+          "coalesceBy": ["workspace", "session_key"]
+        }
+      }
+    ],
+    "jobs": [
+      {
+        "id": "hindsight.retain",
+        "run": {
+          "tool": "hindsight__retain",
+          "args": {
+            "bank": "{{workspace.hindsight_bank}}",
+            "content": "{{turn.summary}}",
+            "source": "{{turn.source_pointer}}"
+          }
+        }
+      }
+    ],
+    "workspaceFiles": [
+      {
+        "id": "hindsight.status",
+        "path": "memory/hindsight/status.json",
+        "kind": "file",
+        "onMissing": "create",
+        "watch": true
       }
     ]
-  }
-}
-```
-
-Job handler options：
-
-- `tool`：执行一个 plugin/core tool，适合 data-only plugin。
-- `module`：builtin/reviewed plugin compiled module。
-- `workflow`：用 LLM turn 执行，但必须声明 tools surface、model role、budget、visibility。
-- `external_process` / `mcp`：后续设计。
-
-关键要求：
-
-- queue state 是 workspace-scoped 或 plugin-scoped durable state。
-- 支持 coalescing，避免每轮消息都触发昂贵整理。
-- 支持 cancellation 和 timeout。
-- 所有 job lifecycle 写 ControlPlane。
-- job 不默认 user-visible；显式声明 delivery 才能发消息。
-
-### 7. Permissions
-
-插件必须声明自己和它贡献能力的权限边界。
-
-草案 shape：
-
-```json
-{
-  "permissions": {
-    "filesystem": {
-      "read": ["workspace:memory/**"],
-      "write": ["workspace:memory/**"]
+  },
+  "permissions": [
+    {
+      "effect": "ask",
+      "resource": "network",
+      "operation": "connect",
+      "target": "hindsight endpoint",
+      "scope": "workspace"
     },
-    "network": [],
-    "model_calls": {
-      "foreground": false,
-      "background": true,
-      "roles": ["cheap_model", "memory_model"]
+    {
+      "effect": "ask",
+      "resource": "tool",
+      "operation": "call",
+      "target": "hindsight__retain",
+      "scope": "workspace"
     },
-    "tools": {
-      "uses": ["read", "find", "apply_patch"]
+    {
+      "effect": "ask",
+      "resource": "filesystem",
+      "operation": "write",
+      "target": "workspace:memory/hindsight/**",
+      "scope": "workspace"
     }
-  }
+  ]
 }
 ```
 
-权限不是 Workbench grant，也不是 bash approval rule 的替代。它是插件 manifest 的最小声明，用于 diagnostics、runtime policy projection、tool/job/service 执行前检查。
+关键点：
 
-### 8. Observability
+- Hindsight 是默认必须接入的 memory 能力。
+- 本地文件可以作为状态、缓存、导出或人工可读备份，但不是 Hindsight 的替代主线。
+- prompt 注入通过 `prompt.build.before` hook 完成。
+- 自动保存通过 `conversation.turn.finished` hook 加后台 job 完成。
+- MCP tool 进入 ToolRegistry，不给 Hindsight 单独开后门。
+- 权限声明只描述需求，真正执行仍由 PermissionRule 判断。
 
-插件 host 应自动产生基础观测：
+## 一次对话怎么跑
 
-```text
-plugin.loaded
-plugin.disabled
-plugin.context.injected
-plugin.context.skipped
-plugin.tool.available
-plugin.tool.called
-plugin.queue.job.queued
-plugin.queue.job.started
-plugin.queue.job.finished
-plugin.queue.job.failed
-plugin.artifact.changed
-plugin.service.started
-plugin.service.failed
-plugin.migration.applied
-```
-
-业务插件可以额外写语义 observations，例如 memory 插件可写 `memory.files.write.appended`，但基础生命周期不能靠业务插件自己补。
-
-### 9. Migrations
-
-插件会演化自己的 workspace structure，需要通用 migration 机制。
-
-草案 shape：
-
-```json
-{
-  "contributes": {
-    "migrations": [
-      {
-        "id": "memory.files.v1",
-        "from": null,
-        "to": "1",
-        "mode": "workspace_artifacts",
-        "description": "Create memory/INDEX.md and memory/INBOX.md if missing."
-      }
-    ]
-  }
-}
-```
-
-要求：
-
-- dry-run 和 apply 分离。
-- apply 产生 backup 或 reversible operation summary。
-- 不覆盖用户内容。
-- 迁移结果写 ControlPlane。
-- 结构性迁移默认 owner-approved，除非 manifest 声明为 safe create-only。
-
-## Runtime Build 草案
-
-目标 build order：
+### 启动或热更新
 
 ```text
-load config
-resolve workspace
-load plugin manifests and enablement
-normalize plugin contributions
-apply safe workspace artifact checks/projections
-build services/queues/schedules projection
-build commands/tools/skills/resources projection
-build context contribution projection
-build prompt from context renderer
-build workbench projection
-assemble Runtime.Snapshot
+读取 config
+读取 enabled plugins
+校验插件声明
+合并插件 hooks/tools/skills/jobs/workspaceFiles/permissions
+生成 Runtime.Snapshot
+刷新 ToolRegistry
+启动或连接 Hindsight MCP
+更新 watcher 路径
 ```
 
-重要变化：
+### 用户发来一轮消息
 
-- prompt build 不再自己读 memory。
-- hooks/context contributions 先进入 snapshot，再由 Runner 在每次 turn 结合 pointcut 和 request ctx 选择。
-- watcher 不再硬编码每个业务文件；它从 plugin artifacts/context source 生成 watch paths。
-- plugin hash 不只包含 manifest，还应包含影响 runtime behavior 的 contribution projection hash。
+```text
+InboundWorker 找到 session
+Runner 准备 turn
+Runner 执行 prompt.build.before hooks
+Hindsight hook 调 hindsight__recall
+权限规则判断 recall 是否允许
+ToolRegistry 调 MCP
+Hook 把结果变成 prompt 片段
+ContextBuilder 只负责排版
+LLM 正常回答
+```
 
-## 与现有系统的关系
+### 一轮结束
 
-### 可以复用
+```text
+Runner 发 conversation.turn.finished event
+Hindsight retain hook enqueue job
+job 调 hindsight__retain
+权限规则判断 retain 是否允许
+Hindsight 返回 operation id
+ControlPlane 记录 job 和 operation
+后续 job 查询 operation 状态
+```
 
-- `Plugin.Manifest/Store/Catalog/Contribution` 的 manifest load 和 enablement。
-- `Runtime.Snapshot.plugins` 的统一投影方向。
-- `Tool.Registry` 从 plugin tools 派生 definitions/execution map。
-- `Skills.Catalog` progressive disclosure。
-- `Runtime.Watcher` 的 polling reload 模型。
-- `Hooks` 的 fragment rendering、pointcut、on_error、observability 思路。
-- `Cron` 的 schedule parser 和 per-workspace durable state 思路。
+## 现有代码应该怎么改
 
-### 需要弱化或迁移
+### Hook 主链要升级
 
-- `ContextBuilder.add_memory_with_diagnostics/2` 应被 context contribution 取代。
-- `Runtime.Watcher.@workspace_files` 里的业务路径应转为 contribution-derived watch paths。
-- `MemoryUpdater` 应作为 old memory plugin 的内部 worker 或被 queue/job primitive 取代。
-- `workspace/hooks/hooks.json` 应成为 user-authored hook registry，而不是 plugin 安装默认 context 的唯一方式。
+当前锚点：
 
-## 非目标
+- `lib/nex/agent/capability/hooks.ex`
+- `lib/nex/agent/turn/runner.ex`
+- `lib/nex/agent/turn/context_builder.ex`
 
-- 不新增 memory 专用 plugin kind。
-- 不允许 workspace/project plugin 直接加载任意 Elixir module。
-- 不把 Runtime、Runner、ToolRegistry、ContextBuilder、ControlPlane 整体变成可卸载插件。
-- 不让插件绕过 sandbox、permission、runtime snapshot、ControlPlane。
-- 不要求所有能力第一版都支持 workspace/project plugin；可以先支持 builtin plugin 和 data-only artifact plugin。
+目标变化：
 
-## 开放问题
+- `Hooks.load/1` 不只读 workspace `hooks/hooks.json`，还要吃 enabled plugins 的 hook 声明。
+- hook entry 带 `source`，能知道来自 workspace 还是某个 plugin。
+- `prompt.build.before` 支持 `add_text`、`add_file`、`add_tool_result`。
+- 增加 `conversation.turn.finished` 这类 lifecycle event。
+- hook 执行工具时必须走 ToolRegistry 和 PermissionRule。
 
-1. Context contribution 是否应作为 `hooks` 的扩展，还是拆成 `context` 独立 contribution？
-2. `resources` namespace 是否应先只支持 read/list/find，再支持 write？
-3. Plugin queue job 的 handler 第一版是否只允许 builtin module 和 tool invocation？
-4. Plugin migrations 的 owner approval UI 放在 Workbench、slash command，还是 deterministic tool？
-5. Bootstrap 层 `AGENTS.md`、`IDENTITY.md`、`SOUL.md`、`USER.md` 是否也应迁移为不可卸载 builtin bootstrap plugin 的 context contributions？
-6. Context fragments 的 cache stability 如何投影给不同 provider？第一版可能只排序，不做 provider-specific cache control。
+### ContextBuilder 要瘦身
+
+当前 `ContextBuilder` 还硬编码 memory 文件。目标是删掉这种业务读取。
+
+它保留：
+
+- identity/runtime/channel 元信息排版。
+- hook 结果排版。
+- skills catalog 排版。
+- diagnostics。
+
+它不再直接知道：
+
+- `memory/MEMORY.md`
+- Hindsight
+- file memory
+- 哪个插件应该给 prompt 加什么
+
+### ToolRegistry 要成为唯一工具入口
+
+当前 ToolRegistry 已经能从 plugin tools 生成 definitions 和执行表。目标是继续扩它，而不是给 MCP 开旁路。
+
+目标变化：
+
+- tool declaration 支持 `from: "module:..."` 和 `from: "mcp:server/tool"`。
+- MCP tool 名字统一变成 provider-safe 名字，例如 `hindsight__recall`。
+- ToolRegistry 执行任何 tool 前都能构造权限事件。
+- disabled plugin 的 tool 不出现在 definitions，也不能直接执行。
+
+### 权限系统要统一执行判断
+
+当前 `PermissionRule` 已经是正确方向。要补的是覆盖面。
+
+目标变化：
+
+- tool call、MCP call、hook tool call、job tool call 都生成同一种 raw permission event。
+- 插件 manifest 的 `permissions` 编译成 diagnostics 和可建议的规则，不成为独立判定器。
+- `tool_allowlist` 这类运行参数只保留“可见工具范围”的职责，或改名成更准确的 `visible_tools` / `tool_scope`。
+- skill 的 `allowed_tools` 也不当权限，只当技能建议的工具范围。
+
+### Watcher 不能硬编码业务文件
+
+当前 watcher 直接 watch `memory/MEMORY.md`。目标是由 runtime projection 生成 watch paths。
+
+来源包括：
+
+- workspace `hooks/hooks.json`
+- plugin manifests
+- plugin hook 读取的文件
+- plugin workspaceFiles
+- plugin skill files
+- MCP/tool schema cache 文件，如果有
+
+### 后台 job 是 runtime 能力
+
+Hindsight retain、operation polling、mental model refresh 都不应该变成 `MemoryUpdater` 这种 memory 专用 worker。
+
+目标变化：
+
+- runtime 有一个通用 job runner。
+- plugin hook 可以 enqueue job。
+- job 可以直接调工具，也可以运行受限 LLM workflow。
+- job 的 tool scope、权限、超时、重试、取消、观测都走统一主链。
+
+### ControlPlane 记录机器真相
+
+插件基础生命周期由 host 自动记：
+
+- plugin loaded / disabled / diagnostics
+- hook matched / skipped / injected
+- tool available / called / failed
+- job queued / started / finished / failed
+- MCP connected / failed
+- permission asked / denied / allowed
+
+Hindsight 自己可以额外记录：
+
+- retain queued / finished / failed
+- recall result count
+- operation status
+- bank id
+- latency
+
+不要把完整 retained content、完整 recall result、完整 prompt 或完整 tool output 塞进 ControlPlane attrs。需要追原文时存 source pointer。
+
+## 和外部系统的对齐
+
+这个设计有意贴近 Claude Code、Codex、OpenClaw 的朴素模型：
+
+```text
+plugin = package
+package can include skills + hooks + MCP + tools + config/assets
+```
+
+NexAgent 的不同点是它是长期运行的个人 agent runtime，所以还需要：
+
+- session 和 workspace 语义。
+- 后台 job。
+- 热更新 snapshot。
+- 权限规则。
+- ControlPlane。
+
+这些不是插件使用者要理解的新名词，而是 runtime 内部保证长期可靠性的主链。
+
+## 判断一个改动是否走偏
+
+如果出现下面情况，说明设计又复杂化了：
+
+- 插件为了注入 prompt 新增了 hook 之外的入口。
+- MCP tool 绕过 ToolRegistry 执行。
+- 插件自己维护一套 allow/deny。
+- 文件路径被包装成新的抽象对象。
+- Hindsight 接入写了 memory 专用 runtime 分支。
+- 后台 retain 变成某个 memory-only GenServer。
+- diagnostics 只在日志里，ControlPlane 查不到。
+- 禁用插件后工具还可见或可执行。
+- 同一个权限问题同时由 `allowed_tools` 和 PermissionRule 判断。
+
+最终应该读起来很直：插件包声明东西，runtime 合并，hook 加 prompt，tool 做动作，permission 管能不能做，job 做后台维护，ControlPlane 记事实。

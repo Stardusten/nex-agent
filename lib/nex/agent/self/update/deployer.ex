@@ -61,18 +61,18 @@ defmodule Nex.Agent.Self.Update.Deployer do
     started_attrs = deploy_attrs(%{status: :started}, files, 0)
     emit_deploy_observation(:info, "self_update.deploy.started", started_attrs, workspace)
 
-    result = do_deploy(reason, files)
+    result = do_deploy(reason, files, deploy_metadata(opts))
     emit_deploy_result_observation(result, reason, files, workspace, started_at)
     result
   end
 
-  defp do_deploy(reason, files) when is_binary(reason) do
+  defp do_deploy(reason, files, deploy_metadata) when is_binary(reason) do
     with {:ok, plan, warnings} <- Planner.plan(files),
          :ok <- syntax_check(plan),
          {:ok, snapshot} <- snapshot_files(plan),
          {:ok, _reloads} <- compile_and_reload(plan, snapshot),
          {:ok, tests} <- run_related_tests(plan, snapshot) do
-      persist_release(:deployed, reason, plan, snapshot, tests, warnings)
+      persist_release(:deployed, reason, plan, snapshot, tests, warnings, deploy_metadata)
     else
       {:error, phase, snapshot, reason} ->
         failed_result(phase, snapshot, reason)
@@ -108,7 +108,7 @@ defmodule Nex.Agent.Self.Update.Deployer do
     end
   end
 
-  defp persist_release(status, reason, plan, snapshot, tests, warnings, extra \\ %{}) do
+  defp persist_release(status, reason, plan, snapshot, tests, warnings, extra) do
     ReleaseStore.ensure_layout()
     release_id = ReleaseStore.new_release_id()
     parent = ReleaseStore.current_event_release()
@@ -121,25 +121,27 @@ defmodule Nex.Agent.Self.Update.Deployer do
       :ok = ReleaseStore.save_applied(release_id, entry.relative_path, file_content(entry))
     end)
 
-    release = %{
-      "id" => release_id,
-      "parent_release_id" => release_id(parent),
-      "timestamp" => ReleaseStore.new_timestamp(),
-      "reason" => reason,
-      "files" =>
-        Enum.map(plan, fn entry ->
-          before_entry = Enum.find(snapshot, &(&1.relative_path == entry.relative_path))
+    release =
+      %{
+        "id" => release_id,
+        "parent_release_id" => release_id(parent),
+        "timestamp" => ReleaseStore.new_timestamp(),
+        "reason" => reason,
+        "files" =>
+          Enum.map(plan, fn entry ->
+            before_entry = Enum.find(snapshot, &(&1.relative_path == entry.relative_path))
 
-          %{
-            "path" => entry.relative_path,
-            "before_sha" => sha256(before_entry.original_content),
-            "after_sha" => sha256(file_content(entry))
-          }
-        end),
-      "modules" => Enum.map(plan, & &1.module_name),
-      "tests" => tests,
-      "status" => Atom.to_string(status)
-    }
+            %{
+              "path" => entry.relative_path,
+              "before_sha" => sha256(before_entry.original_content),
+              "after_sha" => sha256(file_content(entry))
+            }
+          end),
+        "modules" => Enum.map(plan, & &1.module_name),
+        "tests" => tests,
+        "status" => Atom.to_string(status)
+      }
+      |> Map.merge(release_metadata(extra))
 
     :ok = ReleaseStore.save_release(release)
 
@@ -156,6 +158,25 @@ defmodule Nex.Agent.Self.Update.Deployer do
     }
     |> Map.merge(extra)
   end
+
+  defp deploy_metadata(opts) do
+    %{
+      candidate_id: normalize_optional_string(Keyword.get(opts, :candidate_id)),
+      evidence_ids: normalize_string_list(Keyword.get(opts, :evidence_ids))
+    }
+    |> Enum.reject(fn {_key, value} -> value in [nil, "", []] end)
+    |> Map.new()
+  end
+
+  defp release_metadata(extra) when is_map(extra) do
+    %{}
+    |> maybe_put_release_metadata("candidate_id", Map.get(extra, :candidate_id))
+    |> maybe_put_release_metadata("evidence_ids", Map.get(extra, :evidence_ids))
+  end
+
+  defp maybe_put_release_metadata(map, _key, nil), do: map
+  defp maybe_put_release_metadata(map, _key, []), do: map
+  defp maybe_put_release_metadata(map, key, value), do: Map.put(map, key, value)
 
   defp snapshot_files(plan) do
     snapshot =
@@ -562,6 +583,23 @@ defmodule Nex.Agent.Self.Update.Deployer do
 
   defp normalize_error(reason) when is_binary(reason), do: reason
   defp normalize_error(reason), do: inspect(reason)
+
+  defp normalize_optional_string(value) when is_binary(value) do
+    value = String.trim(value)
+    if value == "", do: nil, else: value
+  end
+
+  defp normalize_optional_string(_value), do: nil
+
+  defp normalize_string_list(values) when is_list(values) do
+    values
+    |> Enum.filter(&is_binary/1)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
+  end
+
+  defp normalize_string_list(_values), do: []
 
   defp module_name(module) do
     module

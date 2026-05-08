@@ -460,7 +460,7 @@ defmodule Nex.Agent.App.Onboarding do
     - Modify files with `apply_patch`, then re-read critical results when accuracy matters.
     - If tool calls fail, analyze and retry with a different approach.
     - Ask clarifying questions only when ambiguity blocks safe execution.
-    - File edits only change disk state. CODE runtime activation goes through `self_update`; load `builtin:nex-code-maintenance` for the deploy workflow.
+    - File edits only change disk state. CODE runtime activation goes through `self_update`; source Git history goes through owner-approved `self_update_commit` when configured. Load `builtin:nex-code-maintenance` for the workflow.
     - Use `skill_get` with a listed skill id before following long, low-frequency workflow guidance.
     - Test hygiene: use isolated temp directories and clean them in `on_exit`; do not leave persistent artifacts under `~/.nex/agent` from tests.
 
@@ -547,14 +547,14 @@ defmodule Nex.Agent.App.Onboarding do
     - MEMORY layer: `memory_consolidate`, `memory_status`, `memory_rebuild`, `memory_write`
     - SKILL layer: `skill_get`, `skill_capture`
     - TOOL layer: `tool_list`, `tool_create`, `tool_delete`
-    - CODE layer: `reflect`, `self_update`
+    - CODE layer: `reflect`, `self_update`, `self_update_commit`
 
     ## Usage Principles
 
     - Prefer deterministic tools over free-form reasoning when possible.
     - Use the smallest tool that can solve the task.
     - Validate tool outputs before taking follow-up actions.
-    - Load `builtin:nex-code-maintenance` before CODE deploy/rollback/provider work.
+    - Load `builtin:nex-code-maintenance` before CODE deploy/rollback/provider work or owner-approved self-update source commits.
     - Load `builtin:runtime-observability` before answering runtime status, failure, stuck-run, log, incident, budget, gauge, owner-run, or background-task questions.
     - Load `builtin:memory-and-evolution-routing` before memory refresh/status/rebuild, durable correction, layer routing, or evolution-candidate work.
     - Load `builtin:lark-feishu-ops` before Feishu/Lark native payload, media, business operation, or `lark-cli` work.

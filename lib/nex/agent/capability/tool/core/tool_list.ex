@@ -169,6 +169,7 @@ defmodule Nex.Agent.Capability.Tool.Core.ToolList do
         "reflect" -> ["code"]
         "evolution_candidate" -> ["tool"]
         "self_update" -> ["code"]
+        "self_update_commit" -> ["code"]
         _ -> ["tool"]
       end
     else

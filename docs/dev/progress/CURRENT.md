@@ -102,6 +102,10 @@ Phase 10/11 planning now defines the self-iteration direction beyond session con
   - no LLM reflection, memory writes, skill drafts, patch generation, or deploy automation in 11A
   - output is durable structured events, cheap aggregation, and bounded router decisions
   - the first implementation is now in place: event store, energy ledger, aggregator, router, Runner hooks, self_update deploy failure hook, prompt/onboarding guidance, and focused tests
+- CODE self-update now has a separate source Git history lane:
+  - config may associate `self_update.source_repo.path` with a local source repository and keep consistency checks enabled by default
+  - successful `self_update deploy` records candidate/evidence metadata on releases and can prepare a source commit proposal
+  - `self_update_commit commit` creates the Git commit only after owner approval, using release id, candidate id, and ControlPlane evidence in the message
 
 Phase 12 now establishes the LLM provider adapter boundary:
 
