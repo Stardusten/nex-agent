@@ -5,10 +5,11 @@ defmodule Nex.Agent.App.Bus do
 
   use GenServer
 
-  defstruct [:subscribers]
+  defstruct [:subscribers, :monitors]
 
   @type t :: %__MODULE__{
-          subscribers: %{term() => [pid()]}
+          subscribers: %{term() => [pid()]},
+          monitors: %{pid() => reference()}
         }
 
   @doc """
@@ -17,7 +18,7 @@ defmodule Nex.Agent.App.Bus do
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)
-    GenServer.start_link(__MODULE__, %__MODULE__{subscribers: %{}}, name: name)
+    GenServer.start_link(__MODULE__, %__MODULE__{subscribers: %{}, monitors: %{}}, name: name)
   end
 
   @doc """
@@ -76,7 +77,7 @@ defmodule Nex.Agent.App.Bus do
     if pid in subscribers do
       {:reply, :ok, state}
     else
-      Process.monitor(pid)
+      state = monitor_pid(state, pid)
       new_subscribers = [pid | subscribers]
       new_state = %{state | subscribers: Map.put(state.subscribers, topic, new_subscribers)}
       {:reply, :ok, new_state}
@@ -86,14 +87,9 @@ defmodule Nex.Agent.App.Bus do
   @impl true
   def handle_call({:unsubscribe, topic, pid}, _from, state) do
     subscribers = Map.get(state.subscribers, topic, [])
-
-    # Only demonitor if pid was actually in subscribers list
-    if pid in subscribers do
-      Process.demonitor(pid, [:flush])
-    end
-
     new_subscribers = List.delete(subscribers, pid)
-    new_state = %{state | subscribers: Map.put(state.subscribers, topic, new_subscribers)}
+    subscribers = Map.put(state.subscribers, topic, new_subscribers)
+    new_state = %{state | subscribers: subscribers} |> demonitor_if_unused(pid)
     {:reply, :ok, new_state}
   end
 
@@ -133,6 +129,33 @@ defmodule Nex.Agent.App.Bus do
       end)
       |> Map.new()
 
-    {:noreply, %{state | subscribers: new_subscribers}}
+    {:noreply, %{state | subscribers: new_subscribers, monitors: Map.delete(state.monitors, pid)}}
+  end
+
+  defp monitor_pid(%__MODULE__{} = state, pid) do
+    if Map.has_key?(state.monitors, pid) do
+      state
+    else
+      %{state | monitors: Map.put(state.monitors, pid, Process.monitor(pid))}
+    end
+  end
+
+  defp demonitor_if_unused(%__MODULE__{} = state, pid) do
+    if subscribed_anywhere?(state.subscribers, pid) do
+      state
+    else
+      case Map.pop(state.monitors, pid) do
+        {nil, monitors} ->
+          %{state | monitors: monitors}
+
+        {ref, monitors} ->
+          Process.demonitor(ref, [:flush])
+          %{state | monitors: monitors}
+      end
+    end
+  end
+
+  defp subscribed_anywhere?(subscribers_by_topic, pid) do
+    Enum.any?(subscribers_by_topic, fn {_topic, subscribers} -> pid in subscribers end)
   end
 end

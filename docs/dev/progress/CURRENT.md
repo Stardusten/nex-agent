@@ -2,7 +2,7 @@
 
 ## Active Workstream
 
-Phase 1 runtime reload foundation is implemented. Phase 3 streaming delivery and Phase 3A architecture convergence are in place. Phase 4 is now closed as the text-IR foundation, Phase 4A is superseded, Phase 5 IM inbound architecture and media projection is implemented, and Phase 7 Feishu streaming converter simplification is in place. Phase 8 session run control and busy follow-up is landed, and Phase 9 follow-up LLM turn and interrupt request is now landed on top of it. Phase 6 Feishu outbound official format/media send remains landed. Phase 18 Workbench App Runtime is now opened as the local-first evolvable console/workbench track. Phase 20 Plugin Runtime Foundation is now planned as the large pluginization track for non-core capabilities. Phase 23 Plugin External Service Foundation is now in progress; Stage 1 Task surface cutover is complete with review fixes and focused tests passing, Stage 2 MCP transport boundary is complete with focused stdio/client tests and compile passing, Stage 3 streamable HTTP MCP transport is complete with JSON/SSE/session-header tests and compile passing, Stage 4 plugin template + SecretBase is complete with secret redaction/template tests and compile passing, and the next implementation step is Stage 5 Hindsight MCP packaging.
+Phase 1 runtime reload foundation is implemented. Phase 3 streaming delivery and Phase 3A architecture convergence are in place. Phase 4 is now closed as the text-IR foundation, Phase 4A is superseded, Phase 5 IM inbound architecture and media projection is implemented, and Phase 7 Feishu streaming converter simplification is in place. Phase 8 session run control and busy follow-up is landed, and Phase 9 follow-up LLM turn and interrupt request is now landed on top of it. Phase 6 Feishu outbound official format/media send remains landed. Phase 18 Workbench App Runtime is now opened as the local-first evolvable console/workbench track. Phase 20 Plugin Runtime Foundation is now planned as the large pluginization track for non-core capabilities. Phase 23 Plugin External Service Foundation is now in progress; Stage 1 Task surface cutover is complete with review fixes and focused tests passing, Stage 2 MCP transport boundary is complete with focused stdio/client tests and compile passing, Stage 3 streamable HTTP MCP transport is complete with JSON/SSE/session-header tests and compile passing, Stage 4 plugin template + SecretBase is complete with secret redaction/template tests and compile passing, Stage 5 unified Task runner/scheduler is complete with debounce/max_runs/action contract tests and compile passing, and the next implementation step is Stage 6 fake external memory plugin acceptance.
 
 ## Why This Is Active
 
@@ -518,3 +518,12 @@ Docs/dev workflow is split into four lanes:
 - OpenAI native computer use has an architecture decision record, but it is historical/parked and is not current implementation guidance for `web_search`, `image_generation`, or other ordinary agent tools.
 - Current tool policy is local function tool facade plus backend implementation behind the facade. Any future exception needs a new reviewed plan.
 - Slack native stream and Telegram/Discord edit adapters are intentionally not part of Phase 3A; Phase 3A exists to make those follow-on integrations land on cleaner boundaries.
+
+
+## Phase 23 Stage 5 handoff
+
+- `Nex.Agent.Tasks.Scheduler` now owns schedule normalization, next-run calculation, and due checks for `every` / `at` / 5-field cron.
+- `Nex.Agent.Tasks` persists `action` and supports scheduled user task `agent_turn` action messages while retaining message fallback.
+- `Nex.Agent.Tasks.Runner` executes plugin `contributes.tasks` definitions with canonical `policy.debounce_key` / `policy.debounce_ms` / `policy.max_runs`; supported plugin task actions remain `tool_call` and `write_workspace_file` only.
+- Plugin task run observations now cover queued / started / finished / failed / debounced.
+- Focused verification passed: `/opt/homebrew/bin/mix test test/nex/agent/plugin_task_runner_test.exs test/nex/agent/tasks_scheduler_test.exs test/nex/agent/plugin_runtime_primitives_test.exs test/nex/agent/bus_test.exs`, `/opt/homebrew/bin/mix test test/nex/agent/tasks_surface_test.exs test/nex/agent/message_tool_test.exs`, and `/opt/homebrew/bin/mix compile --warnings-as-errors`.

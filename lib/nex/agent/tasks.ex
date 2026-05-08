@@ -7,7 +7,7 @@ defmodule Nex.Agent.Tasks do
   require Logger
 
   alias Nex.Agent.Runtime.Workspace
-  alias Nex.Agent.Tasks.Store
+  alias Nex.Agent.Tasks.{Scheduler, Store}
   alias Nex.Agent.Observe.ControlPlane.Log
   alias Nex.Agent.Interface.Inbound.Envelope
   require Log
@@ -17,6 +17,7 @@ defmodule Nex.Agent.Tasks do
     :name,
     :schedule,
     :message,
+    :action,
     :enabled,
     # delivery context
     :channel,
@@ -38,6 +39,7 @@ defmodule Nex.Agent.Tasks do
           name: String.t(),
           schedule: map(),
           message: String.t(),
+          action: map() | nil,
           enabled: boolean(),
           channel: String.t() | nil,
           chat_id: String.t() | nil,
@@ -134,7 +136,7 @@ defmodule Nex.Agent.Tasks do
 
         enabled = attr(attrs, :enabled, existing.enabled)
 
-        schedule = attr(attrs, :schedule, existing.schedule) |> normalize_schedule()
+        schedule = attr(attrs, :schedule, existing.schedule) |> Scheduler.normalize_schedule()
         delete_after_run = attr(attrs, :delete_after_run, existing.delete_after_run)
 
         updated = %__MODULE__{
@@ -142,11 +144,12 @@ defmodule Nex.Agent.Tasks do
           | name: attr(attrs, :name, existing.name),
             schedule: schedule,
             message: attr(attrs, :message, existing.message),
+            action: attr(attrs, :action, existing.action),
             enabled: enabled,
             channel: attr(attrs, :channel, existing.channel),
             chat_id: attr(attrs, :chat_id, existing.chat_id),
             delete_after_run: delete_after_run,
-            next_run: if(enabled, do: calculate_next_run(schedule, now), else: existing.next_run),
+            next_run: if(enabled, do: Scheduler.next_run(schedule, now), else: existing.next_run),
             updated_at: now
         }
 
@@ -207,7 +210,7 @@ defmodule Nex.Agent.Tasks do
 
     case Enum.split_with(current.tasks, &(&1.id == task_id)) do
       {[%__MODULE__{} = task], remaining} ->
-        schedule = attr(attrs, :schedule, task.schedule) |> normalize_schedule()
+        schedule = attr(attrs, :schedule, task.schedule) |> Scheduler.normalize_schedule()
         enabled = attr(attrs, :enabled, task.enabled)
 
         updated = %__MODULE__{
@@ -215,11 +218,12 @@ defmodule Nex.Agent.Tasks do
           | name: attr(attrs, :name, task.name),
             schedule: schedule,
             message: attr(attrs, :message, task.message),
+            action: attr(attrs, :action, task.action),
             enabled: enabled,
             channel: attr(attrs, :channel, task.channel),
             chat_id: attr(attrs, :chat_id, task.chat_id),
             delete_after_run: attr(attrs, :delete_after_run, task.delete_after_run),
-            next_run: calculate_next_run(schedule, now),
+            next_run: Scheduler.next_run(schedule, now),
             updated_at: now
         }
 
@@ -255,7 +259,7 @@ defmodule Nex.Agent.Tasks do
 
     case Enum.split_with(current.tasks, &(&1.id == task_id)) do
       {[task], remaining} ->
-        next = if enabled, do: calculate_next_run(task.schedule, now), else: task.next_run
+        next = if enabled, do: Scheduler.next_run(task.schedule, now), else: task.next_run
         updated = %{task | enabled: enabled, next_run: next, updated_at: now}
         tasks = [updated | remaining]
         save_tasks(current.tasks_file, tasks)
@@ -347,7 +351,7 @@ defmodule Nex.Agent.Tasks do
 
     {to_run, _rest} =
       Enum.split_with(current.tasks, fn task ->
-        task.enabled and task.next_run != nil and task.next_run <= now
+        Scheduler.due?(task, now)
       end)
 
     run_ids = MapSet.new(to_run, & &1.id)
@@ -403,7 +407,7 @@ defmodule Nex.Agent.Tasks do
 
   defp build_new_task(attrs, existing_tasks) do
     now = System.system_time(:second)
-    schedule = attr(attrs, :schedule) |> normalize_schedule()
+    schedule = attr(attrs, :schedule) |> Scheduler.normalize_schedule()
     delete_after_run = attr(attrs, :delete_after_run, schedule_type(schedule) == :at)
     requested_id = attr(attrs, :id)
 
@@ -412,12 +416,13 @@ defmodule Nex.Agent.Tasks do
       name: attr(attrs, :name, "unnamed"),
       schedule: schedule,
       message: attr(attrs, :message),
+      action: attr(attrs, :action),
       enabled: attr(attrs, :enabled, true),
       channel: attr(attrs, :channel),
       chat_id: attr(attrs, :chat_id),
       delete_after_run: delete_after_run,
       last_run: nil,
-      next_run: calculate_next_run(schedule, now),
+      next_run: Scheduler.next_run(schedule, now),
       last_status: nil,
       last_error: nil,
       created_at: now,
@@ -431,8 +436,10 @@ defmodule Nex.Agent.Tasks do
 
   defp execute_task(task, workspace) do
     Task.Supervisor.start_child(Nex.Agent.TaskSupervisor, fn ->
+      message = task_message(task)
+
       content =
-        task.message <>
+        message <>
           "\n\n[TASK] Use the `message` tool to deliver results to the user. " <>
           "If there is nothing meaningful to report, do NOT call message — just reply with a short text and it will be silently discarded."
 
@@ -456,6 +463,20 @@ defmodule Nex.Agent.Tasks do
       Nex.Agent.App.Bus.publish(:inbound, payload)
     end)
   end
+
+  defp task_message(%__MODULE__{action: %{"type" => "agent_turn"} = action, message: fallback}) do
+    action
+    |> Map.get("message", fallback || "")
+    |> to_string()
+  end
+
+  defp task_message(%__MODULE__{action: %{type: :agent_turn} = action, message: fallback}) do
+    action
+    |> Map.get(:message, fallback || "")
+    |> to_string()
+  end
+
+  defp task_message(%__MODULE__{message: message}), do: to_string(message || "")
 
   defp update_task_after_run(tasks, task_id, now, status, error) do
     Enum.reduce(tasks, {[], false}, fn task, {acc, deleted?} ->
@@ -494,219 +515,12 @@ defmodule Nex.Agent.Tasks do
         {%{
            task
            | last_run: now,
-             next_run: calculate_next_run(task.schedule, now),
+             next_run: Scheduler.next_run(task.schedule, now),
              last_status: status_str,
              last_error: error,
              updated_at: now
          }, false}
     end
-  end
-
-  # ── Schedule Calculation ──
-
-  defp calculate_next_run(%{type: :every, seconds: seconds}, now) do
-    now + seconds
-  end
-
-  defp calculate_next_run(%{type: :at, timestamp: timestamp}, now) do
-    if timestamp > now, do: timestamp, else: nil
-  end
-
-  defp calculate_next_run(%{type: :cron, expr: expr}, now) do
-    case parse_cron_expr(expr) do
-      {:ok, fields} -> next_cron_time(fields, now)
-      {:error, _} -> nil
-    end
-  end
-
-  defp calculate_next_run(_, _now), do: nil
-
-  # ── Cron Expression Parser ──
-  # Standard 5-field: minute hour day_of_month month day_of_week
-  # Supports: *, specific numbers, comma lists, ranges (1-5), steps (*/15)
-
-  defp parse_cron_expr(expr) when is_binary(expr) do
-    parts = String.split(expr, ~r/\s+/, trim: true)
-
-    if length(parts) != 5 do
-      {:error, "cron expression must have exactly 5 fields: minute hour dom month dow"}
-    else
-      [minute, hour, dom, month, dow] = parts
-
-      with {:ok, min_set} <- parse_field(minute, 0, 59),
-           {:ok, hour_set} <- parse_field(hour, 0, 23),
-           {:ok, dom_set} <- parse_field(dom, 1, 31),
-           {:ok, month_set} <- parse_field(month, 1, 12),
-           {:ok, dow_set} <- parse_field(dow, 0, 6) do
-        {:ok, %{minute: min_set, hour: hour_set, dom: dom_set, month: month_set, dow: dow_set}}
-      end
-    end
-  end
-
-  defp parse_field("*", min, max) do
-    {:ok, MapSet.new(min..max)}
-  end
-
-  defp parse_field(field, min, max) do
-    parts = String.split(field, ",")
-
-    Enum.reduce_while(parts, {:ok, MapSet.new()}, fn part, {:ok, acc} ->
-      case parse_field_part(part, min, max) do
-        {:ok, values} -> {:cont, {:ok, MapSet.union(acc, values)}}
-        {:error, _} = err -> {:halt, err}
-      end
-    end)
-  end
-
-  defp parse_field_part(part, min, max) do
-    cond do
-      # */step
-      String.starts_with?(part, "*/") ->
-        case Integer.parse(String.trim_leading(part, "*/")) do
-          {step, ""} when step > 0 ->
-            values = for v <- min..max, rem(v - min, step) == 0, do: v
-            {:ok, MapSet.new(values)}
-
-          _ ->
-            {:error, "invalid step: #{part}"}
-        end
-
-      # range with step: 1-5/2
-      String.contains?(part, "/") ->
-        [range_part, step_str] = String.split(part, "/", parts: 2)
-
-        with {step, ""} when step > 0 <- Integer.parse(step_str),
-             {:ok, range_start, range_end} <- parse_range(range_part, min, max) do
-          values = for v <- range_start..range_end, rem(v - range_start, step) == 0, do: v
-          {:ok, MapSet.new(values)}
-        else
-          _ -> {:error, "invalid range/step: #{part}"}
-        end
-
-      # range: 1-5
-      String.contains?(part, "-") ->
-        case parse_range(part, min, max) do
-          {:ok, range_start, range_end} -> {:ok, MapSet.new(range_start..range_end)}
-          err -> err
-        end
-
-      # single number
-      true ->
-        case Integer.parse(part) do
-          {n, ""} when n >= min and n <= max -> {:ok, MapSet.new([n])}
-          _ -> {:error, "invalid value: #{part}"}
-        end
-    end
-  end
-
-  defp parse_range(range_str, min, max) do
-    case String.split(range_str, "-", parts: 2) do
-      [a_str, b_str] ->
-        with {a, ""} <- Integer.parse(a_str),
-             {b, ""} <- Integer.parse(b_str) do
-          if a >= min and b <= max and a <= b do
-            {:ok, a, b}
-          else
-            {:error, "range out of bounds: #{range_str}"}
-          end
-        else
-          _ -> {:error, "invalid range: #{range_str}"}
-        end
-
-      _ ->
-        {:error, "invalid range: #{range_str}"}
-    end
-  end
-
-  @doc false
-  def next_cron_time(fields, now) do
-    # Start from the next minute
-    {{y, mo, d}, {h, m, _s}} = :calendar.system_time_to_universal_time(now, :second)
-    find_next(fields, {y, mo, d, h, m + 1}, 0)
-  end
-
-  # Search up to ~4 years worth of minutes to find next match
-  defp find_next(_fields, _dt, attempts) when attempts > 525_960, do: nil
-
-  defp find_next(fields, {y, mo, d, h, m}, attempts) do
-    # Normalize overflows
-    {y, mo, d, h, m} = normalize_datetime(y, mo, d, h, m)
-
-    dow = day_of_week(y, mo, d)
-
-    if MapSet.member?(fields.month, mo) and
-         MapSet.member?(fields.dom, d) and
-         MapSet.member?(fields.dow, dow) and
-         MapSet.member?(fields.hour, h) and
-         MapSet.member?(fields.minute, m) and
-         d <= days_in_month(y, mo) do
-      :calendar.datetime_to_gregorian_seconds({{y, mo, d}, {h, m, 0}}) -
-        :calendar.datetime_to_gregorian_seconds({{1970, 1, 1}, {0, 0, 0}})
-    else
-      # Try to skip intelligently
-      cond do
-        not MapSet.member?(fields.month, mo) ->
-          # Jump to next valid month
-          find_next(fields, {y, mo + 1, 1, 0, 0}, attempts + 1)
-
-        d > days_in_month(y, mo) ->
-          find_next(fields, {y, mo + 1, 1, 0, 0}, attempts + 1)
-
-        not MapSet.member?(fields.dom, d) or not MapSet.member?(fields.dow, dow) ->
-          find_next(fields, {y, mo, d + 1, 0, 0}, attempts + 1)
-
-        not MapSet.member?(fields.hour, h) ->
-          find_next(fields, {y, mo, d, h + 1, 0}, attempts + 1)
-
-        true ->
-          find_next(fields, {y, mo, d, h, m + 1}, attempts + 1)
-      end
-    end
-  end
-
-  defp normalize_datetime(y, mo, d, h, m) do
-    {h, m} =
-      if m > 59 do
-        {h + div(m, 60), rem(m, 60)}
-      else
-        {h, m}
-      end
-
-    {d, h} =
-      if h > 23 do
-        {d + div(h, 24), rem(h, 24)}
-      else
-        {d, h}
-      end
-
-    {y, mo, d} = normalize_date(y, mo, d)
-    {y, mo, d, h, m}
-  end
-
-  defp normalize_date(y, mo, d) when mo > 12 do
-    normalize_date(y + div(mo - 1, 12), rem(mo - 1, 12) + 1, d)
-  end
-
-  defp normalize_date(y, mo, d) do
-    max_d = days_in_month(y, mo)
-
-    if d > max_d do
-      normalize_date(y, mo + 1, d - max_d)
-    else
-      {y, mo, d}
-    end
-  end
-
-  defp days_in_month(y, 2) do
-    if rem(y, 4) == 0 and (rem(y, 100) != 0 or rem(y, 400) == 0), do: 29, else: 28
-  end
-
-  defp days_in_month(_, m) when m in [4, 6, 9, 11], do: 30
-  defp days_in_month(_, _), do: 31
-
-  # 0=Sunday, 1=Monday, ... 6=Saturday
-  defp day_of_week(y, m, d) do
-    :calendar.day_of_the_week(y, m, d) |> rem(7)
   end
 
   # ── Persistence ──
@@ -733,6 +547,7 @@ defmodule Nex.Agent.Tasks do
       name: j["name"],
       schedule: schedule,
       message: j["message"],
+      action: j["action"],
       enabled: j["enabled"],
       channel: j["channel"],
       chat_id: j["chat_id"],
@@ -746,10 +561,7 @@ defmodule Nex.Agent.Tasks do
     }
   end
 
-  defp deserialize_schedule(%{"type" => "every", "seconds" => s}), do: %{type: :every, seconds: s}
-  defp deserialize_schedule(%{"type" => "at", "timestamp" => ts}), do: %{type: :at, timestamp: ts}
-  defp deserialize_schedule(%{"type" => "cron", "expr" => expr}), do: %{type: :cron, expr: expr}
-  defp deserialize_schedule(other), do: other
+  defp deserialize_schedule(schedule), do: Scheduler.normalize_schedule(schedule)
 
   defp save_tasks(path, tasks) do
     data = Enum.map(tasks, &serialize_task/1)
@@ -778,6 +590,7 @@ defmodule Nex.Agent.Tasks do
       "name" => j.name,
       "schedule" => serialize_schedule(j.schedule),
       "message" => j.message,
+      "action" => j.action,
       "enabled" => j.enabled,
       "channel" => j.channel,
       "chat_id" => j.chat_id,
@@ -810,20 +623,6 @@ defmodule Nex.Agent.Tasks do
   defp attr(attrs, key, default \\ nil) when is_atom(key) do
     Map.get(attrs, key, Map.get(attrs, Atom.to_string(key), default))
   end
-
-  defp normalize_schedule(%{"type" => "every", "seconds" => seconds}),
-    do: %{type: :every, seconds: seconds}
-
-  defp normalize_schedule(%{"type" => "at", "timestamp" => timestamp}),
-    do: %{type: :at, timestamp: timestamp}
-
-  defp normalize_schedule(%{"type" => "at", "at" => timestamp}),
-    do: %{type: :at, timestamp: timestamp}
-
-  defp normalize_schedule(%{"type" => "cron", "expr" => expr}),
-    do: %{type: :cron, expr: expr}
-
-  defp normalize_schedule(schedule), do: schedule
 
   defp schedule_type(%{type: type}), do: type
   defp schedule_type(%{"type" => "at"}), do: :at

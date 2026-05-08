@@ -131,6 +131,11 @@ defmodule Nex.Agent.PluginRuntimePrimitivesTest do
           "tasks" => [
             %{
               "id" => "echo.flush",
+              "policy" => %{
+                "debounce_key" => "echo.flush:{{session.key}}",
+                "debounce_ms" => 10,
+                "max_runs" => 1
+              },
               "action" => %{
                 "type" => "tool_call",
                 "tool" => "echo__remember",
@@ -221,7 +226,12 @@ defmodule Nex.Agent.PluginRuntimePrimitivesTest do
     assert Enum.any?(snapshot.plugins.contributions.hooks, &(&1["id"] == "echo.prompt"))
     assert Enum.any?(snapshot.plugins.contributions.hooks, &(&1["id"] == "echo.after_turn"))
     assert Enum.any?(snapshot.plugins.contributions.tasks, &(&1["id"] == "echo.flush"))
-    assert Enum.any?(snapshot.tasks.definitions, &(&1["id"] == "echo.flush"))
+
+    assert Enum.any?(snapshot.tasks.definitions, fn definition ->
+             definition["id"] == "echo.flush" and
+               get_in(definition, ["attrs", "policy", "max_runs"]) == 1
+           end)
+
     assert Enum.any?(snapshot.plugins.contributions.workspace_files, &(&1["id"] == "echo.state"))
     assert Enum.any?(snapshot.plugins.contributions.mcp_servers, &(&1["id"] == "echo_mcp"))
 
