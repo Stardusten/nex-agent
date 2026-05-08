@@ -241,6 +241,7 @@ defmodule Nex.Agent.Runtime do
           )
 
         PluginWorkspaceFiles.ensure_declared!(workspace, plugins_data)
+        plugins_data = reconcile_plugin_mcp_servers(plugins_data, workspace, config)
 
         prompt_data = %{
           system_prompt: prompt,
@@ -515,15 +516,18 @@ defmodule Nex.Agent.Runtime do
     enabled = Map.get(plugins, :enabled) || Map.get(plugins, "enabled") || []
     contributions = normalize_plugin_contributions(plugins)
     diagnostics = Map.get(plugins, :diagnostics) || Map.get(plugins, "diagnostics") || []
+    active_mcp_servers =
+      Map.get(plugins, :active_mcp_servers) || Map.get(plugins, "active_mcp_servers") || []
 
     %{
       manifests: manifests,
       enabled: enabled,
       contributions: contributions,
+      active_mcp_servers: active_mcp_servers,
       diagnostics: diagnostics,
       hash:
         Map.get(plugins, :hash) || Map.get(plugins, "hash") ||
-          hash({manifests, enabled, contributions, diagnostics})
+          hash({manifests, enabled, contributions, active_mcp_servers, diagnostics})
     }
   end
 
@@ -603,6 +607,38 @@ defmodule Nex.Agent.Runtime do
       workspace_files: [],
       mcp_servers: []
     }
+  end
+
+  defp reconcile_plugin_mcp_servers(plugins_data, workspace, config) do
+    case Process.whereis(Nex.Agent.Interface.MCP.ServerManager) do
+      nil ->
+        Map.put(plugins_data, :active_mcp_servers, [])
+
+      _pid ->
+        :ok =
+          Nex.Agent.Interface.MCP.ServerManager.reconcile(
+            plugins_data,
+            workspace: workspace,
+            config: config
+          )
+
+        active_ids =
+          Nex.Agent.Interface.MCP.ServerManager.list()
+          |> Enum.filter(&(&1.origin == :plugin))
+          |> Enum.map(& &1.id)
+
+        diagnostics = Map.get(plugins_data, :diagnostics, [])
+
+        %{
+          plugins_data
+          | active_mcp_servers: active_ids,
+            hash:
+              hash(
+                {plugins_data.manifests, plugins_data.enabled, plugins_data.contributions,
+                 active_ids, diagnostics}
+              )
+        }
+    end
   end
 
   defp merge_plugin_config_diagnostics(%Config{} = config, plugins_data) do

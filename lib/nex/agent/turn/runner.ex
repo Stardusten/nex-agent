@@ -13,7 +13,6 @@ defmodule Nex.Agent.Turn.Runner do
     Conversation.RunControl,
     Conversation.Session,
     Turn.Stream.Result,
-    Runtime.PluginJobRunner
   }
 
   alias Nex.Agent.Observe.ControlPlane.Log, as: ControlPlaneLog
@@ -329,7 +328,7 @@ defmodule Nex.Agent.Turn.Runner do
       config: runtime_snapshot && runtime_snapshot.config
     }
 
-    PluginJobRunner.enqueue_matching("conversation.turn.finished", ctx)
+    _ = Hooks.run(:conversation_turn_finished, runtime_hooks(runtime_snapshot), ctx)
   end
 
   defp maybe_record_runtime_evolution_signal(

@@ -33,6 +33,16 @@ defmodule Nex.Agent.Test.PluginEchoTool do
   def execute(_args, _ctx), do: {:error, "source is required"}
 end
 
+defmodule Nex.Agent.Test.BadPluginTool do
+  @behaviour Nex.Agent.Capability.Tool.Behaviour
+
+  def name, do: "bad_plugin_tool"
+  def description, do: "Bad plugin tool without definition"
+  def category, do: :tool
+  def definition, do: nil
+  def execute(_args, _ctx), do: {:ok, "bad"}
+end
+
 defmodule Nex.Agent.PluginRuntimePrimitivesTest do
   use ExUnit.Case, async: false
 
@@ -106,12 +116,19 @@ defmodule Nex.Agent.PluginRuntimePrimitivesTest do
                 "path" => "plugin_data/echo/state.json",
                 "title" => "Echo State"
               }
+            },
+            %{
+              "id" => "echo.after_turn",
+              "event" => "conversation.turn.finished",
+              "action" => %{
+                "type" => "enqueue_job",
+                "job" => "echo.flush"
+              }
             }
           ],
           "jobs" => [
             %{
               "id" => "echo.flush",
-              "event" => "conversation.turn.finished",
               "action" => %{
                 "type" => "tool_call",
                 "tool" => "echo__remember",
@@ -195,6 +212,7 @@ defmodule Nex.Agent.PluginRuntimePrimitivesTest do
   } do
     assert {:ok, snapshot} = Runtime.current()
     assert Enum.any?(snapshot.plugins.contributions.hooks, &(&1["id"] == "echo.prompt"))
+    assert Enum.any?(snapshot.plugins.contributions.hooks, &(&1["id"] == "echo.after_turn"))
     assert Enum.any?(snapshot.plugins.contributions.jobs, &(&1["id"] == "echo.flush"))
     assert Enum.any?(snapshot.plugins.contributions.workspace_files, &(&1["id"] == "echo.state"))
     assert Enum.any?(snapshot.plugins.contributions.mcp_servers, &(&1["id"] == "echo_mcp"))
@@ -302,9 +320,10 @@ defmodule Nex.Agent.PluginRuntimePrimitivesTest do
   end
 
   test "tool registry resolves module-backed and mcp-backed plugin tools", %{workspace: workspace, config: config} do
-    definitions = Registry.definitions(:all, plugin_data: Runtime.current() |> elem(1) |> Map.get(:plugins), config: config)
+    snapshot = Runtime.current() |> elem(1)
+    definitions = Registry.definitions(:all, plugin_data: snapshot.plugins, config: config)
     assert Enum.any?(definitions, &(&1["name"] == "echo__remember"))
-    refute Enum.any?(definitions, &(&1["name"] == "echo__remote"))
+    assert Enum.any?(definitions, &(&1["name"] == "echo__remote"))
 
     mcp_script = """
     while IFS= read -r line; do
@@ -332,20 +351,59 @@ defmodule Nex.Agent.PluginRuntimePrimitivesTest do
                server_id: ServerManager.plugin_server_id("workspace:demo-echo", "echo_mcp")
              )
 
-    definitions = Registry.definitions(:all, plugin_data: Runtime.current() |> elem(1) |> Map.get(:plugins), config: config)
-    assert Enum.any?(definitions, &(&1["name"] == "echo__remote"))
+    plugin_data =
+      snapshot.plugins
+      |> Map.put(:active_mcp_servers, [ServerManager.plugin_server_id("workspace:demo-echo", "echo_mcp")])
 
     assert {:ok, %{"status" => "written"}} =
              Registry.execute("echo__remember", %{"source" => "local"}, %{
                workspace: workspace,
-               runtime_snapshot: Runtime.current() |> elem(1)
+               runtime_snapshot: %{snapshot | plugins: plugin_data}
              })
 
     assert {:ok, %{"echo" => "pong"}} =
              Registry.execute("echo__remote", %{"text" => "ping"}, %{
                workspace: workspace,
-               runtime_snapshot: Runtime.current() |> elem(1)
+               runtime_snapshot: %{snapshot | plugins: plugin_data}
              })
+  end
+
+  test "malformed plugin module contribution does not crash registry", %{workspace: workspace, config: config} do
+    File.mkdir_p!(Path.join(workspace, "plugins/bad-plugin"))
+
+    File.write!(
+      Path.join(workspace, "plugins/bad-plugin/nex.plugin.json"),
+      Jason.encode!(%{
+        "id" => "workspace:bad-plugin",
+        "title" => "Bad Plugin",
+        "source" => "workspace",
+        "contributes" => %{
+          "tools" => [
+            %{
+              "name" => "bad_plugin_tool",
+              "from" => "module:Nex.Agent.Test.BadPluginTool",
+              "description" => "bad"
+            }
+          ]
+        }
+      })
+    )
+
+    config_map = Config.to_map(config)
+
+    config =
+      Config.from_map(
+        Map.put(config_map, "plugins", %{
+          "enabled" => %{
+            "workspace:demo-echo" => true,
+            "workspace:bad-plugin" => true
+          }
+        })
+      )
+
+    assert {:ok, _snapshot} = Runtime.reload(workspace: workspace, config_loader: fn _ -> config end)
+    assert Registry.definitions(:all, config: config) |> is_list()
+    refute Enum.any?(Registry.definitions(:all, config: config), &(&1["name"] == "bad_plugin_tool"))
   end
 
   defp stream_client_from_response(fun) when is_function(fun, 2) do

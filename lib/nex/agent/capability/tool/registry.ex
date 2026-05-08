@@ -482,11 +482,17 @@ defmodule Nex.Agent.Capability.Tool.Registry do
         plugin_mcp_definition(module)
 
       is_map(module) and Map.get(module, "entry_type") == "plugin_module" ->
-        module
-        |> Map.fetch!("module")
-        |> tool_definition(opts)
-        |> normalize_definition()
-        |> Map.put("name", plugin_entry_name(module) || Map.get(module, "id"))
+        case module
+             |> Map.fetch!("module")
+             |> tool_definition(opts) do
+          %{} = definition ->
+            definition
+            |> normalize_definition()
+            |> Map.put("name", plugin_entry_name(module) || Map.get(module, "id"))
+
+          _ ->
+            nil
+        end
 
       true ->
         module_tool_definition(module, opts)
@@ -682,7 +688,8 @@ defmodule Nex.Agent.Capability.Tool.Registry do
     with module_name when is_binary(module_name) <- module_name,
          module <- Module.concat(String.split(module_name, ".")),
          {:module, ^module} <- Code.ensure_loaded(module),
-         true <- function_exported?(module, :execute, 2) do
+         true <- function_exported?(module, :execute, 2),
+         true <- function_exported?(module, :definition, 0) or function_exported?(module, :definition, 1) do
       module
     else
       _ -> nil
@@ -712,7 +719,7 @@ defmodule Nex.Agent.Capability.Tool.Registry do
     tools
     |> Map.merge(plugin_tools, fn _name, existing, _plugin -> existing end)
     |> Map.reject(fn {name, entry} ->
-      plugin_entry_hidden?(name, entry, enabled_plugin_names)
+      plugin_entry_hidden?(name, entry, enabled_plugin_names, opts)
     end)
   end
 
@@ -733,7 +740,7 @@ defmodule Nex.Agent.Capability.Tool.Registry do
     end)
   end
 
-  defp plugin_entry_hidden?(name, entry, enabled_plugin_names) do
+  defp plugin_entry_hidden?(name, entry, enabled_plugin_names, opts) do
     cond do
       not plugin_entry?(entry) ->
         false
@@ -741,7 +748,7 @@ defmodule Nex.Agent.Capability.Tool.Registry do
       not MapSet.member?(enabled_plugin_names, name) ->
         true
 
-      mcp_plugin_entry?(entry) and not plugin_mcp_entry_active?(entry) ->
+      mcp_plugin_entry?(entry) and not plugin_mcp_entry_active?(entry, opts) ->
         true
 
       true ->
@@ -752,18 +759,28 @@ defmodule Nex.Agent.Capability.Tool.Registry do
   defp mcp_plugin_entry?(%{"entry_type" => "plugin_mcp"}), do: true
   defp mcp_plugin_entry?(_entry), do: false
 
-  defp plugin_mcp_entry_active?(%{"plugin_id" => plugin_id, "attrs" => %{"from" => "mcp:" <> spec}}) do
+  defp plugin_mcp_entry_active?(%{"plugin_id" => plugin_id, "attrs" => %{"from" => "mcp:" <> spec}}, opts) do
     case String.split(spec, "/", parts: 2) do
       [server_name, _tool_name] ->
         server_id = MCPServerManager.plugin_server_id(plugin_id, server_name)
-        Enum.any?(MCPServerManager.list(), &(&1.id == server_id))
+        server_id in active_mcp_servers(opts)
 
       _ ->
         false
     end
   end
 
-  defp plugin_mcp_entry_active?(_entry), do: false
+  defp plugin_mcp_entry_active?(_entry, _opts), do: false
+
+  defp active_mcp_servers(opts) when is_list(opts) do
+    opts
+    |> Keyword.get(:plugin_data, Keyword.get(opts, :plugins))
+    |> case do
+      %{active_mcp_servers: active} when is_list(active) -> active
+      %{"active_mcp_servers" => active} when is_list(active) -> active
+      _ -> []
+    end
+  end
 
   defp tool_projection_opts(%{runtime_snapshot: %{plugins: plugins, config: config}}) do
     if plugin_projection_empty?(plugins),

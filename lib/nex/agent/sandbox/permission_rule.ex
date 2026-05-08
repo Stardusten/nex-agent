@@ -850,6 +850,43 @@ defmodule Nex.Agent.Sandbox.PermissionRule do
   end
 
   defp requirements_for_raw(
+         %RawToolEvent{metadata: %{"mcp_server" => mcp_server}} = raw,
+         _tokens,
+         _program,
+         _risk,
+         _hosts
+       )
+       when is_binary(mcp_server) do
+    operation =
+      case Map.get(raw.metadata, "mcp_operation") || Map.get(raw.params, "operation") do
+        "connect" -> :connect
+        :connect -> :connect
+        _ -> :call
+      end
+
+    target =
+      case operation do
+        :connect -> mcp_server
+        _ -> "#{mcp_server}:#{Map.get(raw.metadata, "mcp_tool") || raw.tool_name}"
+      end
+
+    [
+      %PermissionRequirement{
+        id: "mcp:#{operation}:#{target}",
+        resource: :mcp,
+        operation: operation,
+        target: target,
+        tags: MapSet.new([:mcp, operation]),
+        attrs: %{
+          mcp_server: mcp_server,
+          mcp_tool: Map.get(raw.metadata, "mcp_tool"),
+          tool_name: raw.tool_name
+        }
+      }
+    ]
+  end
+
+  defp requirements_for_raw(
          %RawToolEvent{tool_name: tool_name, params: %{"path" => path}} = raw,
          _tokens,
          _program,

@@ -8,9 +8,9 @@ defmodule Nex.Agent.Interface.MCP.ServerManager do
 
   alias Nex.Agent.Interface.MCP
   alias Nex.Agent.Runtime
-  alias Nex.Agent.Sandbox.Approval
+  alias Nex.Agent.Runtime.Config
+  alias Nex.Agent.Sandbox.{Approval, PermissionRule}
   alias Nex.Agent.Sandbox.Approval.Request
-  alias Nex.Agent.Sandbox.PermissionRule
 
   @name __MODULE__
 
@@ -59,9 +59,9 @@ defmodule Nex.Agent.Interface.MCP.ServerManager do
     GenServer.call(@name, {:register_tools, server_id})
   end
 
-  @spec reconcile(map()) :: :ok | {:error, term()}
-  def reconcile(plugin_data) do
-    GenServer.call(@name, {:reconcile, plugin_data}, :infinity)
+  @spec reconcile(map(), keyword()) :: :ok | {:error, term()}
+  def reconcile(plugin_data, opts \\ []) do
+    GenServer.call(@name, {:reconcile, plugin_data, opts}, :infinity)
   end
 
   @spec plugin_server_id(String.t(), String.t()) :: String.t()
@@ -168,13 +168,13 @@ defmodule Nex.Agent.Interface.MCP.ServerManager do
     end
   end
 
-  def handle_call({:reconcile, plugin_data}, _from, state) do
+  def handle_call({:reconcile, plugin_data, opts}, _from, state) do
     desired = desired_plugin_servers(plugin_data)
 
     state =
       state
       |> stop_removed_plugin_servers(desired)
-      |> start_missing_plugin_servers(desired)
+      |> start_missing_plugin_servers(desired, opts)
 
     {:reply, :ok, state}
   end
@@ -287,8 +287,8 @@ defmodule Nex.Agent.Interface.MCP.ServerManager do
     end)
   end
 
-  defp start_missing_plugin_servers(state, desired) do
-    runtime_ctx = current_runtime_context()
+  defp start_missing_plugin_servers(state, desired, opts) do
+    runtime_ctx = reconcile_runtime_context(opts)
 
     Enum.reduce(desired, state, fn entry, acc ->
       runtime_id = plugin_server_id(entry["plugin_id"], entry["id"])
@@ -302,7 +302,7 @@ defmodule Nex.Agent.Interface.MCP.ServerManager do
           acc
 
         true ->
-          case authorize_connect(entry, runtime_ctx.workspace) do
+          case authorize_connect(entry, runtime_ctx.workspace, runtime_ctx.config) do
             :ok ->
               attrs = Map.fetch!(entry, "attrs")
 
@@ -345,24 +345,30 @@ defmodule Nex.Agent.Interface.MCP.ServerManager do
   defp supported_plugin_server?(%{"attrs" => %{"command" => command}}) when is_binary(command), do: true
   defp supported_plugin_server?(_entry), do: false
 
-  defp authorize_connect(%{"plugin_id" => plugin_id, "id" => contribution_id, "attrs" => %{}}, workspace) do
+  defp authorize_connect(%{"plugin_id" => plugin_id, "id" => contribution_id, "attrs" => %{}}, workspace, config) do
     session_key = "plugin:" <> plugin_id
     raw_event = mcp_raw_event("connect", plugin_id, contribution_id, nil, workspace, [])
 
-    case Approval.debug_decision(workspace, session_key, raw_event) do
-      %{action: :allow} ->
+    cond do
+      approval_default_allow?(config, workspace) ->
         :ok
 
-      %{action: :deny} ->
-        {:error, "approval denied for plugin MCP connect"}
+      true ->
+        case Approval.debug_decision(workspace, session_key, raw_event) do
+          %{action: :allow} ->
+            :ok
 
-      _ ->
-        {:error, "approval required for plugin MCP connect"}
+          %{action: :deny} ->
+            {:error, "approval denied for plugin MCP connect"}
+
+          _ ->
+            {:error, "approval required for plugin MCP connect"}
+        end
     end
   end
 
   defp authorize_call(%{origin: :plugin, plugin_id: plugin_id, contribution_id: contribution_id}, tool_name, opts) do
-    workspace = Keyword.get(opts, :workspace, current_runtime_context().workspace)
+    workspace = Keyword.get(opts, :workspace, reconcile_runtime_context([]).workspace)
     session_key = Keyword.get(opts, :session_key, "plugin:" <> plugin_id)
     raw_event = mcp_raw_event("call", plugin_id, contribution_id, tool_name, workspace, opts)
 
@@ -419,7 +425,9 @@ defmodule Nex.Agent.Interface.MCP.ServerManager do
       actor: actor_from_opts(opts),
       metadata: %{
         "plugin_id" => plugin_id,
-        "mcp_server" => contribution_id
+        "mcp_server" => contribution_id,
+        "mcp_tool" => tool_name,
+        "mcp_operation" => action
       }
     }
   end
@@ -446,10 +454,30 @@ defmodule Nex.Agent.Interface.MCP.ServerManager do
   defp present?(value) when is_binary(value), do: String.trim(value) != ""
   defp present?(_value), do: false
 
-  defp current_runtime_context do
-    case Runtime.current() do
-      {:ok, %{workspace: workspace, config: config}} -> %{workspace: workspace, config: config}
-      _ -> %{workspace: File.cwd!(), config: nil}
+  defp reconcile_runtime_context(opts) do
+    workspace = Keyword.get(opts, :workspace)
+    config = Keyword.get(opts, :config)
+
+    cond do
+      is_binary(workspace) ->
+        %{workspace: workspace, config: config}
+
+      true ->
+        case Runtime.current() do
+          {:ok, %{workspace: current_workspace, config: current_config}} ->
+            %{workspace: current_workspace, config: current_config}
+
+          _ ->
+            %{workspace: File.cwd!(), config: nil}
+        end
     end
   end
+
+  defp approval_default_allow?(%Config{} = config, workspace) do
+    Config.sandbox_runtime(config, workspace: workspace).raw
+    |> Map.get("approval", %{})
+    |> Map.get("default") == "allow"
+  end
+
+  defp approval_default_allow?(_config, _workspace), do: false
 end

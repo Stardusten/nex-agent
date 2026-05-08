@@ -19,6 +19,7 @@ defmodule Nex.Agent.Runtime.Watcher do
     :runtime_reload_fun,
     :skills_reload_fun,
     :tools_reload_fun,
+    runtime_watch_paths: [],
     snapshot: %{}
   ]
 
@@ -58,9 +59,12 @@ defmodule Nex.Agent.Runtime.Watcher do
     new_snapshot = scan_inputs(state)
     changed_paths = changed_paths(state.snapshot, new_snapshot)
 
-    if changed_paths != [] do
-      reload_runtime(state, changed_paths)
-    end
+    state =
+      if changed_paths != [] do
+        reload_runtime(state, changed_paths)
+      else
+        state
+      end
 
     state = %{state | snapshot: new_snapshot}
     schedule_poll(state)
@@ -80,14 +84,15 @@ defmodule Nex.Agent.Runtime.Watcher do
     case safe_call(:runtime_reload, fn ->
            state.runtime_reload_fun.(runtime_reload_opts(state, changed_paths))
          end) do
-      {:ok, _snapshot} ->
-        :ok
+      {:ok, snapshot} ->
+        %{state | runtime_watch_paths: plugin_watch_paths(snapshot)}
 
       {:error, reason} ->
         Logger.warning("[Runtime.Watcher] Runtime reload failed: #{inspect(reason)}")
+        state
 
       _other ->
-        :ok
+        state
     end
   end
 
@@ -120,15 +125,6 @@ defmodule Nex.Agent.Runtime.Watcher do
   end
 
   defp watched_paths(%__MODULE__{} = state) do
-    plugin_watch_paths =
-      case Runtime.current() do
-        {:ok, %{workspace: workspace, plugins: plugins}} ->
-          PluginWorkspaceFiles.watch_paths(workspace, plugins)
-
-        _ ->
-          []
-      end
-
     direct_paths =
       [state.config_path] ++ Enum.map(@workspace_files, &Path.join(state.workspace, &1))
 
@@ -143,10 +139,16 @@ defmodule Nex.Agent.Runtime.Watcher do
       |> Enum.reject(&is_nil/1)
       |> Enum.flat_map(&recursive_files/1)
 
-    (direct_paths ++ recursive_paths ++ plugin_watch_paths)
+    (direct_paths ++ recursive_paths ++ state.runtime_watch_paths)
     |> Enum.map(&Path.expand/1)
     |> Enum.uniq()
   end
+
+  defp plugin_watch_paths(%{workspace: workspace, plugins: plugins}) do
+    PluginWorkspaceFiles.watch_paths(workspace, plugins)
+  end
+
+  defp plugin_watch_paths(_snapshot), do: []
 
   defp recursive_files(path) do
     if File.dir?(path) do

@@ -75,12 +75,16 @@ defmodule Nex.Agent.RuntimeTest do
                 "path" => "plugin_data/echo/state.json",
                 "title" => "Echo State"
               }
+            },
+            %{
+              "id" => "echo.after_turn",
+              "event" => "conversation.turn.finished",
+              "action" => %{"type" => "enqueue_job", "job" => "echo.flush"}
             }
           ],
           "jobs" => [
             %{
               "id" => "echo.flush",
-              "event" => "conversation.turn.finished",
               "action" => %{"type" => "tool_call", "tool" => "echo__remember", "args" => %{"source" => "{{turn.prompt}}"}}
             }
           ],
@@ -292,10 +296,12 @@ defmodule Nex.Agent.RuntimeTest do
            end)
 
     assert Enum.any?(snapshot.plugins.contributions.hooks, &(&1["id"] == "echo.prompt"))
+    assert Enum.any?(snapshot.plugins.contributions.hooks, &(&1["id"] == "echo.after_turn"))
     assert Enum.any?(snapshot.plugins.contributions.jobs, &(&1["id"] == "echo.flush"))
     assert Enum.any?(snapshot.plugins.contributions.workspace_files, &(&1["id"] == "echo.state"))
     assert Enum.any?(snapshot.plugins.contributions.mcp_servers, &(&1["id"] == "echo_mcp"))
     assert File.exists?(Path.join(workspace, "plugin_data/echo/state.json"))
+    refute Enum.any?(snapshot.tools.definitions_all, &(&1["name"] == "echo__remote"))
 
     old_hash = snapshot.plugins.hash
 

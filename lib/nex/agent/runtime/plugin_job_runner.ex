@@ -16,14 +16,10 @@ defmodule Nex.Agent.Runtime.PluginJobRunner do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
   end
 
-  @spec enqueue_matching(String.t(), map()) :: :ok
-  def enqueue_matching(event, ctx) when is_binary(event) and is_map(ctx) do
-    plugin_jobs(ctx)
-    |> Enum.filter(&job_matches?(&1, event))
-    |> Enum.each(fn entry ->
-      GenServer.cast(__MODULE__, {:enqueue, build_job(entry, event, ctx)})
-    end)
-
+  @spec enqueue_hook_job(String.t() | nil, String.t(), map()) :: :ok
+  def enqueue_hook_job(plugin_id, job_id, ctx) when is_binary(job_id) and is_map(ctx) do
+    entry = plugin_job(ctx, plugin_id, job_id)
+    GenServer.cast(__MODULE__, {:enqueue, build_job(entry, "conversation.turn.finished", ctx)})
     :ok
   end
 
@@ -117,21 +113,21 @@ defmodule Nex.Agent.Runtime.PluginJobRunner do
   defp run_job(_job), do: {:error, "Unsupported plugin job action"}
 
   defp plugin_jobs(%{runtime_snapshot: %{plugins: plugins}}), do: plugin_jobs(%{plugin_data: plugins})
-
   defp plugin_jobs(%{plugin_data: nil}), do: []
-
   defp plugin_jobs(%{plugin_data: plugins}) do
     contributions = Map.get(plugins, :contributions) || Map.get(plugins, "contributions") || %{}
     Map.get(contributions, :jobs) || Map.get(contributions, "jobs") || []
   end
-
   defp plugin_jobs(_ctx), do: []
 
-  defp job_matches?(%{"attrs" => %{} = attrs}, event) do
-    Map.get(attrs, "enabled", true) != false and Map.get(attrs, "event") == event
+  defp plugin_job(ctx, plugin_id, job_id) do
+    plugin_jobs(ctx)
+    |> Enum.find(fn
+      %{"plugin_id" => ^plugin_id, "id" => ^job_id} -> true
+      %{"id" => ^job_id} when is_nil(plugin_id) -> true
+      _ -> false
+    end)
   end
-
-  defp job_matches?(_entry, _event), do: false
 
   defp build_job(%{"attrs" => %{} = attrs, "plugin_id" => plugin_id, "id" => contribution_id}, event, ctx) do
     id = "#{plugin_id}:#{contribution_id}:#{System.unique_integer([:positive])}"

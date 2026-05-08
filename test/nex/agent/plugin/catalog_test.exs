@@ -162,10 +162,11 @@ defmodule Nex.Agent.Extension.Plugin.CatalogTest do
       "source" => "workspace",
       "contributes" => %{
         "hooks" => [
-          %{"id" => "echo.prompt", "event" => "prompt.build.before", "action" => %{"type" => "add_text", "content" => "hello"}}
+          %{"id" => "echo.prompt", "event" => "prompt.build.before", "action" => %{"type" => "add_text", "content" => "hello"}},
+          %{"id" => "echo.after_turn", "event" => "conversation.turn.finished", "action" => %{"type" => "enqueue_job", "job" => "echo.flush"}}
         ],
         "jobs" => [
-          %{"id" => "echo.flush", "event" => "conversation.turn.finished", "action" => %{"type" => "tool_call", "tool" => "echo__remember"}}
+          %{"id" => "echo.flush", "action" => %{"type" => "tool_call", "tool" => "echo__remember"}}
         ],
         "workspaceFiles" => [
           %{"id" => "echo.state", "path" => "plugin_data/echo/state.json", "kind" => "file", "onMissing" => "create", "watch" => true}
@@ -185,7 +186,8 @@ defmodule Nex.Agent.Extension.Plugin.CatalogTest do
         workspace_plugins_dir: workspace_plugins_dir
       )
 
-    assert [%{"id" => "echo.prompt"}] = data.contributions["hooks"]
+    assert Enum.any?(data.contributions["hooks"], &(&1["id"] == "echo.prompt"))
+    assert Enum.any?(data.contributions["hooks"], &(&1["id"] == "echo.after_turn"))
     assert [%{"id" => "echo.flush"}] = data.contributions["jobs"]
     assert [%{"id" => "echo.state"}] = data.contributions["workspace_files"]
     assert [%{"id" => "echo_mcp"}] = data.contributions["mcp_servers"]

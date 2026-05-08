@@ -237,6 +237,22 @@ defmodule Nex.Agent.Capability.Hooks do
     end
   end
 
+  defp build_fragment(%{"advice" => %{"kind" => "job_enqueue"} = advice} = entry, ctx, _remaining) do
+    case normalize_string(Map.get(advice, "job")) do
+      nil ->
+        handle_advice_error(entry, ctx, "job_enqueue hook requires advice.job")
+
+      job_id ->
+        Nex.Agent.Runtime.PluginJobRunner.enqueue_hook_job(
+          Map.get(entry, "plugin_id"),
+          job_id,
+          ctx
+        )
+
+        {:ok, nil}
+    end
+  end
+
   defp build_fragment(entry, ctx, _remaining),
     do: handle_advice_error(entry, ctx, "unsupported hook advice")
 
@@ -529,8 +545,22 @@ defmodule Nex.Agent.Capability.Hooks do
     end
   end
 
+  defp plugin_hook_advice(%{"type" => "enqueue_job"} = action, id) do
+    with {:ok, job_id} <- required_string(action, "job") do
+      {:ok,
+       %{
+         "kind" => "job_enqueue",
+         "job" => job_id,
+         "title" => normalize_string(Map.get(action, "title")) || id,
+         "priority" => normalize_integer(Map.get(action, "priority"), 100),
+         "max_chars" => 1,
+         "on_error" => normalize_string(Map.get(action, "onError")) || "warn"
+       }}
+    end
+  end
+
   defp plugin_hook_advice(_action, _id),
-    do: {:error, "plugin hook action.type must be add_text, add_file, or add_tool_result"}
+    do: {:error, "plugin hook action.type must be add_text, add_file, add_tool_result, or enqueue_job"}
 
   defp resolve_path(path, ctx) do
     case Path.type(path) do
