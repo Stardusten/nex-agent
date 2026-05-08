@@ -12,7 +12,7 @@ defmodule Nex.Agent.Turn.Runner do
     Capability.Hooks,
     Conversation.RunControl,
     Conversation.Session,
-    Turn.Stream.Result,
+    Turn.Stream.Result
   }
 
   alias Nex.Agent.Observe.ControlPlane.Log, as: ControlPlaneLog
@@ -310,11 +310,11 @@ defmodule Nex.Agent.Turn.Runner do
 
     session = put_evolution_metadata(session, metadata)
     maybe_record_runtime_evolution_signal(signals, prompt, workspace)
-    enqueue_plugin_turn_jobs(session, prompt, workspace, opts)
+    enqueue_plugin_turn_tasks(session, prompt, workspace, opts)
     session
   end
 
-  defp enqueue_plugin_turn_jobs(session, prompt, workspace, opts) do
+  defp enqueue_plugin_turn_tasks(session, prompt, workspace, opts) do
     runtime_snapshot = Keyword.get(opts, :runtime_snapshot)
 
     ctx = %{
@@ -1461,7 +1461,7 @@ defmodule Nex.Agent.Turn.Runner do
       case Keyword.get(opts, :tools_filter) do
         :follow_up -> registry_definitions(:follow_up, opts)
         :subagent -> registry_definitions(:subagent, opts)
-        :cron -> registry_definitions(:cron, opts)
+        :task -> registry_definitions(:task, opts)
         :base -> registry_definitions(:base, opts)
         _ -> registry_definitions(:all, opts)
       end
@@ -1535,8 +1535,8 @@ defmodule Nex.Agent.Turn.Runner do
   defp snapshot_tool_definitions(%Snapshot{} = snapshot, :follow_up),
     do: snapshot.tools.definitions_follow_up
 
-  defp snapshot_tool_definitions(%Snapshot{} = snapshot, :cron),
-    do: snapshot.tools.definitions_cron
+  defp snapshot_tool_definitions(%Snapshot{} = snapshot, :task),
+    do: snapshot.tools.definitions_task
 
   defp snapshot_tool_definitions(%Snapshot{}, :base),
     do: []

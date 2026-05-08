@@ -215,7 +215,7 @@ defmodule Nex.Agent.Capability.SubagentProfileTest do
         definitions_all: [],
         definitions_follow_up: [],
         definitions_subagent: [],
-        definitions_cron: [],
+        definitions_task: [],
         hash: "test"
       },
       subagents: %{profiles: profiles, definitions: [], hash: "test"},

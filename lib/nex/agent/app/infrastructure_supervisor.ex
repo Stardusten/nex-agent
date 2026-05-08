@@ -1,6 +1,6 @@
 defmodule Nex.Agent.App.InfrastructureSupervisor do
   @moduledoc """
-  Supervisor for infrastructure services: Bus, Tool.Registry, MCP, Cron, Heartbeat.
+  Supervisor for infrastructure services: Bus, Tool.Registry, MCP, Tasks, Heartbeat.
 
   All children are independent (:one_for_one) — one crashing does not affect others.
   """
@@ -18,8 +18,8 @@ defmodule Nex.Agent.App.InfrastructureSupervisor do
       Nex.Agent.Sandbox.Approval,
       Nex.Agent.Capability.Tool.Registry,
       Nex.Agent.Interface.MCP.ServerManager,
-      Nex.Agent.Runtime.PluginJobRunner,
-      Nex.Agent.Capability.Cron,
+      Nex.Agent.Tasks.Runner,
+      Nex.Agent.Tasks,
       Nex.Agent.App.Heartbeat
     ]
 

@@ -2,6 +2,7 @@ defmodule Nex.Agent.Workflow.TasksTest do
   use ExUnit.Case, async: false
 
   alias Nex.Agent.Workflow.Tasks
+  alias Nex.Agent.Tasks, as: RuntimeTasks
 
   setup do
     workspace =
@@ -60,8 +61,8 @@ defmodule Nex.Agent.Workflow.TasksTest do
     assert updated["summary"] == "Need a compact P0/P1 split"
     assert updated["follow_up_at"] == "2026-03-22T08:00:00Z"
 
-    if Process.whereis(Nex.Agent.Capability.Cron) do
-      jobs = Nex.Agent.Capability.Cron.list_jobs(workspace: workspace)
+    if Process.whereis(RuntimeTasks) do
+      jobs = RuntimeTasks.list(workspace: workspace)
       assert Enum.any?(jobs, &(&1.name == "task_due:#{task["id"]}" and &1.channel == "feishu"))
 
       assert Enum.any?(
@@ -75,9 +76,9 @@ defmodule Nex.Agent.Workflow.TasksTest do
     assert completed["due_at"] == nil
     assert completed["follow_up_at"] == nil
 
-    if Process.whereis(Nex.Agent.Capability.Cron) do
+    if Process.whereis(RuntimeTasks) do
       refute Enum.any?(
-               Nex.Agent.Capability.Cron.list_jobs(workspace: workspace),
+               RuntimeTasks.list(workspace: workspace),
                &String.ends_with?(&1.name, task["id"])
              )
     end
@@ -100,9 +101,9 @@ defmodule Nex.Agent.Workflow.TasksTest do
                chat_id: "chat-123"
              )
 
-    if Process.whereis(Nex.Agent.Capability.Cron) do
+    if Process.whereis(RuntimeTasks) do
       assert Enum.any?(
-               Nex.Agent.Capability.Cron.list_jobs(workspace: workspace),
+               RuntimeTasks.list(workspace: workspace),
                &String.ends_with?(&1.name, task["id"])
              )
     end
@@ -112,20 +113,20 @@ defmodule Nex.Agent.Workflow.TasksTest do
 
     assert cancelled["status"] == "cancelled"
 
-    if Process.whereis(Nex.Agent.Capability.Cron) do
+    if Process.whereis(RuntimeTasks) do
       refute Enum.any?(
-               Nex.Agent.Capability.Cron.list_jobs(workspace: workspace),
+               RuntimeTasks.list(workspace: workspace),
                &String.ends_with?(&1.name, task["id"])
              )
     end
   end
 
   defp cleanup_task_jobs(prefix, workspace) do
-    if Process.whereis(Nex.Agent.Capability.Cron) do
-      Nex.Agent.Capability.Cron.list_jobs(workspace: workspace)
+    if Process.whereis(RuntimeTasks) do
+      RuntimeTasks.list(workspace: workspace)
       |> Enum.filter(&String.starts_with?(&1.name, prefix))
       |> Enum.each(fn job ->
-        Nex.Agent.Capability.Cron.remove_job(job.id, workspace: workspace)
+        RuntimeTasks.delete(job.id, workspace: workspace)
       end)
     end
   end

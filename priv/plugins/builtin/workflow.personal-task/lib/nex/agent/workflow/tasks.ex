@@ -1,11 +1,11 @@
 defmodule Nex.Agent.Workflow.Tasks do
   @moduledoc false
 
-  alias Nex.Agent.{Capability.Cron, Runtime.Workspace}
+  alias Nex.Agent.{Runtime.Workspace, Tasks}
   alias Nex.Agent.Observe.ControlPlane.Log
   require Log
 
-  @tasks_file "tasks.json"
+  @tasks_file "personal_tasks.json"
 
   @spec add(map(), keyword()) :: {:ok, map()} | {:error, String.t()}
   def add(attrs, opts \\ []) when is_map(attrs) do
@@ -30,9 +30,9 @@ defmodule Nex.Agent.Workflow.Tasks do
           "chat_id" => blank_to_nil(Keyword.get(opts, :chat_id)),
           "created_at" => now,
           "updated_at" => now,
-          "job_ids" => %{}
+          "reminder_task_ids" => %{}
         }
-        |> sync_jobs(opts)
+        |> sync_reminder_tasks(opts)
 
       save_tasks([task | load_tasks(tasks_file(opts))], opts)
       Log.info("task.add", task, opts)
@@ -79,7 +79,7 @@ defmodule Nex.Agent.Workflow.Tasks do
         |> Map.put("channel", task["channel"] || blank_to_nil(Keyword.get(opts, :channel)))
         |> Map.put("chat_id", task["chat_id"] || blank_to_nil(Keyword.get(opts, :chat_id)))
         |> Map.put("updated_at", now_iso())
-        |> sync_jobs(opts)
+        |> sync_reminder_tasks(opts)
 
       replace_task(updated, opts)
       Log.info("task.update", updated, opts)
@@ -156,38 +156,66 @@ defmodule Nex.Agent.Workflow.Tasks do
     save_tasks(tasks, opts)
   end
 
-  defp sync_jobs(task, opts) do
+  defp sync_reminder_tasks(task, opts) do
     task =
       task
-      |> sync_due_job(opts)
-      |> sync_follow_up_job(opts)
+      |> sync_due_reminder_task(opts)
+      |> sync_follow_up_reminder_task(opts)
 
     if task["status"] in ["completed", "cancelled"] do
-      remove_job_if_present("task_due:#{task["id"]}", task["job_ids"]["due"], opts)
-      remove_job_if_present("task_follow_up:#{task["id"]}", task["job_ids"]["follow_up"], opts)
-      put_in(task, ["job_ids"], %{})
+      remove_runtime_task_if_present(
+        "task_due:#{task["id"]}",
+        task["reminder_task_ids"]["due"],
+        opts
+      )
+
+      remove_runtime_task_if_present(
+        "task_follow_up:#{task["id"]}",
+        task["reminder_task_ids"]["follow_up"],
+        opts
+      )
+
+      put_in(task, ["reminder_task_ids"], %{})
     else
       task
     end
   end
 
-  defp sync_due_job(task, opts) do
+  defp sync_due_reminder_task(task, opts) do
     if blank?(task["due_at"]) do
-      remove_job_if_present("task_due:#{task["id"]}", task["job_ids"]["due"], opts)
-      put_in(task, ["job_ids", "due"], nil)
+      remove_runtime_task_if_present(
+        "task_due:#{task["id"]}",
+        task["reminder_task_ids"]["due"],
+        opts
+      )
+
+      put_in(task, ["reminder_task_ids", "due"], nil)
     else
-      job_id = ensure_job("task_due:#{task["id"]}", task["due_at"], due_message(task), task, opts)
-      put_in(task, ["job_ids", "due"], job_id)
+      task_id =
+        ensure_runtime_task(
+          "task_due:#{task["id"]}",
+          task["due_at"],
+          due_message(task),
+          task,
+          opts
+        )
+
+      put_in(task, ["reminder_task_ids", "due"], task_id)
     end
   end
 
-  defp sync_follow_up_job(task, opts) do
+  defp sync_follow_up_reminder_task(task, opts) do
     if blank?(task["follow_up_at"]) do
-      remove_job_if_present("task_follow_up:#{task["id"]}", task["job_ids"]["follow_up"], opts)
-      put_in(task, ["job_ids", "follow_up"], nil)
+      remove_runtime_task_if_present(
+        "task_follow_up:#{task["id"]}",
+        task["reminder_task_ids"]["follow_up"],
+        opts
+      )
+
+      put_in(task, ["reminder_task_ids", "follow_up"], nil)
     else
-      job_id =
-        ensure_job(
+      task_id =
+        ensure_runtime_task(
           "task_follow_up:#{task["id"]}",
           task["follow_up_at"],
           follow_up_message(task),
@@ -195,17 +223,17 @@ defmodule Nex.Agent.Workflow.Tasks do
           opts
         )
 
-      put_in(task, ["job_ids", "follow_up"], job_id)
+      put_in(task, ["reminder_task_ids", "follow_up"], task_id)
     end
   end
 
-  defp ensure_job(name, at_iso, message, task, opts) do
+  defp ensure_runtime_task(name, at_iso, message, task, opts) do
     workspace_opts = workspace_opts(opts)
-    remove_job_if_present(name, nil, opts)
+    remove_runtime_task_if_present(name, nil, opts)
 
-    with true <- Process.whereis(Nex.Agent.Capability.Cron) != nil,
+    with true <- Process.whereis(Tasks) != nil,
          {:ok, timestamp} <- unix_timestamp(at_iso) do
-      case Cron.add_job(
+      case Tasks.upsert(
              %{
                name: name,
                message: message,
@@ -216,7 +244,7 @@ defmodule Nex.Agent.Workflow.Tasks do
              },
              workspace_opts
            ) do
-        {:ok, job} -> job.id
+        {:ok, runtime_task} -> runtime_task.id
         {:error, _} -> nil
       end
     else
@@ -224,21 +252,21 @@ defmodule Nex.Agent.Workflow.Tasks do
     end
   end
 
-  defp remove_job_if_present(name, known_job_id, opts) do
+  defp remove_runtime_task_if_present(name, known_task_id, opts) do
     workspace_opts = workspace_opts(opts)
 
     cond do
-      Process.whereis(Nex.Agent.Capability.Cron) == nil ->
+      Process.whereis(Tasks) == nil ->
         :ok
 
-      is_binary(known_job_id) ->
-        _ = Cron.remove_job(known_job_id, workspace_opts)
+      is_binary(known_task_id) ->
+        _ = Tasks.delete(known_task_id, workspace_opts)
         :ok
 
       true ->
-        Cron.list_jobs(workspace_opts)
+        Tasks.list(workspace_opts)
         |> Enum.filter(&(&1.name == name))
-        |> Enum.each(fn job -> _ = Cron.remove_job(job.id, workspace_opts) end)
+        |> Enum.each(fn task -> _ = Tasks.delete(task.id, workspace_opts) end)
     end
   end
 
@@ -286,7 +314,7 @@ defmodule Nex.Agent.Workflow.Tasks do
     case File.read(path) do
       {:ok, body} ->
         case Jason.decode(body) do
-          {:ok, tasks} when is_list(tasks) -> tasks
+          {:ok, tasks} when is_list(tasks) -> Enum.map(tasks, &normalize_task_record/1)
           _ -> []
         end
 
@@ -294,6 +322,16 @@ defmodule Nex.Agent.Workflow.Tasks do
         []
     end
   end
+
+  defp normalize_task_record(%{} = task) do
+    reminder_task_ids = Map.get(task, "reminder_task_ids") || Map.get(task, "job_ids") || %{}
+
+    task
+    |> Map.delete("job_ids")
+    |> Map.put("reminder_task_ids", reminder_task_ids)
+  end
+
+  defp normalize_task_record(task), do: task
 
   defp save_tasks(tasks, opts) do
     Workspace.ensure!(opts)

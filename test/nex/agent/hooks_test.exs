@@ -13,7 +13,11 @@ defmodule Nex.Agent.Capability.HooksTest do
     def category, do: :tool
 
     def definition do
-      %{name: name(), description: description(), parameters: %{type: "object", properties: %{source: %{type: "string"}}}}
+      %{
+        name: name(),
+        description: description(),
+        parameters: %{type: "object", properties: %{source: %{type: "string"}}}
+      }
     end
 
     def execute(args, _ctx), do: {:ok, %{"echo" => Map.get(args, "source")}}
@@ -335,12 +339,13 @@ defmodule Nex.Agent.Capability.HooksTest do
     snapshot = %Snapshot{
       version: 1,
       workspace: workspace,
+      sandbox: workspace_write_policy(),
       prompt: %{system_prompt: "Base system prompt", diagnostics: [], hash: "prompt"},
       tools: %{
         definitions_all: [],
         definitions_follow_up: [],
         definitions_subagent: [],
-        definitions_cron: [],
+        definitions_task: [],
         hash: "tools"
       },
       hooks: %{
@@ -398,12 +403,13 @@ defmodule Nex.Agent.Capability.HooksTest do
     snapshot = %Snapshot{
       version: 1,
       workspace: workspace,
+      sandbox: workspace_write_policy(),
       prompt: %{system_prompt: "Base system prompt", diagnostics: [], hash: "prompt"},
       tools: %{
         definitions_all: [],
         definitions_follow_up: [],
         definitions_subagent: [],
-        definitions_cron: [],
+        definitions_task: [],
         hash: "tools"
       },
       hooks: %{
@@ -639,5 +645,11 @@ defmodule Nex.Agent.Capability.HooksTest do
     if tool_calls != [], do: callback.({:tool_calls, tool_calls})
 
     callback.({:done, %{finish_reason: nil, usage: nil, model: nil}})
+  end
+
+  defp workspace_write_policy do
+    %Nex.Agent.Sandbox.Policy{
+      filesystem: [%{path: {:special, :workspace}, access: :write}]
+    }
   end
 end

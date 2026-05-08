@@ -79,9 +79,9 @@ defmodule Nex.Agent.App.Onboarding do
     migrate_legacy_dir(Path.join(b, "sessions"), Path.join(w, "sessions"), "sessions")
     migrate_legacy_dir(Path.join(b, "tools"), Path.join(w, "tools"), "tools")
 
-    migrate_legacy_cron_jobs(
+    migrate_legacy_runtime_tasks(
       Path.join([b, "cron", "jobs.json"]),
-      Path.join([w, "tasks", "cron_jobs.json"])
+      Path.join([w, "tasks", "tasks.json"])
     )
 
     # Clean up legacy artifacts
@@ -119,7 +119,7 @@ defmodule Nex.Agent.App.Onboarding do
     end
   end
 
-  defp migrate_legacy_cron_jobs(old_file, new_file) do
+  defp migrate_legacy_runtime_tasks(old_file, new_file) do
     cond do
       not File.exists?(old_file) ->
         :ok
@@ -127,7 +127,7 @@ defmodule Nex.Agent.App.Onboarding do
       not File.exists?(new_file) ->
         File.mkdir_p!(Path.dirname(new_file))
         File.rename(old_file, new_file)
-        Logger.info("[Onboarding] Migrated cron jobs to workspace/tasks/cron_jobs.json")
+        Logger.info("[Onboarding] Migrated legacy runtime tasks to workspace/tasks/tasks.json")
 
       true ->
         case merge_json_arrays(old_file, new_file, &cron_job_merge_key/1) do
@@ -135,11 +135,13 @@ defmodule Nex.Agent.App.Onboarding do
             File.rm_rf!(old_file)
 
             Logger.info(
-              "[Onboarding] Merged legacy cron jobs into workspace/tasks/cron_jobs.json"
+              "[Onboarding] Merged legacy runtime tasks into workspace/tasks/tasks.json"
             )
 
           {:error, reason} ->
-            Logger.warning("[Onboarding] Failed to migrate legacy cron jobs: #{inspect(reason)}")
+            Logger.warning(
+              "[Onboarding] Failed to migrate legacy runtime tasks: #{inspect(reason)}"
+            )
         end
     end
   end
@@ -207,12 +209,12 @@ defmodule Nex.Agent.App.Onboarding do
       end
     end)
 
-    normalize_workspace_cron_jobs(Path.join([w, "tasks", "cron_jobs.json"]))
+    normalize_workspace_tasks(Path.join([w, "tasks", "tasks.json"]))
     init_executor_templates(w)
     init_bundled_skills(w)
   end
 
-  defp normalize_workspace_cron_jobs(path) do
+  defp normalize_workspace_tasks(path) do
     case read_json_array(path) do
       {:ok, entries} ->
         normalized = Enum.map(entries, &normalize_cron_job/1)
@@ -221,7 +223,7 @@ defmodule Nex.Agent.App.Onboarding do
           File.write!(path, Jason.encode!(normalized, pretty: true))
 
           Logger.info(
-            "[Onboarding] Normalized legacy cron jobs in workspace/tasks/cron_jobs.json"
+            "[Onboarding] Normalized legacy runtime tasks in workspace/tasks/tasks.json"
           )
         end
 
@@ -229,7 +231,7 @@ defmodule Nex.Agent.App.Onboarding do
         :ok
 
       {:error, reason} ->
-        Logger.warning("[Onboarding] Failed to normalize workspace cron jobs: #{inspect(reason)}")
+        Logger.warning("[Onboarding] Failed to normalize workspace tasks: #{inspect(reason)}")
     end
   end
 
@@ -627,5 +629,4 @@ defmodule Nex.Agent.App.Onboarding do
     *Edit this file to customize the assistant's knowledge about you.*
     """
   end
-
 end

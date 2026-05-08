@@ -506,7 +506,8 @@ defmodule Nex.Agent.Sandbox.Security do
     %{}
     |> maybe_put_metadata("plugin_id", ctx_value(ctx, :plugin_id))
     |> maybe_put_metadata("hook_id", ctx_value(ctx, :hook_id))
-    |> maybe_put_metadata("job_id", ctx_value(ctx, :job_id))
+    |> maybe_put_metadata("task_run_id", ctx_value(ctx, :task_run_id))
+    |> maybe_put_metadata("task_id", ctx_value(ctx, :task_id))
     |> maybe_put_metadata("mcp_server", ctx_value(ctx, :mcp_server))
   end
 

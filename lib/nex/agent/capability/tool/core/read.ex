@@ -16,7 +16,7 @@ defmodule Nex.Agent.Capability.Tool.Core.Read do
     do: "Read files or directories with pagination, metadata, and continuation info."
 
   def category, do: :base
-  def surfaces, do: [:all, :base, :follow_up, :subagent, :cron]
+  def surfaces, do: [:all, :base, :follow_up, :subagent, :task]
 
   def definition do
     %{

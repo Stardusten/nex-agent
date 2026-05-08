@@ -10,7 +10,7 @@
       {
         "name": "task",
         "module": "Nex.Agent.Tool.Task",
-        "surfaces": ["all", "base", "cron"]
+        "surfaces": ["all", "base", "task"]
       }
     ]
   }

@@ -12,7 +12,7 @@ defmodule Nex.Agent.App.Application do
       ├── InfrastructureSupervisor (:one_for_one)
       │   ├── Bus
       │   ├── Tool.Registry
-      │   ├── Cron
+      │   ├── Tasks
       │   └── Heartbeat
       ├── Runtime
       ├── Runtime.Watcher

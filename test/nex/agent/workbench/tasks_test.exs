@@ -1,18 +1,18 @@
-defmodule Nex.Agent.Interface.Workbench.ScheduledTasksTest do
+defmodule Nex.Agent.Interface.Workbench.TasksTest do
   use ExUnit.Case, async: false
 
-  alias Nex.Agent.Capability.Cron
+  alias Nex.Agent.Tasks
   alias Nex.Agent.Interface.Workbench.{Bridge, Permissions, Store}
 
   setup do
     workspace =
       Path.join(
         System.tmp_dir!(),
-        "nex-agent-workbench-scheduled-tasks-#{System.unique_integer([:positive])}"
+        "nex-agent-workbench-tasks-#{System.unique_integer([:positive])}"
       )
 
-    if Process.whereis(Cron) == nil do
-      start_supervised!({Cron, name: Cron})
+    if Process.whereis(Tasks) == nil do
+      start_supervised!({Tasks, name: Tasks})
     end
 
     assert {:ok, _} =
@@ -26,9 +26,9 @@ defmodule Nex.Agent.Interface.Workbench.ScheduledTasksTest do
              )
 
     on_exit(fn ->
-      if Process.whereis(Cron) do
-        Cron.list_jobs(workspace: workspace)
-        |> Enum.each(fn job -> Cron.remove_job(job.id, workspace: workspace) end)
+      if Process.whereis(Tasks) do
+        Tasks.list(workspace: workspace)
+        |> Enum.each(fn task -> Tasks.delete(task.id, workspace: workspace) end)
       end
 
       File.rm_rf!(workspace)
@@ -37,15 +37,15 @@ defmodule Nex.Agent.Interface.Workbench.ScheduledTasksTest do
     {:ok, workspace: workspace}
   end
 
-  test "bridge manages scheduled tasks through bounded task permissions", %{workspace: workspace} do
+  test "bridge manages tasks through bounded task permissions", %{workspace: workspace} do
     assert {:ok, _} = Permissions.grant("schedule-board", "tasks:read", workspace: workspace)
     assert {:ok, _} = Permissions.grant("schedule-board", "tasks:write", workspace: workspace)
 
     assert %{
              "ok" => true,
              "result" => %{
-               "job" => %{
-                 "id" => job_id,
+               "task" => %{
+                 "id" => task_id,
                  "name" => "Daily planning",
                  "schedule" => %{"type" => "every", "seconds" => 3600},
                  "enabled" => true
@@ -60,46 +60,46 @@ defmodule Nex.Agent.Interface.Workbench.ScheduledTasksTest do
                "chat_id" => "chat-ops"
              })
 
-    assert %{"ok" => true, "result" => %{"total" => 1, "jobs" => [listed]}} =
+    assert %{"ok" => true, "result" => %{"total" => 1, "tasks" => [listed]}} =
              bridge_call(workspace, "list", %{"query" => "planning"})
 
-    assert listed["id"] == job_id
+    assert listed["id"] == task_id
     assert listed["channel"] == "feishu"
-    assert listed["source"] == %{"type" => "scheduled_task", "kind" => "custom"}
+    assert listed["source"] == %{"type" => "task", "kind" => "custom"}
 
     assert %{
              "ok" => true,
              "result" => %{
-               "job" => %{
-                 "id" => ^job_id,
+               "task" => %{
+                 "id" => ^task_id,
                  "message" => "Run the morning review.",
                  "schedule" => %{"type" => "cron", "expr" => "0 9 * * *"}
                }
              }
            } =
              bridge_call(workspace, "update", %{
-               "job_id" => job_id,
+               "task_id" => task_id,
                "message" => "Run the morning review.",
                "schedule" => %{"type" => "cron", "expr" => "0 9 * * *"}
              })
 
-    assert %{"ok" => true, "result" => %{"job" => %{"enabled" => false}}} =
-             bridge_call(workspace, "disable", %{"job_id" => job_id})
+    assert %{"ok" => true, "result" => %{"task" => %{"enabled" => false}}} =
+             bridge_call(workspace, "disable", %{"task_id" => task_id})
 
-    assert %{"ok" => true, "result" => %{"job" => %{"enabled" => true}}} =
-             bridge_call(workspace, "enable", %{"job_id" => job_id})
+    assert %{"ok" => true, "result" => %{"task" => %{"enabled" => true}}} =
+             bridge_call(workspace, "enable", %{"task_id" => task_id})
 
-    assert %{"ok" => true, "result" => %{"removed" => true, "job_id" => ^job_id}} =
-             bridge_call(workspace, "remove", %{"job_id" => job_id})
+    assert %{"ok" => true, "result" => %{"removed" => true, "task_id" => ^task_id}} =
+             bridge_call(workspace, "remove", %{"task_id" => task_id})
 
-    assert %{"ok" => true, "result" => %{"jobs" => [], "total" => 0}} =
+    assert %{"ok" => true, "result" => %{"tasks" => [], "total" => 0}} =
              bridge_call(workspace, "list", %{})
   end
 
-  test "bridge rejects scheduled task writes without owner grant", %{workspace: workspace} do
+  test "bridge rejects task writes without owner grant", %{workspace: workspace} do
     assert {:ok, _} = Permissions.grant("schedule-board", "tasks:read", workspace: workspace)
 
-    assert %{"ok" => true, "result" => %{"jobs" => []}} =
+    assert %{"ok" => true, "result" => %{"tasks" => []}} =
              bridge_call(workspace, "list", %{})
 
     assert %{
@@ -113,7 +113,7 @@ defmodule Nex.Agent.Interface.Workbench.ScheduledTasksTest do
              })
   end
 
-  test "bridge validates scheduled task params", %{workspace: workspace} do
+  test "bridge validates task params", %{workspace: workspace} do
     assert {:ok, _} = Permissions.grant("schedule-board", "tasks:write", workspace: workspace)
 
     assert %{
@@ -135,10 +135,15 @@ defmodule Nex.Agent.Interface.Workbench.ScheduledTasksTest do
       "schedule-board",
       %{
         "call_id" => "call_#{action}",
-        "method" => "tasks.scheduled.#{action}",
+        "method" => "tasks.#{method_name(action)}",
         "params" => params
       },
       workspace: workspace
     )
   end
+
+  defp method_name("add"), do: "upsert"
+  defp method_name("update"), do: "upsert"
+  defp method_name("remove"), do: "delete"
+  defp method_name(action), do: action
 end

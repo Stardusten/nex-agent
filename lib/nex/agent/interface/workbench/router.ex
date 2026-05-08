@@ -11,7 +11,7 @@ defmodule Nex.Agent.Interface.Workbench.Router do
     ConfigPanel,
     EvolutionApp,
     Permissions,
-    ScheduledTasks,
+    Tasks,
     SessionApp,
     Shell,
     SkillsApp,
@@ -205,57 +205,57 @@ defmodule Nex.Agent.Interface.Workbench.Router do
           {:error, reason} -> {400, %{"error" => reason}}
         end
 
-      {"GET", ["api", "workbench", "scheduled-tasks"]} ->
-        case ScheduledTasks.list(query_params, workspace_opts) do
+      {"GET", ["api", "workbench", "tasks"]} ->
+        case Tasks.list(query_params, workspace_opts) do
           {:ok, view} -> {200, view}
           {:error, code, reason} -> scheduled_error_status(code, reason)
         end
 
-      {"GET", ["api", "workbench", "scheduled-tasks", "status"]} ->
-        case ScheduledTasks.status(%{}, workspace_opts) do
+      {"GET", ["api", "workbench", "tasks", "status"]} ->
+        case Tasks.status(%{}, workspace_opts) do
           {:ok, view} -> {200, view}
           {:error, code, reason} -> scheduled_error_status(code, reason)
         end
 
-      {"POST", ["api", "workbench", "scheduled-tasks"]} ->
+      {"POST", ["api", "workbench", "tasks"]} ->
         with {:ok, args} <- decode_json_object(body),
-             {:ok, view} <- ScheduledTasks.add(args, workspace_opts) do
+             {:ok, view} <- Tasks.upsert(args, workspace_opts) do
           {200, view}
         else
           {:error, code, reason} -> scheduled_error_status(code, reason)
           {:error, reason} -> {400, %{"error" => reason}}
         end
 
-      {"PUT", ["api", "workbench", "scheduled-tasks", job_id]} ->
+      {"PUT", ["api", "workbench", "tasks", task_id]} ->
         with {:ok, args} <- decode_json_object(body),
              {:ok, view} <-
-               ScheduledTasks.update(Map.put(args, "job_id", job_id), workspace_opts) do
+               Tasks.upsert(Map.put(args, "task_id", task_id), workspace_opts) do
           {200, view}
         else
           {:error, code, reason} -> scheduled_error_status(code, reason)
           {:error, reason} -> {400, %{"error" => reason}}
         end
 
-      {"DELETE", ["api", "workbench", "scheduled-tasks", job_id]} ->
-        case ScheduledTasks.remove(%{"job_id" => job_id}, workspace_opts) do
+      {"DELETE", ["api", "workbench", "tasks", task_id]} ->
+        case Tasks.delete(%{"task_id" => task_id}, workspace_opts) do
           {:ok, view} -> {200, view}
           {:error, code, reason} -> scheduled_error_status(code, reason)
         end
 
-      {"POST", ["api", "workbench", "scheduled-tasks", job_id, "enable"]} ->
-        case ScheduledTasks.enable(%{"job_id" => job_id}, workspace_opts, true) do
+      {"POST", ["api", "workbench", "tasks", task_id, "enable"]} ->
+        case Tasks.enable(%{"task_id" => task_id}, workspace_opts, true) do
           {:ok, view} -> {200, view}
           {:error, code, reason} -> scheduled_error_status(code, reason)
         end
 
-      {"POST", ["api", "workbench", "scheduled-tasks", job_id, "disable"]} ->
-        case ScheduledTasks.enable(%{"job_id" => job_id}, workspace_opts, false) do
+      {"POST", ["api", "workbench", "tasks", task_id, "disable"]} ->
+        case Tasks.enable(%{"task_id" => task_id}, workspace_opts, false) do
           {:ok, view} -> {200, view}
           {:error, code, reason} -> scheduled_error_status(code, reason)
         end
 
-      {"POST", ["api", "workbench", "scheduled-tasks", job_id, "run"]} ->
-        case ScheduledTasks.run(%{"job_id" => job_id}, workspace_opts) do
+      {"POST", ["api", "workbench", "tasks", task_id, "run"]} ->
+        case Tasks.run(%{"task_id" => task_id}, workspace_opts) do
           {:ok, view} -> {200, view}
           {:error, code, reason} -> scheduled_error_status(code, reason)
         end

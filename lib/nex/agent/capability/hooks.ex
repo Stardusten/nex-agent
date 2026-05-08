@@ -12,7 +12,7 @@ defmodule Nex.Agent.Capability.Hooks do
   @default_max_chars 12_000
   @default_total_max_chars 30_000
   @allowed_events ["prompt.build.before", "conversation.turn.finished"]
-  @allowed_kinds ["file", "text", "tool_result"]
+  @allowed_kinds ["file", "text", "tool_result", "task_enqueue"]
   @allowed_on_error ["warn", "skip", "block"]
   @blocked_paths [
     "~/.zshrc",
@@ -36,28 +36,28 @@ defmodule Nex.Agent.Capability.Hooks do
 
     workspace_data =
       case File.read(path) do
-      {:ok, content} ->
-        case Jason.decode(content) do
-          {:ok, doc} when is_map(doc) ->
-            compile_doc(doc, path)
+        {:ok, content} ->
+          case Jason.decode(content) do
+            {:ok, doc} when is_map(doc) ->
+              compile_doc(doc, path)
 
-          {:ok, _other} ->
-            build_data(
-              [],
-              [diagnostic(:invalid_registry, path, "hooks registry must be an object")],
-              path
-            )
+            {:ok, _other} ->
+              build_data(
+                [],
+                [diagnostic(:invalid_registry, path, "hooks registry must be an object")],
+                path
+              )
 
-          {:error, reason} ->
-            build_data([], [diagnostic(:invalid_json, path, Exception.message(reason))], path)
-        end
+            {:error, reason} ->
+              build_data([], [diagnostic(:invalid_json, path, Exception.message(reason))], path)
+          end
 
-      {:error, :enoent} ->
-        build_data([], [], path)
+        {:error, :enoent} ->
+          build_data([], [], path)
 
-      {:error, reason} ->
-        build_data([], [diagnostic(:read_failed, path, inspect(reason))], path)
-    end
+        {:error, reason} ->
+          build_data([], [diagnostic(:read_failed, path, inspect(reason))], path)
+      end
 
     merge_plugin_hooks(workspace_data, opts)
   end
@@ -237,15 +237,19 @@ defmodule Nex.Agent.Capability.Hooks do
     end
   end
 
-  defp build_fragment(%{"advice" => %{"kind" => "job_enqueue"} = advice} = entry, ctx, _remaining) do
-    case normalize_string(Map.get(advice, "job")) do
+  defp build_fragment(
+         %{"advice" => %{"kind" => "task_enqueue"} = advice} = entry,
+         ctx,
+         _remaining
+       ) do
+    case normalize_string(Map.get(advice, "task")) do
       nil ->
-        handle_advice_error(entry, ctx, "job_enqueue hook requires advice.job")
+        handle_advice_error(entry, ctx, "task_enqueue hook requires advice.task")
 
-      job_id ->
-        Nex.Agent.Runtime.PluginJobRunner.enqueue_hook_job(
+      task_id ->
+        Nex.Agent.Tasks.Runner.enqueue_hook_task(
           Map.get(entry, "plugin_id"),
-          job_id,
+          task_id,
           ctx
         )
 
@@ -445,7 +449,10 @@ defmodule Nex.Agent.Capability.Hooks do
 
   defp plugin_hook_entries(opts) do
     plugin_data = Keyword.get(opts, :plugin_data) || %{}
-    contributions = Map.get(plugin_data, :contributions) || Map.get(plugin_data, "contributions") || %{}
+
+    contributions =
+      Map.get(plugin_data, :contributions) || Map.get(plugin_data, "contributions") || %{}
+
     hooks = Map.get(contributions, :hooks) || Map.get(contributions, "hooks") || []
 
     hooks
@@ -545,12 +552,12 @@ defmodule Nex.Agent.Capability.Hooks do
     end
   end
 
-  defp plugin_hook_advice(%{"type" => "enqueue_job"} = action, id) do
-    with {:ok, job_id} <- required_string(action, "job") do
+  defp plugin_hook_advice(%{"type" => "enqueue_task"} = action, id) do
+    with {:ok, task_id} <- required_string(action, "task") do
       {:ok,
        %{
-         "kind" => "job_enqueue",
-         "job" => job_id,
+         "kind" => "task_enqueue",
+         "task" => task_id,
          "title" => normalize_string(Map.get(action, "title")) || id,
          "priority" => normalize_integer(Map.get(action, "priority"), 100),
          "max_chars" => 1,
@@ -560,7 +567,9 @@ defmodule Nex.Agent.Capability.Hooks do
   end
 
   defp plugin_hook_advice(_action, _id),
-    do: {:error, "plugin hook action.type must be add_text, add_file, add_tool_result, or enqueue_job"}
+    do:
+      {:error,
+       "plugin hook action.type must be add_text, add_file, add_tool_result, or enqueue_task"}
 
   defp resolve_path(path, ctx) do
     case Path.type(path) do
@@ -568,7 +577,6 @@ defmodule Nex.Agent.Capability.Hooks do
       _ -> Path.expand(path, Map.get(ctx, :workspace) || Workspace.root())
     end
   end
-
 
   defp normalize_registry_doc(doc) do
     doc = stringify_keys(doc)

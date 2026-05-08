@@ -1810,7 +1810,7 @@
           <span class="app-id">Runs / Models</span>
         </button>
         <button class="system-button" id="scheduled-nav" type="button" aria-selected="false">
-          <span class="app-title">Scheduled Tasks</span>
+          <span class="app-title">Tasks</span>
           <span class="app-id">Cron / Reminders</span>
         </button>
         <button class="system-button" id="skills-nav" type="button" aria-selected="false">
@@ -2023,10 +2023,10 @@
       </div>
     </section>
 
-    <section id="scheduled-view" class="stage" aria-label="Scheduled Tasks" hidden>
+    <section id="scheduled-view" class="stage" aria-label="Tasks" hidden>
       <div class="stage-bar">
         <div>
-          <h2 class="stage-title">Scheduled Tasks</h2>
+          <h2 class="stage-title">Tasks</h2>
           <p id="scheduled-state" class="subtle" role="status" aria-live="polite">syncing</p>
         </div>
         <div class="stage-actions">
@@ -2090,7 +2090,7 @@
                 </label>
               </div>
               <div class="filter-actions">
-                <span id="scheduled-count" class="subtle">0 jobs</span>
+                <span id="scheduled-count" class="subtle">0 tasks</span>
                 <div class="level-row">
                   <button class="action secondary" id="scheduled-new" type="button">New</button>
                   <button class="action" type="submit">Apply</button>
@@ -2300,7 +2300,7 @@
 
       <div id="scheduled-inspector" class="inspector-mode" hidden>
         <section class="section">
-          <h2>Scheduled Task Detail</h2>
+          <h2>Task Detail</h2>
           <div id="scheduled-detail" class="detail-block"></div>
         </section>
         <section class="section">
@@ -2830,7 +2830,7 @@
 
       if (stored?.view === "scheduled") {
         switchView("scheduled");
-        await loadScheduledTasks();
+        await loadTasks();
         return;
       }
 
@@ -3799,10 +3799,10 @@
       return params;
     }
 
-    async function loadScheduledTasks() {
+    async function loadTasks() {
       setStatus("scheduled-state", "syncing", "warning");
-      const payload = await api(`/api/workbench/scheduled-tasks?${scheduledParams().toString()}`);
-      state.scheduled.items = payload.jobs || [];
+      const payload = await api(`/api/workbench/tasks?${scheduledParams().toString()}`);
+      state.scheduled.items = payload.tasks || [];
       state.scheduled.summary = payload.status || {};
       state.scheduled.total = payload.total ?? state.scheduled.items.length;
 
@@ -3815,7 +3815,7 @@
       setStatus("scheduled-state", "local state");
     }
 
-    function selectedScheduledTask() {
+    function selectedTask() {
       if (state.scheduled.creating) return null;
       return state.scheduled.items.find((job) => job.id === state.scheduled.selectedId) || null;
     }
@@ -3829,7 +3829,7 @@
 
     function renderScheduledMetrics() {
       const summary = state.scheduled.summary || {};
-      const selected = selectedScheduledTask();
+      const selected = selectedTask();
       const total = summary.total ?? state.scheduled.total ?? state.scheduled.items.length;
 
       $("scheduled-total").textContent = `${total} total`;
@@ -3847,12 +3847,12 @@
       const root = $("scheduled-list");
       const jobs = state.scheduled.items || [];
       root.innerHTML = "";
-      $("scheduled-count").textContent = `${state.scheduled.total ?? jobs.length} jobs`;
+      $("scheduled-count").textContent = `${state.scheduled.total ?? jobs.length} tasks`;
 
       if (!jobs.length) {
         const empty = document.createElement("div");
         empty.className = "empty";
-        empty.textContent = "No scheduled tasks match the current filters.";
+        empty.textContent = "No tasks match the current filters.";
         root.appendChild(empty);
         return;
       }
@@ -3875,7 +3875,7 @@
         row.querySelector(".scheduled-status").textContent = scheduledStatusLabel(job);
         renderScheduledChips(row.querySelector(".chips"), job);
         row.querySelector(".scheduled-preview").textContent = job.message || "";
-        row.addEventListener("click", () => selectScheduledTask(job.id));
+        row.addEventListener("click", () => selectTask(job.id));
         root.appendChild(row);
       }
     }
@@ -3900,7 +3900,7 @@
 
     function renderScheduledEditor() {
       const form = $("scheduled-editor");
-      const job = selectedScheduledTask();
+      const job = selectedTask();
       const creating = state.scheduled.creating || !job;
       const schedule = job?.schedule || { type: "every", seconds: 3600 };
       const scheduleType = ["every", "cron", "at"].includes(schedule.type) ? schedule.type : "every";
@@ -3912,7 +3912,7 @@
             <input id="scheduled-name" autocomplete="off" maxlength="120" required>
           </label>
           <label>Channel
-            <input id="scheduled-channel" autocomplete="off" maxlength="160" placeholder="cron">
+            <input id="scheduled-channel" autocomplete="off" maxlength="160" placeholder="task">
           </label>
           <label>Chat ID
             <input id="scheduled-chat-id" autocomplete="off" maxlength="240">
@@ -3976,7 +3976,7 @@
       }
 
       setScheduledScheduleType(scheduleType);
-      form.onsubmit = saveScheduledTask;
+      form.onsubmit = saveTask;
     }
 
     function setScheduledScheduleType(type) {
@@ -4028,22 +4028,22 @@
       return payload;
     }
 
-    async function saveScheduledTask(event) {
+    async function saveTask(event) {
       event.preventDefault();
       const button = event.submitter;
-      const creating = state.scheduled.creating || !selectedScheduledTask();
+      const creating = state.scheduled.creating || !selectedTask();
       let payload;
 
       try {
         payload = scheduledFormPayload();
       } catch (error) {
-        notify("Scheduled task form is incomplete", "error", boundedMessage(error));
+        notify("Task form is incomplete", "error", boundedMessage(error));
         return;
       }
 
       const confirmed = await confirmAction({
         title: creating ? `Create ${payload.name}?` : `Save ${payload.name}?`,
-        message: "This writes the system scheduled task registry used by the long-running agent runtime.",
+        message: "This writes the system task registry used by the long-running agent runtime.",
         confirmText: creating ? "Create task" : "Save task"
       });
 
@@ -4055,35 +4055,35 @@
         statusId: "scheduled-state",
         pendingLabel: "Saving...",
         pendingStatus: "saving task",
-        successTitle: creating ? "Scheduled task created" : "Scheduled task saved",
+        successTitle: creating ? "Task created" : "Task saved",
         successStatus: "task saved",
-        errorTitle: "Scheduled task was not saved"
+        errorTitle: "Task was not saved"
       }, async () => {
-        const result = await api(creating ? "/api/workbench/scheduled-tasks" : `/api/workbench/scheduled-tasks/${encodeURIComponent(jobId)}`, {
+        const result = await api(creating ? "/api/workbench/tasks" : `/api/workbench/tasks/${encodeURIComponent(jobId)}`, {
           method: creating ? "POST" : "PUT",
           body: JSON.stringify(payload)
         });
-        state.scheduled.selectedId = result.job?.id || jobId;
+        state.scheduled.selectedId = result.task?.id || jobId;
         state.scheduled.creating = false;
-        await loadScheduledTasks();
+        await loadTasks();
       });
     }
 
-    function selectScheduledTask(jobId) {
+    function selectTask(jobId) {
       state.scheduled.creating = false;
       state.scheduled.selectedId = jobId;
       renderScheduled();
       openInspectorPanel();
     }
 
-    function newScheduledTask() {
+    function newTask() {
       state.scheduled.creating = true;
       state.scheduled.selectedId = null;
       renderScheduled();
     }
 
     function renderScheduledDetail() {
-      const job = selectedScheduledTask();
+      const job = selectedTask();
       const root = $("scheduled-detail");
       const preview = $("scheduled-message-preview");
       root.innerHTML = "";
@@ -4093,7 +4093,7 @@
       if (!job) {
         const empty = document.createElement("div");
         empty.className = "empty";
-        empty.textContent = state.scheduled.creating ? "New scheduled task" : "Select a scheduled task";
+        empty.textContent = state.scheduled.creating ? "New task" : "Select a task";
         root.appendChild(empty);
         return;
       }
@@ -4108,7 +4108,7 @@
         ["Next run", formatTime(job.next_run)],
         ["Last run", formatTime(job.last_run)],
         ["Last status", job.last_status || ""],
-        ["Channel", job.channel || "cron"],
+        ["Channel", job.channel || "task"],
         ["Chat ID", job.chat_id || ""],
         ["Delete after run", job.delete_after_run ? "yes" : "no"],
         ["Updated", formatTime(job.updated_at)]
@@ -4166,22 +4166,22 @@
         pendingStatus: copy.pending,
         successTitle: copy.success,
         successStatus: copy.successStatus,
-        errorTitle: "Scheduled task action failed"
+        errorTitle: "Task action failed"
       }, async () => {
         if (action === "delete") {
-          await api(`/api/workbench/scheduled-tasks/${encodeURIComponent(job.id)}`, { method: "DELETE" });
+          await api(`/api/workbench/tasks/${encodeURIComponent(job.id)}`, { method: "DELETE" });
           state.scheduled.creating = true;
           state.scheduled.selectedId = null;
         } else {
-          const result = await api(`/api/workbench/scheduled-tasks/${encodeURIComponent(job.id)}/${action}`, {
+          const result = await api(`/api/workbench/tasks/${encodeURIComponent(job.id)}/${action}`, {
             method: "POST",
             body: JSON.stringify({})
           });
-          state.scheduled.selectedId = result.job?.id || job.id;
+          state.scheduled.selectedId = result.task?.id || job.id;
           state.scheduled.creating = false;
         }
 
-        await loadScheduledTasks();
+        await loadTasks();
       });
     }
 
@@ -4189,10 +4189,10 @@
       if (action === "run") {
         return {
           title: `Run ${job.name}?`,
-          message: "This enqueues the scheduled task immediately through the agent runtime.",
+          message: "This enqueues the task immediately through the agent runtime.",
           confirmText: "Run now",
           pending: "running task",
-          success: "Scheduled task queued",
+          success: "Task queued",
           successStatus: "task queued"
         };
       }
@@ -4203,7 +4203,7 @@
           message: "The task will resume waking the agent according to its schedule.",
           confirmText: "Enable task",
           pending: "enabling task",
-          success: "Scheduled task enabled",
+          success: "Task enabled",
           successStatus: "task enabled"
         };
       }
@@ -4215,18 +4215,18 @@
           confirmText: "Disable task",
           danger: true,
           pending: "disabling task",
-          success: "Scheduled task disabled",
+          success: "Task disabled",
           successStatus: "task disabled"
         };
       }
 
       return {
         title: `Delete ${job.name}?`,
-        message: "This removes the scheduled task from the system registry.",
+        message: "This removes the task from the system registry.",
         confirmText: "Delete task",
         danger: true,
         pending: "deleting task",
-        success: "Scheduled task deleted",
+        success: "Task deleted",
         successStatus: "task deleted"
       };
     }
@@ -5805,9 +5805,9 @@
     });
 
     $("scheduled-nav").addEventListener("click", async () => {
-      if (!(await ensureSafeToLeaveConfig("open Scheduled Tasks"))) return;
+      if (!(await ensureSafeToLeaveConfig("open Tasks"))) return;
       switchView("scheduled");
-      safeLoad("Scheduled Tasks", "scheduled-state", loadScheduledTasks);
+      safeLoad("Tasks", "scheduled-state", loadTasks);
     });
 
     $("skills-nav").addEventListener("click", async () => {
@@ -5865,7 +5865,7 @@
     $("refresh-observe").addEventListener("click", () => safeLoad("Observability", "observe-state", loadObserve));
     $("refresh-evolution").addEventListener("click", () => safeLoad("Self Evolution", "evolution-state", loadEvolution));
     $("refresh-sessions").addEventListener("click", () => safeLoad("Sessions", "sessions-state", loadSessions));
-    $("refresh-scheduled").addEventListener("click", () => safeLoad("Scheduled Tasks", "scheduled-state", loadScheduledTasks));
+    $("refresh-scheduled").addEventListener("click", () => safeLoad("Tasks", "scheduled-state", loadTasks));
     $("refresh-skills").addEventListener("click", () => safeLoad("Skills", "skills-state", loadSkills));
     $("refresh-config").addEventListener("click", async () => {
       if (!(await ensureSafeToLeaveConfig("refresh configuration"))) return;
@@ -5879,11 +5879,11 @@
       state.config.selectedKey = null;
       renderConfig();
     });
-    $("scheduled-new").addEventListener("click", newScheduledTask);
+    $("scheduled-new").addEventListener("click", newTask);
     $("skills-new").addEventListener("click", newSkill);
     $("scheduled-filters").addEventListener("submit", (event) => {
       event.preventDefault();
-      safeLoad("Scheduled Tasks", "scheduled-state", loadScheduledTasks);
+      safeLoad("Tasks", "scheduled-state", loadTasks);
     });
     $("skills-filters").addEventListener("submit", (event) => {
       event.preventDefault();

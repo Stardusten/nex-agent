@@ -1,11 +1,11 @@
-defmodule Nex.Agent.Interface.Workbench.ScheduledTasks do
+defmodule Nex.Agent.Interface.Workbench.Tasks do
   @moduledoc false
 
-  alias Nex.Agent.Capability.Cron
+  alias Nex.Agent.Tasks
 
   @type bridge_result :: {:ok, map()} | {:error, String.t(), String.t()}
 
-  @max_jobs 500
+  @max_tasks 500
   @max_name 120
   @max_message 8_000
   @max_channel 160
@@ -15,26 +15,26 @@ defmodule Nex.Agent.Interface.Workbench.ScheduledTasks do
 
   @spec list(map(), keyword()) :: bridge_result()
   def list(params, opts) when is_map(params) do
-    with :ok <- ensure_cron_available(),
+    with :ok <- ensure_tasks_available(),
          :ok <- ensure_only_keys(params, ~w(limit query status)),
-         {:ok, limit} <- parse_limit(Map.get(params, "limit", 200), @max_jobs),
+         {:ok, limit} <- parse_limit(Map.get(params, "limit", 200), @max_tasks),
          {:ok, query} <- optional_text(params, "query", 160),
          {:ok, status} <- status_filter(params) do
-      jobs =
+      tasks =
         opts
-        |> Cron.list_jobs()
-        |> Enum.map(&job_view/1)
-        |> filter_jobs(query, status)
+        |> Tasks.list()
+        |> Enum.map(&task_view/1)
+        |> filter_tasks(query, status)
 
       {:ok,
        %{
-         "jobs" => Enum.take(jobs, limit),
-         "total" => length(jobs),
-         "status" => status_view(Cron.status(opts))
+         "tasks" => Enum.take(tasks, limit),
+         "total" => length(tasks),
+         "status" => status_view(Tasks.status(opts))
        }}
     else
-      {:error, "scheduled task runtime is not running"} ->
-        {:error, "unavailable", "scheduled task runtime is not running"}
+      {:error, "task runtime is not running"} ->
+        {:error, "unavailable", "task runtime is not running"}
 
       {:error, reason} ->
         {:error, "bad_params", reason}
@@ -43,75 +43,56 @@ defmodule Nex.Agent.Interface.Workbench.ScheduledTasks do
 
   @spec status(map(), keyword()) :: bridge_result()
   def status(params, opts) when is_map(params) do
-    with :ok <- ensure_cron_available(),
+    with :ok <- ensure_tasks_available(),
          :ok <- ensure_only_keys(params, []) do
-      {:ok, %{"status" => status_view(Cron.status(opts))}}
+      {:ok, %{"status" => status_view(Tasks.status(opts))}}
     else
-      {:error, "scheduled task runtime is not running"} ->
-        {:error, "unavailable", "scheduled task runtime is not running"}
+      {:error, "task runtime is not running"} ->
+        {:error, "unavailable", "task runtime is not running"}
 
       {:error, reason} ->
         {:error, "bad_params", reason}
     end
   end
 
-  @spec add(map(), keyword()) :: bridge_result()
-  def add(params, opts) when is_map(params) do
-    with :ok <- ensure_cron_available(),
-         :ok <-
-           ensure_only_keys(
-             params,
-             ~w(name message schedule enabled channel chat_id delete_after_run)
-           ),
-         {:ok, attrs} <- job_attrs(params, :add) do
-      case Cron.add_job(attrs, opts) do
-        {:ok, job} -> {:ok, %{"job" => job_view(job)}}
+  @spec upsert(map(), keyword()) :: bridge_result()
+  def upsert(params, opts) when is_map(params) do
+    allowed = ~w(task_id name message schedule enabled channel chat_id delete_after_run)
+
+    with :ok <- ensure_tasks_available(),
+         :ok <- ensure_only_keys(params, allowed),
+         {:ok, attrs} <-
+           task_attrs(params, if(Map.has_key?(params, "task_id"), do: :update, else: :add)) do
+      attrs =
+        if Map.has_key?(params, "task_id"),
+          do: Map.put(attrs, :id, params["task_id"]),
+          else: attrs
+
+      case Tasks.upsert(attrs, opts) do
+        {:ok, task} -> {:ok, %{"task" => task_view(task)}}
         {:error, reason} -> {:error, "failed", inspect(reason, limit: 20, printable_limit: 120)}
       end
     else
-      {:error, "scheduled task runtime is not running"} ->
-        {:error, "unavailable", "scheduled task runtime is not running"}
+      {:error, "task runtime is not running"} ->
+        {:error, "unavailable", "task runtime is not running"}
 
       {:error, reason} ->
         {:error, "bad_params", reason}
     end
   end
 
-  @spec update(map(), keyword()) :: bridge_result()
-  def update(params, opts) when is_map(params) do
-    with :ok <- ensure_cron_available(),
-         :ok <-
-           ensure_only_keys(
-             params,
-             ~w(job_id name message schedule enabled channel chat_id delete_after_run)
-           ),
-         {:ok, job_id} <- required_text(params, "job_id", 80),
-         {:ok, attrs} <- job_attrs(params, :update) do
-      case Cron.update_job(job_id, attrs, opts) do
-        {:ok, job} -> {:ok, %{"job" => job_view(job)}}
-        {:error, :not_found} -> {:error, "not_found", "scheduled task not found: #{job_id}"}
+  @spec delete(map(), keyword()) :: bridge_result()
+  def delete(params, opts) when is_map(params) do
+    with :ok <- ensure_tasks_available(),
+         :ok <- ensure_only_keys(params, ~w(task_id)),
+         {:ok, task_id} <- required_text(params, "task_id", 80) do
+      case Tasks.delete(task_id, opts) do
+        :ok -> {:ok, %{"removed" => true, "task_id" => task_id}}
+        {:error, :not_found} -> {:error, "not_found", "task not found: #{task_id}"}
       end
     else
-      {:error, "scheduled task runtime is not running"} ->
-        {:error, "unavailable", "scheduled task runtime is not running"}
-
-      {:error, reason} ->
-        {:error, "bad_params", reason}
-    end
-  end
-
-  @spec remove(map(), keyword()) :: bridge_result()
-  def remove(params, opts) when is_map(params) do
-    with :ok <- ensure_cron_available(),
-         :ok <- ensure_only_keys(params, ~w(job_id)),
-         {:ok, job_id} <- required_text(params, "job_id", 80) do
-      case Cron.remove_job(job_id, opts) do
-        :ok -> {:ok, %{"removed" => true, "job_id" => job_id}}
-        {:error, :not_found} -> {:error, "not_found", "scheduled task not found: #{job_id}"}
-      end
-    else
-      {:error, "scheduled task runtime is not running"} ->
-        {:error, "unavailable", "scheduled task runtime is not running"}
+      {:error, "task runtime is not running"} ->
+        {:error, "unavailable", "task runtime is not running"}
 
       {:error, reason} ->
         {:error, "bad_params", reason}
@@ -120,16 +101,16 @@ defmodule Nex.Agent.Interface.Workbench.ScheduledTasks do
 
   @spec enable(map(), keyword(), boolean()) :: bridge_result()
   def enable(params, opts, enabled) when is_map(params) and is_boolean(enabled) do
-    with :ok <- ensure_cron_available(),
-         :ok <- ensure_only_keys(params, ~w(job_id)),
-         {:ok, job_id} <- required_text(params, "job_id", 80) do
-      case Cron.enable_job(job_id, enabled, opts) do
-        {:ok, job} -> {:ok, %{"job" => job_view(job)}}
-        {:error, :not_found} -> {:error, "not_found", "scheduled task not found: #{job_id}"}
+    with :ok <- ensure_tasks_available(),
+         :ok <- ensure_only_keys(params, ~w(task_id)),
+         {:ok, task_id} <- required_text(params, "task_id", 80) do
+      case Tasks.enable(task_id, enabled, opts) do
+        {:ok, task} -> {:ok, %{"task" => task_view(task)}}
+        {:error, :not_found} -> {:error, "not_found", "task not found: #{task_id}"}
       end
     else
-      {:error, "scheduled task runtime is not running"} ->
-        {:error, "unavailable", "scheduled task runtime is not running"}
+      {:error, "task runtime is not running"} ->
+        {:error, "unavailable", "task runtime is not running"}
 
       {:error, reason} ->
         {:error, "bad_params", reason}
@@ -138,23 +119,23 @@ defmodule Nex.Agent.Interface.Workbench.ScheduledTasks do
 
   @spec run(map(), keyword()) :: bridge_result()
   def run(params, opts) when is_map(params) do
-    with :ok <- ensure_cron_available(),
-         :ok <- ensure_only_keys(params, ~w(job_id)),
-         {:ok, job_id} <- required_text(params, "job_id", 80) do
-      case Cron.run_job(job_id, opts) do
-        {:ok, job} -> {:ok, %{"triggered" => true, "job" => job_view(job)}}
-        {:error, :not_found} -> {:error, "not_found", "scheduled task not found: #{job_id}"}
+    with :ok <- ensure_tasks_available(),
+         :ok <- ensure_only_keys(params, ~w(task_id)),
+         {:ok, task_id} <- required_text(params, "task_id", 80) do
+      case Tasks.run_now(task_id, %{}, opts) do
+        {:ok, task} -> {:ok, %{"triggered" => true, "task" => task_view(task)}}
+        {:error, :not_found} -> {:error, "not_found", "task not found: #{task_id}"}
       end
     else
-      {:error, "scheduled task runtime is not running"} ->
-        {:error, "unavailable", "scheduled task runtime is not running"}
+      {:error, "task runtime is not running"} ->
+        {:error, "unavailable", "task runtime is not running"}
 
       {:error, reason} ->
         {:error, "bad_params", reason}
     end
   end
 
-  defp job_attrs(params, mode) do
+  defp task_attrs(params, mode) do
     with {:ok, attrs} <- maybe_put_required_text(%{}, params, "name", :name, @max_name, mode),
          {:ok, attrs} <-
            maybe_put_required_text(attrs, params, "message", :message, @max_message, mode),
@@ -384,23 +365,23 @@ defmodule Nex.Agent.Interface.Workbench.ScheduledTasks do
     end
   end
 
-  defp filter_jobs(jobs, query, status) do
-    jobs
-    |> Enum.filter(fn job ->
+  defp filter_tasks(tasks, query, status) do
+    tasks
+    |> Enum.filter(fn task ->
       case status do
-        "enabled" -> job["enabled"]
-        "disabled" -> not job["enabled"]
+        "enabled" -> task["enabled"]
+        "disabled" -> not task["enabled"]
         _ -> true
       end
     end)
-    |> Enum.filter(fn job ->
+    |> Enum.filter(fn task ->
       case query do
         nil ->
           true
 
         query ->
           haystack =
-            [job["name"], job["message"], job["channel"], job["chat_id"], job["id"]]
+            [task["name"], task["message"], task["channel"], task["chat_id"], task["id"]]
             |> Enum.join("\n")
             |> String.downcase()
 
@@ -409,25 +390,25 @@ defmodule Nex.Agent.Interface.Workbench.ScheduledTasks do
     end)
   end
 
-  defp job_view(%Cron{} = job) do
+  defp task_view(%Tasks{} = task) do
     %{
-      "id" => job.id,
-      "name" => job.name,
-      "message" => job.message || "",
-      "enabled" => job.enabled == true,
-      "schedule" => schedule_view(job.schedule),
-      "channel" => job.channel,
-      "chat_id" => job.chat_id,
-      "delete_after_run" => job.delete_after_run == true,
-      "last_run" => iso_timestamp(job.last_run),
-      "next_run" => iso_timestamp(job.next_run),
-      "last_run_unix" => job.last_run,
-      "next_run_unix" => job.next_run,
-      "last_status" => job.last_status,
-      "last_error" => job.last_error,
-      "created_at" => iso_timestamp(job.created_at),
-      "updated_at" => iso_timestamp(job.updated_at),
-      "source" => job_source(job.name)
+      "id" => task.id,
+      "name" => task.name,
+      "message" => task.message || "",
+      "enabled" => task.enabled == true,
+      "schedule" => schedule_view(task.schedule),
+      "channel" => task.channel,
+      "chat_id" => task.chat_id,
+      "delete_after_run" => task.delete_after_run == true,
+      "last_run" => iso_timestamp(task.last_run),
+      "next_run" => iso_timestamp(task.next_run),
+      "last_run_unix" => task.last_run,
+      "next_run_unix" => task.next_run,
+      "last_status" => task.last_status,
+      "last_error" => task.last_error,
+      "created_at" => iso_timestamp(task.created_at),
+      "updated_at" => iso_timestamp(task.updated_at),
+      "source" => task_source(task.name)
     }
   end
 
@@ -461,13 +442,13 @@ defmodule Nex.Agent.Interface.Workbench.ScheduledTasks do
     }
   end
 
-  defp job_source("task_due:" <> task_id),
+  defp task_source("task_due:" <> task_id),
     do: %{"type" => "personal_task", "kind" => "due", "task_id" => task_id}
 
-  defp job_source("task_follow_up:" <> task_id),
+  defp task_source("task_follow_up:" <> task_id),
     do: %{"type" => "personal_task", "kind" => "follow_up", "task_id" => task_id}
 
-  defp job_source(_name), do: %{"type" => "scheduled_task", "kind" => "custom"}
+  defp task_source(_name), do: %{"type" => "task", "kind" => "custom"}
 
   defp format_duration(seconds) when is_integer(seconds) and seconds >= 86_400,
     do: "#{div(seconds, 86_400)}d"
@@ -511,8 +492,8 @@ defmodule Nex.Agent.Interface.Workbench.ScheduledTasks do
     end
   end
 
-  defp ensure_cron_available do
-    if Process.whereis(Cron), do: :ok, else: {:error, "scheduled task runtime is not running"}
+  defp ensure_tasks_available do
+    if Process.whereis(Tasks), do: :ok, else: {:error, "task runtime is not running"}
   end
 
   defp stringify_keys(map) when is_map(map) do

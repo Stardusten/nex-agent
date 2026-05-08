@@ -24,7 +24,7 @@ defmodule Nex.Agent.Capability.Subagent.Profile do
             source: :unknown
 
   @type model_role :: :inherit | :default | :cheap | :advisor | atom() | String.t()
-  @type tools_filter :: :subagent | :follow_up | :cron | :all
+  @type tools_filter :: :subagent | :follow_up | :task | :all
   @type context_mode :: :blank | :parent_recent
   @type return_mode :: :inbound | :silent
 
@@ -44,7 +44,7 @@ defmodule Nex.Agent.Capability.Subagent.Profile do
           source: atom() | String.t()
         }
 
-  @valid_tools_filters [:subagent, :follow_up, :cron, :all]
+  @valid_tools_filters [:subagent, :follow_up, :task, :all]
   @valid_context_modes [:blank, :parent_recent]
   @valid_return_modes [:inbound, :silent]
   @provider_option_keys %{
@@ -226,7 +226,7 @@ defmodule Nex.Agent.Capability.Subagent.Profile do
       "subagent" -> :subagent
       "follow_up" -> :follow_up
       "follow-up" -> :follow_up
-      "cron" -> :cron
+      "task" -> :task
       "all" -> :all
       _ -> :subagent
     end

@@ -2,7 +2,7 @@
 
 ## Active Workstream
 
-Phase 1 runtime reload foundation is implemented. Phase 3 streaming delivery and Phase 3A architecture convergence are in place. Phase 4 is now closed as the text-IR foundation, Phase 4A is superseded, Phase 5 IM inbound architecture and media projection is implemented, and Phase 7 Feishu streaming converter simplification is in place. Phase 8 session run control and busy follow-up is landed, and Phase 9 follow-up LLM turn and interrupt request is now landed on top of it. Phase 6 Feishu outbound official format/media send remains landed. Phase 18 Workbench App Runtime is now opened as the local-first evolvable console/workbench track. Phase 20 Plugin Runtime Foundation is now planned as the large pluginization track for non-core capabilities.
+Phase 1 runtime reload foundation is implemented. Phase 3 streaming delivery and Phase 3A architecture convergence are in place. Phase 4 is now closed as the text-IR foundation, Phase 4A is superseded, Phase 5 IM inbound architecture and media projection is implemented, and Phase 7 Feishu streaming converter simplification is in place. Phase 8 session run control and busy follow-up is landed, and Phase 9 follow-up LLM turn and interrupt request is now landed on top of it. Phase 6 Feishu outbound official format/media send remains landed. Phase 18 Workbench App Runtime is now opened as the local-first evolvable console/workbench track. Phase 20 Plugin Runtime Foundation is now planned as the large pluginization track for non-core capabilities. Phase 23 Plugin External Service Foundation is now in progress; Stage 1 Task surface cutover is complete with review fixes and focused tests passing, and the next implementation step is Stage 2 MCP transport boundary.
 
 ## Why This Is Active
 
@@ -354,12 +354,12 @@ Phase 18 is now opened for the Workbench App Runtime:
   - `POST /api/workbench/sessions/:session_key/stop` reuses the existing InboundWorker stop lane when available and falls back to `RunControl.cancel_owner/3`
   - `POST /api/workbench/sessions/:session_key/model` reuses session model overrides and invalidates idle InboundWorker agent cache so the next turn uses the selected model
   - the static shell includes a `Sessions` system view with inventory, stop control, model switch/reset, recent messages, and observations
-- Stage 5 scheduled task management surface is in place:
-  - `Nex.Agent.Interface.Workbench.ScheduledTasks` exposes bounded list/status/add/update/remove/enable/disable/run operations over `Nex.Agent.Capability.Cron`
-  - `GET/POST/PUT/DELETE /api/workbench/scheduled-tasks/**` powers the built-in Workbench system view, so Scheduled Tasks is not a workspace app artifact
-  - app bridge methods `tasks.scheduled.*` remain available only through manifest-declared and owner-granted `tasks:read` / `tasks:write`
+- Stage 5 task management surface is in place:
+  - `Nex.Agent.Interface.Workbench.Tasks` exposes bounded list/status/upsert/delete/enable/disable/run operations over `Nex.Agent.Tasks`
+  - `GET/POST/PUT/DELETE /api/workbench/tasks/**` powers the built-in Workbench system view, so Tasks is not a workspace app artifact
+  - app bridge methods `tasks.*` remain available only through manifest-declared and owner-granted `tasks:read` / `tasks:write`
   - `GET /app-frame/:id` injects `<base href="/app-assets/:id/">` at the start of `<head>` so relative app CSS/JS assets resolve before browser parsing
-  - the static shell includes a `Scheduled Tasks` system view with inventory, filters, create/edit form, enable/disable/delete, and confirmed run-now control
+  - the static shell includes a `Tasks` system view with inventory, filters, create/edit form, enable/disable/delete, and confirmed run-now control
 - Phase 18B static iframe app runtime is in place:
   - app manifests no longer require `runtime`; `entry` defaults to `index.html`, and legacy `runtime` fields are ignored rather than displayed as meaningful app settings
   - `GET /app-frame/:id` serves the app entry HTML with injected `window.Nex` SDK bootstrap; missing/invalid entries render bounded iframe error pages
@@ -480,15 +480,16 @@ Docs/dev workflow is split into four lanes:
 
 ## Immediate Next Steps
 
-1. Phase 21 Command Sandbox And Approval：等待 review/验收；重点看 Seatbelt profile、approval grant 语义、direct file inventory reviewed exemptions、以及 Linux/Windows backend contract 是否还需要补冻结项。
-2. Phase 18D Notes manual review：在真实 config 中配置 `gateway.workbench.apps.notes.root`，授权 notes app 的 `notes:read` / `notes:write`，打开 Workbench 验证真实 vault list/read/write/search/conflict。
-3. Phase 18 Workbench app artifact reload：把 `reload.sh` contract 落成受控 runner/tool 或 owner lane，并补 ControlPlane observations 和权限边界测试。
-4. Phase 18 Workbench：用一个临时 workspace 手动 seed `workbench/apps/<id>/nex.app.json` + `index.html`，启用 `gateway.workbench` 后打开 `http://127.0.0.1:50051/workbench` 验证真实 gateway 下的 shell/reload/permission/observe/SDK bridge 回路。
-5. 用真实 `~/.nex/agent/config.json` 手动改成新 config shape 后重启 gateway，验证多个 Feishu/Discord instance 可以同时注册、收消息、发消息。
-6. 真实 gateway/manual 场景检查 runtime reload 后 channel add/remove/change 是否只影响对应 instance。
-7. 用真实 gateway/manual 场景检查 busy 普通消息 follow-up、`/btw`、`/status`、`/stop`、可选 interrupt tool，以及 follow-up 使用 `observe summary` 的实际交互时序。
-8. Phase 7 留存问题仍需后续处理：Finch 连接池泄漏、飞书 `close_streaming_mode` 404、LLM 空返回兜底。
-9. 用真实 gateway/manual 场景检查 Phase 17 memory notice：普通 owner run 后台 refresh 应在最终回复之后发送 `🧠 Memory - <summary>`；cron、follow-up、subagent 不应发送。
+1. Phase 23 Stage 2：拆 `Nex.Agent.Interface.MCP` 为 protocol client + transport adapter，保持 stdio 行为不变。
+2. Phase 21 Command Sandbox And Approval：等待 review/验收；重点看 Seatbelt profile、approval grant 语义、direct file inventory reviewed exemptions、以及 Linux/Windows backend contract 是否还需要补冻结项。
+3. Phase 18D Notes manual review：在真实 config 中配置 `gateway.workbench.apps.notes.root`，授权 notes app 的 `notes:read` / `notes:write`，打开 Workbench 验证真实 vault list/read/write/search/conflict。
+4. Phase 18 Workbench app artifact reload：把 `reload.sh` contract 落成受控 runner/tool 或 owner lane，并补 ControlPlane observations 和权限边界测试。
+5. Phase 18 Workbench：用一个临时 workspace 手动 seed `workbench/apps/<id>/nex.app.json` + `index.html`，启用 `gateway.workbench` 后打开 `http://127.0.0.1:50051/workbench` 验证真实 gateway 下的 shell/reload/permission/observe/SDK bridge 回路。
+6. 用真实 `~/.nex/agent/config.json` 手动改成新 config shape 后重启 gateway，验证多个 Feishu/Discord instance 可以同时注册、收消息、发消息。
+7. 真实 gateway/manual 场景检查 runtime reload 后 channel add/remove/change 是否只影响对应 instance。
+8. 用真实 gateway/manual 场景检查 busy 普通消息 follow-up、`/btw`、`/status`、`/stop`、可选 interrupt tool，以及 follow-up 使用 `observe summary` 的实际交互时序。
+9. Phase 7 留存问题仍需后续处理：Finch 连接池泄漏、飞书 `close_streaming_mode` 404、LLM 空返回兜底。
+10. 用真实 gateway/manual 场景检查 Phase 17 memory notice：普通 owner run 后台 refresh 应在最终回复之后发送 `🧠 Memory - <summary>`；cron、follow-up、subagent 不应发送。
 
 ## Reviewer Verification
 

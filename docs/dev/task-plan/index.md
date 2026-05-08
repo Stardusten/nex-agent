@@ -37,3 +37,4 @@ Task plans are execution documents. Keep product/architecture exploration in `..
 - [Phase 20 Plugin Runtime Foundation](./phase20-plugin-runtime-foundation.md)
 - [Phase 21 Command Sandbox And Approval](./phase21-command-sandbox-and-approval.md)
 - [Phase 22 Plugin Runtime Primitives](./phase22-plugin-runtime-primitives.md)
+- [Phase 23 Plugin External Service Foundation](./phase23-plugin-external-service-foundation.md)

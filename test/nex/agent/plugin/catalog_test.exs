@@ -152,7 +152,7 @@ defmodule Nex.Agent.Extension.Plugin.CatalogTest do
     refute Enum.any?(data.diagnostics, &(&1["kind"] == "inventory"))
   end
 
-  test "normalizes hooks jobs workspace files and mcp servers", %{
+  test "normalizes hooks tasks workspace files and mcp servers", %{
     builtin: builtin,
     workspace_plugins_dir: workspace_plugins_dir
   } do
@@ -162,17 +162,39 @@ defmodule Nex.Agent.Extension.Plugin.CatalogTest do
       "source" => "workspace",
       "contributes" => %{
         "hooks" => [
-          %{"id" => "echo.prompt", "event" => "prompt.build.before", "action" => %{"type" => "add_text", "content" => "hello"}},
-          %{"id" => "echo.after_turn", "event" => "conversation.turn.finished", "action" => %{"type" => "enqueue_job", "job" => "echo.flush"}}
+          %{
+            "id" => "echo.prompt",
+            "event" => "prompt.build.before",
+            "action" => %{"type" => "add_text", "content" => "hello"}
+          },
+          %{
+            "id" => "echo.after_turn",
+            "event" => "conversation.turn.finished",
+            "action" => %{"type" => "enqueue_task", "task" => "echo.flush"}
+          }
         ],
-        "jobs" => [
-          %{"id" => "echo.flush", "action" => %{"type" => "tool_call", "tool" => "echo__remember"}}
+        "tasks" => [
+          %{
+            "id" => "echo.flush",
+            "action" => %{"type" => "tool_call", "tool" => "echo__remember"}
+          }
         ],
         "workspaceFiles" => [
-          %{"id" => "echo.state", "path" => "plugin_data/echo/state.json", "kind" => "file", "onMissing" => "create", "watch" => true}
+          %{
+            "id" => "echo.state",
+            "path" => "plugin_data/echo/state.json",
+            "kind" => "file",
+            "onMissing" => "create",
+            "watch" => true
+          }
         ],
         "mcpServers" => [
-          %{"id" => "echo_mcp", "command" => "sh", "args" => ["-c", "exit 0"]}
+          %{
+            "id" => "echo_mcp",
+            "transport" => "stdio",
+            "command" => "sh",
+            "args" => ["-c", "exit 0"]
+          }
         ]
       }
     })
@@ -188,7 +210,7 @@ defmodule Nex.Agent.Extension.Plugin.CatalogTest do
 
     assert Enum.any?(data.contributions["hooks"], &(&1["id"] == "echo.prompt"))
     assert Enum.any?(data.contributions["hooks"], &(&1["id"] == "echo.after_turn"))
-    assert [%{"id" => "echo.flush"}] = data.contributions["jobs"]
+    assert [%{"id" => "echo.flush"}] = data.contributions["tasks"]
     assert [%{"id" => "echo.state"}] = data.contributions["workspace_files"]
     assert [%{"id" => "echo_mcp"}] = data.contributions["mcp_servers"]
   end

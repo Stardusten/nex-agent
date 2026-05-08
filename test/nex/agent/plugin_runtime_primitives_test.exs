@@ -50,8 +50,9 @@ defmodule Nex.Agent.PluginRuntimePrimitivesTest do
   alias Nex.Agent.Capability.Tool.Registry
   alias Nex.Agent.Conversation.Session
   alias Nex.Agent.Interface.MCP.ServerManager
-  alias Nex.Agent.Runtime.{PluginJobRunner, PluginWorkspaceFiles}
+  alias Nex.Agent.Runtime.PluginWorkspaceFiles
   alias Nex.Agent.Sandbox.{Approval, PermissionRuleStore}
+  alias Nex.Agent.Tasks.Runner, as: TaskRunner
   alias Nex.Agent.Turn.Runner
 
   setup do
@@ -122,12 +123,12 @@ defmodule Nex.Agent.PluginRuntimePrimitivesTest do
               "id" => "echo.after_turn",
               "event" => "conversation.turn.finished",
               "action" => %{
-                "type" => "enqueue_job",
-                "job" => "echo.flush"
+                "type" => "enqueue_task",
+                "task" => "echo.flush"
               }
             }
           ],
-          "jobs" => [
+          "tasks" => [
             %{
               "id" => "echo.flush",
               "action" => %{
@@ -149,6 +150,7 @@ defmodule Nex.Agent.PluginRuntimePrimitivesTest do
           "mcpServers" => [
             %{
               "id" => "echo_mcp",
+              "transport" => "stdio",
               "command" => "sh",
               "args" => ["-c", script]
             }
@@ -177,7 +179,7 @@ defmodule Nex.Agent.PluginRuntimePrimitivesTest do
     for {mod, name} <- [
           {Task.Supervisor, Nex.Agent.TaskSupervisor},
           {Registry, Registry},
-          {PluginJobRunner, PluginJobRunner},
+          {TaskRunner, TaskRunner},
           {Approval, Approval},
           {ServerManager, ServerManager},
           {Runtime, Runtime}
@@ -186,6 +188,8 @@ defmodule Nex.Agent.PluginRuntimePrimitivesTest do
         start_supervised!({mod, name: name})
       end
     end
+
+    _ = ServerManager.stop(ServerManager.plugin_server_id("workspace:demo-echo", "echo_mcp"))
 
     Runtime.reload(workspace: workspace, config_loader: fn _opts -> config end)
     Registry.reload()
@@ -209,16 +213,20 @@ defmodule Nex.Agent.PluginRuntimePrimitivesTest do
     {:ok, workspace: workspace, config: config}
   end
 
-  test "runtime snapshot includes new plugin contribution kinds and initializes workspace file", %{
-    workspace: workspace
-  } do
+  test "runtime snapshot includes new plugin contribution kinds and initializes workspace file",
+       %{
+         workspace: workspace
+       } do
     assert {:ok, snapshot} = Runtime.current()
     assert Enum.any?(snapshot.plugins.contributions.hooks, &(&1["id"] == "echo.prompt"))
     assert Enum.any?(snapshot.plugins.contributions.hooks, &(&1["id"] == "echo.after_turn"))
-    assert Enum.any?(snapshot.plugins.contributions.jobs, &(&1["id"] == "echo.flush"))
+    assert Enum.any?(snapshot.plugins.contributions.tasks, &(&1["id"] == "echo.flush"))
+    assert Enum.any?(snapshot.tasks.definitions, &(&1["id"] == "echo.flush"))
     assert Enum.any?(snapshot.plugins.contributions.workspace_files, &(&1["id"] == "echo.state"))
     assert Enum.any?(snapshot.plugins.contributions.mcp_servers, &(&1["id"] == "echo_mcp"))
+
     assert ServerManager.plugin_server_id("workspace:demo-echo", "echo_mcp") in snapshot.plugins.active_mcp_servers
+
     assert Enum.any?(snapshot.tools.definitions_all, &(&1["name"] == "echo__remote"))
     assert File.exists?(Path.join(workspace, "plugin_data/echo/state.json"))
   end
@@ -323,7 +331,10 @@ defmodule Nex.Agent.PluginRuntimePrimitivesTest do
            end)
   end
 
-  test "tool registry resolves module-backed and mcp-backed plugin tools", %{workspace: workspace, config: config} do
+  test "tool registry resolves module-backed and mcp-backed plugin tools", %{
+    workspace: workspace,
+    config: config
+  } do
     snapshot = Runtime.current() |> elem(1)
     definitions = Registry.definitions(:all, plugin_data: snapshot.plugins, config: config)
     assert Enum.any?(definitions, &(&1["name"] == "echo__remember"))
@@ -357,7 +368,9 @@ defmodule Nex.Agent.PluginRuntimePrimitivesTest do
 
     plugin_data =
       snapshot.plugins
-      |> Map.put(:active_mcp_servers, [ServerManager.plugin_server_id("workspace:demo-echo", "echo_mcp")])
+      |> Map.put(:active_mcp_servers, [
+        ServerManager.plugin_server_id("workspace:demo-echo", "echo_mcp")
+      ])
 
     assert {:ok, %{"status" => "written"}} =
              Registry.execute("echo__remember", %{"source" => "local"}, %{
@@ -372,7 +385,10 @@ defmodule Nex.Agent.PluginRuntimePrimitivesTest do
              })
   end
 
-  test "malformed plugin module contribution does not crash registry", %{workspace: workspace, config: config} do
+  test "malformed plugin module contribution does not crash registry", %{
+    workspace: workspace,
+    config: config
+  } do
     File.mkdir_p!(Path.join(workspace, "plugins/bad-plugin"))
 
     File.write!(
@@ -405,15 +421,26 @@ defmodule Nex.Agent.PluginRuntimePrimitivesTest do
         })
       )
 
-    assert {:ok, _snapshot} = Runtime.reload(workspace: workspace, config_loader: fn _ -> config end)
-    assert Registry.definitions(:all, config: config) |> is_list()
-    refute Enum.any?(Registry.definitions(:all, config: config), &(&1["name"] == "bad_plugin_tool"))
+    assert {:ok, _snapshot} =
+             Runtime.reload(workspace: workspace, config_loader: fn _ -> config end)
 
-    assert {:error, message} = Registry.execute("bad_plugin_tool", %{}, %{workspace: workspace, config: config})
+    assert Registry.definitions(:all, config: config) |> is_list()
+
+    refute Enum.any?(
+             Registry.definitions(:all, config: config),
+             &(&1["name"] == "bad_plugin_tool")
+           )
+
+    assert {:error, message} =
+             Registry.execute("bad_plugin_tool", %{}, %{workspace: workspace, config: config})
+
     assert message =~ "Unknown tool: bad_plugin_tool"
   end
 
-  test "workspace file initialization uses sandbox filesystem authorization", %{workspace: workspace, config: config} do
+  test "workspace file initialization uses sandbox filesystem authorization", %{
+    workspace: workspace,
+    config: config
+  } do
     File.mkdir_p!(Path.join(workspace, "plugins/read-only-file"))
 
     File.write!(
@@ -453,12 +480,21 @@ defmodule Nex.Agent.PluginRuntimePrimitivesTest do
 
     target = Path.join(workspace, "plugin_data/readonly/state.json")
 
-    assert {:ok, snapshot} = Runtime.reload(workspace: workspace, config_loader: fn _ -> config end)
-    assert Enum.any?(snapshot.plugins.contributions.workspace_files, &(&1["id"] == "readonly.state"))
+    assert {:ok, snapshot} =
+             Runtime.reload(workspace: workspace, config_loader: fn _ -> config end)
+
+    assert Enum.any?(
+             snapshot.plugins.contributions.workspace_files,
+             &(&1["id"] == "readonly.state")
+           )
+
     refute File.exists?(target)
   end
 
-  test "workspace file default allow still honors explicit deny rule", %{workspace: workspace, config: config} do
+  test "workspace file default allow still honors explicit deny rule", %{
+    workspace: workspace,
+    config: config
+  } do
     File.mkdir_p!(Path.join(workspace, "plugins/denied-file"))
 
     File.write!(
@@ -515,12 +551,21 @@ defmodule Nex.Agent.PluginRuntimePrimitivesTest do
         })
       )
 
-    assert {:ok, snapshot} = Runtime.reload(workspace: workspace, config_loader: fn _ -> config end)
-    assert Enum.any?(snapshot.plugins.contributions.workspace_files, &(&1["id"] == "denied.state"))
+    assert {:ok, snapshot} =
+             Runtime.reload(workspace: workspace, config_loader: fn _ -> config end)
+
+    assert Enum.any?(
+             snapshot.plugins.contributions.workspace_files,
+             &(&1["id"] == "denied.state")
+           )
+
     refute File.exists?(target)
   end
 
-  test "workspace file watch paths cannot escape workspace", %{workspace: workspace, config: config} do
+  test "workspace file watch paths cannot escape workspace", %{
+    workspace: workspace,
+    config: config
+  } do
     File.mkdir_p!(Path.join(workspace, "plugins/escaping-watch"))
 
     File.write!(
@@ -554,11 +599,19 @@ defmodule Nex.Agent.PluginRuntimePrimitivesTest do
         })
       )
 
-    assert {:ok, snapshot} = Runtime.reload(workspace: workspace, config_loader: fn _ -> config end)
-    refute Enum.any?(PluginWorkspaceFiles.watch_paths(workspace, snapshot.plugins), &String.contains?(&1, "/escape/state.json"))
+    assert {:ok, snapshot} =
+             Runtime.reload(workspace: workspace, config_loader: fn _ -> config end)
+
+    refute Enum.any?(
+             PluginWorkspaceFiles.watch_paths(workspace, snapshot.plugins),
+             &String.contains?(&1, "/escape/state.json")
+           )
   end
 
-  test "plugin MCP connect deny rule overrides config default allow", %{workspace: workspace, config: config} do
+  test "plugin MCP connect deny rule overrides config default allow", %{
+    workspace: workspace,
+    config: config
+  } do
     server_id = ServerManager.plugin_server_id("workspace:demo-echo", "echo_mcp")
 
     deny_rule = %{
@@ -583,7 +636,8 @@ defmodule Nex.Agent.PluginRuntimePrimitivesTest do
       start_supervised!({Approval, name: Approval})
     end
 
-    assert {:ok, snapshot} = Runtime.reload(workspace: workspace, config_loader: fn _ -> config end)
+    assert {:ok, snapshot} =
+             Runtime.reload(workspace: workspace, config_loader: fn _ -> config end)
 
     refute server_id in snapshot.plugins.active_mcp_servers
     refute Enum.any?(snapshot.tools.definitions_all, &(&1["name"] == "echo__remote"))

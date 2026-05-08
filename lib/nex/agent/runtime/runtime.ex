@@ -12,6 +12,7 @@ defmodule Nex.Agent.Runtime do
     Capability.Hooks,
     Extension.Plugin,
     Runtime.PluginWorkspaceFiles,
+    Tasks.Projector,
     Capability.Skills,
     Runtime.Workspace
   }
@@ -29,6 +30,7 @@ defmodule Nex.Agent.Runtime do
     :prompt_builder,
     :tool_definitions_builder,
     :hooks_builder,
+    :tasks_builder,
     :plugins_builder,
     :skills_builder,
     subscribers: %{}
@@ -83,6 +85,7 @@ defmodule Nex.Agent.Runtime do
       tool_definitions_builder:
         Keyword.get(opts, :tool_definitions_builder, &ToolRegistry.definitions/2),
       hooks_builder: Keyword.get(opts, :hooks_builder, &Hooks.load/1),
+      tasks_builder: Keyword.get(opts, :tasks_builder, &Projector.runtime_data/1),
       plugins_builder: Keyword.get(opts, :plugins_builder, &Plugin.runtime_data/1),
       skills_builder: Keyword.get(opts, :skills_builder, &Skills.runtime_data/1)
     }
@@ -228,7 +231,7 @@ defmodule Nex.Agent.Runtime do
         definitions_subagent =
           optional_tool_definitions(state, opts, :subagent, definition_opts.(:subagent))
 
-        definitions_cron = optional_tool_definitions(state, opts, :cron, definition_opts.(:cron))
+        definitions_task = optional_tool_definitions(state, opts, :task, definition_opts.(:task))
 
         hooks_data =
           optional_runtime_data(
@@ -236,6 +239,19 @@ defmodule Nex.Agent.Runtime do
             fallback_hooks_data(state.snapshot),
             fn ->
               call_builder(hooks_builder(opts, state), [
+                opts
+                |> Keyword.put(:workspace, workspace)
+                |> Keyword.put(:plugin_data, plugins_data)
+              ])
+            end
+          )
+
+        tasks_data =
+          optional_runtime_data(
+            :tasks,
+            fallback_tasks_data(state.snapshot),
+            fn ->
+              call_builder(tasks_builder(opts, state), [
                 opts
                 |> Keyword.put(:workspace, workspace)
                 |> Keyword.put(:plugin_data, plugins_data)
@@ -258,9 +274,9 @@ defmodule Nex.Agent.Runtime do
           definitions_all: definitions_all,
           definitions_follow_up: definitions_follow_up,
           definitions_subagent: definitions_subagent,
-          definitions_cron: definitions_cron,
+          definitions_task: definitions_task,
           hash:
-            hash({definitions_all, definitions_follow_up, definitions_subagent, definitions_cron})
+            hash({definitions_all, definitions_follow_up, definitions_subagent, definitions_task})
         }
 
         subagent_definitions = SubagentProfiles.definitions(subagent_profiles)
@@ -292,6 +308,7 @@ defmodule Nex.Agent.Runtime do
            subagents: subagents_data,
            skills: skills_data,
            hooks: hooks_data,
+           tasks: tasks_data,
            plugins: plugins_data,
            workbench: workbench_data,
            changed_paths: changed_paths(opts)
@@ -476,6 +493,8 @@ defmodule Nex.Agent.Runtime do
 
   defp hooks_builder(opts, state), do: Keyword.get(opts, :hooks_builder, state.hooks_builder)
 
+  defp tasks_builder(opts, state), do: Keyword.get(opts, :tasks_builder, state.tasks_builder)
+
   defp plugins_builder(opts, state),
     do: Keyword.get(opts, :plugins_builder, state.plugins_builder)
 
@@ -516,6 +535,7 @@ defmodule Nex.Agent.Runtime do
     enabled = Map.get(plugins, :enabled) || Map.get(plugins, "enabled") || []
     contributions = normalize_plugin_contributions(plugins)
     diagnostics = Map.get(plugins, :diagnostics) || Map.get(plugins, "diagnostics") || []
+
     active_mcp_servers =
       Map.get(plugins, :active_mcp_servers) || Map.get(plugins, "active_mcp_servers") || []
 
@@ -569,8 +589,8 @@ defmodule Nex.Agent.Runtime do
   defp fallback_tool_definitions(%Snapshot{tools: tools}, :subagent),
     do: Map.get(tools, :definitions_subagent, [])
 
-  defp fallback_tool_definitions(%Snapshot{tools: tools}, :cron),
-    do: Map.get(tools, :definitions_cron, [])
+  defp fallback_tool_definitions(%Snapshot{tools: tools}, :task),
+    do: Map.get(tools, :definitions_task, [])
 
   defp fallback_tool_definitions(_snapshot, _surface), do: []
 
@@ -578,6 +598,11 @@ defmodule Nex.Agent.Runtime do
 
   defp fallback_hooks_data(_snapshot),
     do: %{entries: [], diagnostics: [], path: nil, version: 1, hash: hash({[], [], 1})}
+
+  defp fallback_tasks_data(%Snapshot{tasks: %{} = tasks}), do: tasks
+
+  defp fallback_tasks_data(_snapshot),
+    do: %{definitions: [], diagnostics: [], path: nil, hash: hash({[], []})}
 
   defp fallback_workbench_data(%Snapshot{workbench: %{} = workbench}), do: workbench
 
@@ -603,7 +628,7 @@ defmodule Nex.Agent.Runtime do
       skills: [],
       commands: [],
       hooks: [],
-      jobs: [],
+      tasks: [],
       workspace_files: [],
       mcp_servers: []
     }

@@ -10,7 +10,7 @@ defmodule Nex.Agent.Interface.Workbench.ServerTest do
   alias Nex.Agent.Runtime.Snapshot
 
   alias Nex.Agent.{
-    Capability.Cron,
+    Tasks,
     Conversation.RunControl,
     Runtime,
     Conversation.Session,
@@ -29,8 +29,8 @@ defmodule Nex.Agent.Interface.Workbench.ServerTest do
       start_supervised!({RunControl, name: RunControl})
     end
 
-    if Process.whereis(Cron) == nil do
-      start_supervised!({Cron, name: Cron})
+    if Process.whereis(Tasks) == nil do
+      start_supervised!({Tasks, name: Tasks})
     end
 
     workspace =
@@ -40,9 +40,9 @@ defmodule Nex.Agent.Interface.Workbench.ServerTest do
       )
 
     on_exit(fn ->
-      if Process.whereis(Cron) do
-        Cron.list_jobs(workspace: workspace)
-        |> Enum.each(fn job -> Cron.remove_job(job.id, workspace: workspace) end)
+      if Process.whereis(Tasks) do
+        Tasks.list(workspace: workspace)
+        |> Enum.each(fn task -> Tasks.delete(task.id, workspace: workspace) end)
       end
 
       File.rm_rf!(workspace)
@@ -214,7 +214,7 @@ defmodule Nex.Agent.Interface.Workbench.ServerTest do
     assert shell =~ "Nex Workbench"
     assert shell =~ "Self Evolution"
     assert shell =~ "Sessions"
-    assert shell =~ "Scheduled Tasks"
+    assert shell =~ "Tasks"
     assert shell =~ "Skills"
     assert shell =~ "sandbox = \"allow-scripts\""
     assert shell =~ "id=\"reload-app\""
@@ -243,7 +243,7 @@ defmodule Nex.Agent.Interface.Workbench.ServerTest do
     assert shell =~ "/api/workbench/apps"
     assert shell =~ "/api/workbench/evolution"
     assert shell =~ "/api/workbench/sessions"
-    assert shell =~ "/api/workbench/scheduled-tasks"
+    assert shell =~ "/api/workbench/tasks"
     assert shell =~ "/api/workbench/skills"
 
     assert {200, frame} = get_raw(port, "/app-frame/notes")
@@ -253,7 +253,7 @@ defmodule Nex.Agent.Interface.Workbench.ServerTest do
     assert base_tag_position(frame, "notes") < stylesheet_position(frame)
     assert frame =~ "window.Nex"
     assert frame =~ "workbench.bridge.request"
-    assert frame =~ "tasks.scheduled.list"
+    assert frame =~ "tasks.list"
 
     assert {200, js_headers, js} = get_raw_with_headers(port, "/app-assets/notes/app.js")
     assert header_value(js_headers, "access-control-allow-origin") == "*"
@@ -496,24 +496,24 @@ defmodule Nex.Agent.Interface.Workbench.ServerTest do
     assert Session.model_override(Session.load(session_key, workspace: workspace)) == nil
   end
 
-  test "serves scheduled task system API without app permissions", %{workspace: workspace} do
+  test "serves task system API without app permissions", %{workspace: workspace} do
     pid = start_server!(snapshot(workspace))
     %{running: true, port: port} = Server.status(pid)
 
-    assert {200, %{"jobs" => [], "total" => 0, "status" => %{"total" => 0}}} =
-             get_json(port, "/api/workbench/scheduled-tasks")
+    assert {200, %{"tasks" => [], "total" => 0, "status" => %{"total" => 0}}} =
+             get_json(port, "/api/workbench/tasks")
 
     assert {200,
             %{
-              "job" => %{
-                "id" => job_id,
+              "task" => %{
+                "id" => task_id,
                 "name" => "Daily planning",
                 "message" => "Review today's active projects.",
                 "enabled" => true,
                 "schedule" => %{"type" => "every", "seconds" => 3600}
               }
             }} =
-             post_json(port, "/api/workbench/scheduled-tasks", %{
+             post_json(port, "/api/workbench/tasks", %{
                "name" => "Daily planning",
                "message" => "Review today's active projects.",
                "enabled" => true,
@@ -522,33 +522,33 @@ defmodule Nex.Agent.Interface.Workbench.ServerTest do
                "chat_id" => "chat-ops"
              })
 
-    assert {200, %{"total" => 1, "jobs" => [%{"id" => ^job_id}]}} =
-             get_json(port, "/api/workbench/scheduled-tasks?query=planning&status=enabled")
+    assert {200, %{"total" => 1, "tasks" => [%{"id" => ^task_id}]}} =
+             get_json(port, "/api/workbench/tasks?query=planning&status=enabled")
 
     assert {200,
             %{
-              "job" => %{
-                "id" => ^job_id,
+              "task" => %{
+                "id" => ^task_id,
                 "message" => "Run the morning review.",
                 "schedule" => %{"type" => "cron", "expr" => "0 9 * * *"}
               }
             }} =
-             request_json(port, "PUT", "/api/workbench/scheduled-tasks/#{job_id}", %{
+             request_json(port, "PUT", "/api/workbench/tasks/#{task_id}", %{
                "message" => "Run the morning review.",
                "schedule" => %{"type" => "cron", "expr" => "0 9 * * *"}
              })
 
-    assert {200, %{"job" => %{"id" => ^job_id, "enabled" => false}}} =
-             post_json(port, "/api/workbench/scheduled-tasks/#{job_id}/disable", %{})
+    assert {200, %{"task" => %{"id" => ^task_id, "enabled" => false}}} =
+             post_json(port, "/api/workbench/tasks/#{task_id}/disable", %{})
 
-    assert {200, %{"job" => %{"id" => ^job_id, "enabled" => true}}} =
-             post_json(port, "/api/workbench/scheduled-tasks/#{job_id}/enable", %{})
+    assert {200, %{"task" => %{"id" => ^task_id, "enabled" => true}}} =
+             post_json(port, "/api/workbench/tasks/#{task_id}/enable", %{})
 
-    assert {200, %{"removed" => true, "job_id" => ^job_id}} =
-             request_json(port, "DELETE", "/api/workbench/scheduled-tasks/#{job_id}")
+    assert {200, %{"removed" => true, "task_id" => ^task_id}} =
+             request_json(port, "DELETE", "/api/workbench/tasks/#{task_id}")
 
-    assert {200, %{"jobs" => [], "total" => 0}} =
-             get_json(port, "/api/workbench/scheduled-tasks")
+    assert {200, %{"tasks" => [], "total" => 0}} =
+             get_json(port, "/api/workbench/tasks")
   end
 
   test "serves visual config API and writes structured config changes", %{
@@ -737,7 +737,6 @@ defmodule Nex.Agent.Interface.Workbench.ServerTest do
   test "serves self evolution energy candidates detail and confirmed actions", %{
     workspace: workspace
   } do
-
     assert {:ok, evidence} =
              Nex.Agent.Observe.ControlPlane.Log.warning(
                "runner.tool.call.failed",
@@ -823,7 +822,6 @@ defmodule Nex.Agent.Interface.Workbench.ServerTest do
   end
 
   test "self evolution apply uses candidate execution lane", %{workspace: workspace} do
-
     assert {:ok, _} =
              Nex.Agent.Observe.ControlPlane.Log.info(
                "evolution.candidate.proposed",

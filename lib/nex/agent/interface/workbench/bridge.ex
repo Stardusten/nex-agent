@@ -3,7 +3,7 @@ defmodule Nex.Agent.Interface.Workbench.Bridge do
 
   alias Nex.Agent.Observe.ControlPlane.{Log, Query}
   alias Nex.Agent.Runtime.Snapshot
-  alias Nex.Agent.Interface.Workbench.{Notes, Permissions, ScheduledTasks}
+  alias Nex.Agent.Interface.Workbench.{Notes, Permissions, Tasks}
   require Log
 
   @message_limit 500
@@ -19,14 +19,13 @@ defmodule Nex.Agent.Interface.Workbench.Bridge do
     "notes.file.write" => "notes:write",
     "notes.file.delete" => "notes:write",
     "notes.search" => "notes:read",
-    "tasks.scheduled.list" => "tasks:read",
-    "tasks.scheduled.status" => "tasks:read",
-    "tasks.scheduled.add" => "tasks:write",
-    "tasks.scheduled.update" => "tasks:write",
-    "tasks.scheduled.remove" => "tasks:write",
-    "tasks.scheduled.enable" => "tasks:write",
-    "tasks.scheduled.disable" => "tasks:write",
-    "tasks.scheduled.run" => "tasks:write"
+    "tasks.list" => "tasks:read",
+    "tasks.status" => "tasks:read",
+    "tasks.upsert" => "tasks:write",
+    "tasks.delete" => "tasks:write",
+    "tasks.enable" => "tasks:write",
+    "tasks.disable" => "tasks:write",
+    "tasks.run" => "tasks:write"
   }
 
   @spec call(String.t(), map(), Snapshot.t() | keyword()) :: map()
@@ -156,19 +155,18 @@ defmodule Nex.Agent.Interface.Workbench.Bridge do
   defp execute("notes.file.write", params, opts), do: Notes.file_write(params, opts)
   defp execute("notes.file.delete", params, opts), do: Notes.file_delete(params, opts)
   defp execute("notes.search", params, opts), do: Notes.search(params, opts)
-  defp execute("tasks.scheduled.list", params, opts), do: ScheduledTasks.list(params, opts)
-  defp execute("tasks.scheduled.status", params, opts), do: ScheduledTasks.status(params, opts)
-  defp execute("tasks.scheduled.add", params, opts), do: ScheduledTasks.add(params, opts)
-  defp execute("tasks.scheduled.update", params, opts), do: ScheduledTasks.update(params, opts)
-  defp execute("tasks.scheduled.remove", params, opts), do: ScheduledTasks.remove(params, opts)
+  defp execute("tasks.list", params, opts), do: Tasks.list(params, opts)
+  defp execute("tasks.status", params, opts), do: Tasks.status(params, opts)
+  defp execute("tasks.upsert", params, opts), do: Tasks.upsert(params, opts)
+  defp execute("tasks.delete", params, opts), do: Tasks.delete(params, opts)
 
-  defp execute("tasks.scheduled.enable", params, opts),
-    do: ScheduledTasks.enable(params, opts, true)
+  defp execute("tasks.enable", params, opts),
+    do: Tasks.enable(params, opts, true)
 
-  defp execute("tasks.scheduled.disable", params, opts),
-    do: ScheduledTasks.enable(params, opts, false)
+  defp execute("tasks.disable", params, opts),
+    do: Tasks.enable(params, opts, false)
 
-  defp execute("tasks.scheduled.run", params, opts), do: ScheduledTasks.run(params, opts)
+  defp execute("tasks.run", params, opts), do: Tasks.run(params, opts)
 
   defp execute(_method, _params, _opts),
     do: {:error, "unknown_method", "bridge method is not allowed"}

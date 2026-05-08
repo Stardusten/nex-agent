@@ -11,7 +11,7 @@ defmodule Nex.Agent.Capability.Tool.Core.Message do
   def name, do: "message"
   def description, do: "Send a message to the user immediately."
   def category, do: :base
-  def surfaces, do: [:all, :base, :cron]
+  def surfaces, do: [:all, :base, :task]
 
   def definition do
     %{

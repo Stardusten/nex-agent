@@ -8,7 +8,7 @@ defmodule Nex.Agent.Tool.Task do
   def name, do: "task"
   def description, do: "Manage personal tasks, reminders, follow-ups, and summaries."
   def category, do: :base
-  def surfaces, do: [:all, :base, :cron]
+  def surfaces, do: [:all, :base, :task]
 
   def definition do
     %{

@@ -283,12 +283,12 @@ defmodule Nex.Agent.ToolAlignmentTest do
     all_names = Registry.definitions(:all) |> Enum.map(& &1["name"])
     follow_up_names = Registry.definitions(:follow_up) |> Enum.map(& &1["name"])
     subagent_names = Registry.definitions(:subagent) |> Enum.map(& &1["name"])
-    cron_names = Registry.definitions(:cron) |> Enum.map(& &1["name"])
+    task_names = Registry.definitions(:task) |> Enum.map(& &1["name"])
 
     assert "hook" in all_names
     refute "hook" in follow_up_names
     refute "hook" in subagent_names
-    refute "hook" in cron_names
+    refute "hook" in task_names
     refute "session_prompt" in all_names
   end
 
@@ -389,7 +389,7 @@ defmodule Nex.Agent.ToolAlignmentTest do
           ),
         definitions_follow_up: [],
         definitions_subagent: [],
-        definitions_cron: [],
+        definitions_task: [],
         hash: "test"
       }
     }

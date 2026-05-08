@@ -12,7 +12,7 @@ defmodule Nex.Agent.Extension.Plugin.Contribution do
     "skills" => {"skills", "skill"},
     "commands" => {"commands", "command"},
     "hooks" => {"hooks", "hook"},
-    "jobs" => {"jobs", "job"},
+    "tasks" => {"tasks", "task"},
     "workspaceFiles" => {"workspace_files", "workspace_file"},
     "mcpServers" => {"mcp_servers", "mcp_server"}
   }
@@ -45,7 +45,7 @@ defmodule Nex.Agent.Extension.Plugin.Contribution do
       "skills" => [],
       "commands" => [],
       "hooks" => [],
-      "jobs" => [],
+      "tasks" => [],
       "workspace_files" => [],
       "mcp_servers" => []
     }
@@ -109,7 +109,7 @@ defmodule Nex.Agent.Extension.Plugin.Contribution do
   defp contribution_id("skills", attrs, _index), do: normalized_attr(attrs, "id")
   defp contribution_id("commands", attrs, _index), do: normalized_attr(attrs, "name")
   defp contribution_id("hooks", attrs, _index), do: normalized_attr(attrs, "id")
-  defp contribution_id("jobs", attrs, _index), do: normalized_attr(attrs, "id")
+  defp contribution_id("tasks", attrs, _index), do: normalized_attr(attrs, "id")
   defp contribution_id("workspaceFiles", attrs, _index), do: normalized_attr(attrs, "id")
   defp contribution_id("mcpServers", attrs, _index), do: normalized_attr(attrs, "id")
   defp contribution_id(_kind, _attrs, index), do: Integer.to_string(index)

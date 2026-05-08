@@ -219,7 +219,7 @@ defmodule Nex.Agent.Conversation.InboundWorker do
 
   @impl true
   def handle_info({:async_result, key, run_id, {:ok, result, updated_agent}, payload}, state) do
-    from_cron = Map.get(payload.metadata, "_from_cron") == true
+    from_task = Map.get(payload.metadata, "_from_task") == true
 
     if current_owner_run?(state, key, run_id) and RunControl.finish_owner(run_id, result) == :ok do
       observe_owner_dispatch(
@@ -231,14 +231,14 @@ defmodule Nex.Agent.Conversation.InboundWorker do
       )
 
       state =
-        if from_cron, do: state, else: put_in(state.agents[key], updated_agent)
+        if from_task, do: state, else: put_in(state.agents[key], updated_agent)
 
       state = clear_active_task(state, key, run_id)
 
       {state, handled_by_stream?} =
         finalize_stream_session(state, stream_key(key, run_id), {:ok, result})
 
-      unless from_cron or handled_by_stream? do
+      unless from_task or handled_by_stream? do
         cond do
           suppress_outbound?(result) and empty_content?(result) ->
             publish_outbound(payload, @empty_message_text)
@@ -265,7 +265,7 @@ defmodule Nex.Agent.Conversation.InboundWorker do
 
   @impl true
   def handle_info({:async_result, key, run_id, {:error, reason, updated_agent}, payload}, state) do
-    from_cron = Map.get(payload.metadata, "_from_cron") == true
+    from_task = Map.get(payload.metadata, "_from_task") == true
 
     if current_owner_run?(state, key, run_id) and RunControl.fail_owner(run_id, reason) == :ok do
       observe_owner_dispatch(
@@ -277,7 +277,7 @@ defmodule Nex.Agent.Conversation.InboundWorker do
       )
 
       state =
-        if from_cron, do: state, else: put_in(state.agents[key], updated_agent)
+        if from_task, do: state, else: put_in(state.agents[key], updated_agent)
 
       state = clear_active_task(state, key, run_id)
       formatted_reason = streaming_error_message(reason)
@@ -289,7 +289,7 @@ defmodule Nex.Agent.Conversation.InboundWorker do
           {:error, formatted_reason, reason}
         )
 
-      unless from_cron or handled_by_stream? or suppress_outbound?(reason) do
+      unless from_task or handled_by_stream? or suppress_outbound?(reason) do
         publish_outbound(payload, "Error: #{formatted_reason}")
       end
 
@@ -1130,15 +1130,15 @@ defmodule Nex.Agent.Conversation.InboundWorker do
 
     {:ok, agent, state} = ensure_agent(state, key, session_key, workspace)
     parent = self()
-    from_cron = get_in(envelope.metadata, ["_from_cron"]) == true
+    from_task = get_in(envelope.metadata, ["_from_task"]) == true
     metadata = extract_metadata(envelope)
     stream_key = stream_key(key, run.id)
 
-    cron_opts =
-      if from_cron,
+    task_opts =
+      if from_task,
         do: [
           history_limit: 0,
-          tools_filter: :cron,
+          tools_filter: :task,
           skip_consolidation: true,
           max_iterations: 3,
           skip_skills: true
@@ -1148,7 +1148,7 @@ defmodule Nex.Agent.Conversation.InboundWorker do
     {:ok, pid} =
       Task.Supervisor.start_child(Nex.Agent.TaskSupervisor, fn ->
         stream_sink =
-          if from_cron do
+          if from_task do
             nil
           else
             build_stream_sink(parent, stream_key, channel, chat_id, envelope, state.config)
@@ -1181,7 +1181,7 @@ defmodule Nex.Agent.Conversation.InboundWorker do
               schedule_memory_refresh: false
             ]
             |> maybe_put_opt(:media, prompt_envelope.attachments)
-            |> Kernel.++(cron_opts)
+            |> Kernel.++(task_opts)
           )
 
         send(parent, {:async_result, key, run.id, result, prompt_envelope})
@@ -1736,7 +1736,6 @@ defmodule Nex.Agent.Conversation.InboundWorker do
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
   defp maybe_put_opt(opts, _key, nil), do: opts
   defp maybe_put_opt(opts, key, value), do: Keyword.put(opts, key, value)
-
 
   # Suppress LLM outputs that are clearly not real replies to the user.
   # Uses structural checks rather than keyword blocklists.

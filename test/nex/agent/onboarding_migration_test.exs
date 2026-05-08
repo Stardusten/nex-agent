@@ -60,7 +60,7 @@ defmodule Nex.Agent.App.OnboardingMigrationTest do
     )
 
     File.write!(
-      Path.join(workspace, "tasks/cron_jobs.json"),
+      Path.join(workspace, "tasks/tasks.json"),
       Jason.encode!([
         %{
           "id" => "current-cron-job",
@@ -112,19 +112,18 @@ defmodule Nex.Agent.App.OnboardingMigrationTest do
     assert File.exists?(Path.join(workspace, "sessions/legacy-session/messages.jsonl"))
     assert File.exists?(Path.join(workspace, "tools/legacy-tool/tool.ex"))
 
-    cron_jobs =
+    tasks =
       workspace
-      |> Path.join("tasks/cron_jobs.json")
+      |> Path.join("tasks/tasks.json")
       |> File.read!()
       |> Jason.decode!()
 
-    assert Enum.any?(cron_jobs, &(&1["name"] == "legacy-daily-summary"))
-    assert Enum.any?(cron_jobs, &(&1["name"] == "current-weekly-summary"))
+    assert Enum.any?(tasks, &(&1["name"] == "legacy-daily-summary"))
+    assert Enum.any?(tasks, &(&1["name"] == "current-weekly-summary"))
 
-    legacy_job = Enum.find(cron_jobs, &(&1["name"] == "legacy-daily-summary"))
+    legacy_job = Enum.find(tasks, &(&1["name"] == "legacy-daily-summary"))
     assert legacy_job["message"] =~ "Create a daily personal summary"
     assert legacy_job["message"] =~ "action=`summary`"
-
   end
 
   test "new workspace templates do not encode identity replacement", %{workspace: workspace} do

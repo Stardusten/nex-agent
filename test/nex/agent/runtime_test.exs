@@ -79,20 +79,35 @@ defmodule Nex.Agent.RuntimeTest do
             %{
               "id" => "echo.after_turn",
               "event" => "conversation.turn.finished",
-              "action" => %{"type" => "enqueue_job", "job" => "echo.flush"}
+              "action" => %{"type" => "enqueue_task", "task" => "echo.flush"}
             }
           ],
-          "jobs" => [
+          "tasks" => [
             %{
               "id" => "echo.flush",
-              "action" => %{"type" => "tool_call", "tool" => "echo__remember", "args" => %{"source" => "{{turn.prompt}}"}}
+              "action" => %{
+                "type" => "tool_call",
+                "tool" => "echo__remember",
+                "args" => %{"source" => "{{turn.prompt}}"}
+              }
             }
           ],
           "workspaceFiles" => [
-            %{"id" => "echo.state", "path" => "plugin_data/echo/state.json", "kind" => "file", "onMissing" => "create", "watch" => true}
+            %{
+              "id" => "echo.state",
+              "path" => "plugin_data/echo/state.json",
+              "kind" => "file",
+              "onMissing" => "create",
+              "watch" => true
+            }
           ],
           "mcpServers" => [
-            %{"id" => "echo_mcp", "command" => "sh", "args" => ["-c", "exit 0"]}
+            %{
+              "id" => "echo_mcp",
+              "transport" => "stdio",
+              "command" => "sh",
+              "args" => ["-c", "exit 0"]
+            }
           ]
         }
       })
@@ -104,12 +119,17 @@ defmodule Nex.Agent.RuntimeTest do
     Application.put_env(:nex_agent, :config_path, Path.join(workspace, "config.json"))
     Skills.load()
 
-    Runtime.reload(workspace: workspace, changed_paths: [])
+    if Process.whereis(Runtime) == nil do
+      start_supervised!({Runtime, workspace: workspace, changed_paths: []})
+    else
+      assert {:ok, %Snapshot{workspace: ^workspace}} =
+               Runtime.reload(workspace: workspace, changed_paths: [])
+    end
 
     on_exit(fn ->
       restore_env(:workspace_path, previous_workspace)
       restore_env(:config_path, previous_config_path)
-      File.rm_rf!(workspace)
+      File.rm_rf(workspace)
     end)
 
     {:ok, workspace: workspace}
@@ -136,7 +156,7 @@ defmodule Nex.Agent.RuntimeTest do
     assert is_binary(snapshot.commands.hash)
     assert snapshot.tools.definitions_all != []
     assert snapshot.tools.definitions_subagent != []
-    assert snapshot.tools.definitions_cron != []
+    assert snapshot.tools.definitions_task != []
     assert is_binary(snapshot.tools.hash)
     assert Map.has_key?(snapshot.subagents.profiles, "general")
     assert Enum.any?(snapshot.subagents.definitions, &(&1["name"] == "code_reviewer"))
@@ -297,7 +317,8 @@ defmodule Nex.Agent.RuntimeTest do
 
     assert Enum.any?(snapshot.plugins.contributions.hooks, &(&1["id"] == "echo.prompt"))
     assert Enum.any?(snapshot.plugins.contributions.hooks, &(&1["id"] == "echo.after_turn"))
-    assert Enum.any?(snapshot.plugins.contributions.jobs, &(&1["id"] == "echo.flush"))
+    assert Enum.any?(snapshot.plugins.contributions.tasks, &(&1["id"] == "echo.flush"))
+    assert Enum.any?(snapshot.tasks.definitions, &(&1["id"] == "echo.flush"))
     assert Enum.any?(snapshot.plugins.contributions.workspace_files, &(&1["id"] == "echo.state"))
     assert Enum.any?(snapshot.plugins.contributions.mcp_servers, &(&1["id"] == "echo_mcp"))
     assert File.exists?(Path.join(workspace, "plugin_data/echo/state.json"))
@@ -447,7 +468,7 @@ defmodule Nex.Agent.RuntimeTest do
                tool_definitions_builder: tool_builder
              )
 
-    for filter <- [:all, :follow_up, :subagent, :cron] do
+    for filter <- [:all, :follow_up, :subagent, :task] do
       assert_receive {:tool_definition_opts, ^filter,
                       %{
                         model_key: "hy3-preview",

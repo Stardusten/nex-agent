@@ -266,7 +266,7 @@ defmodule Mix.Tasks.Nex.Agent do
 
       Mix.shell().info("Core services:")
 
-      Enum.each([:bus, :cron, :heartbeat, :tool_registry, :inbound_worker, :subagent], fn key ->
+      Enum.each([:bus, :tasks, :heartbeat, :tool_registry, :inbound_worker, :subagent], fn key ->
         Mix.shell().info(
           "  #{service_label(key)}: #{if(Map.get(services, key), do: "up", else: "down")}"
         )
@@ -688,7 +688,7 @@ defmodule Mix.Tasks.Nex.Agent do
   end
 
   defp service_label(:bus), do: "Bus"
-  defp service_label(:cron), do: "Cron"
+  defp service_label(:tasks), do: "Tasks"
   defp service_label(:heartbeat), do: "Heartbeat"
   defp service_label(:tool_registry), do: "Registry"
   defp service_label(:inbound_worker), do: "InboundWorker"

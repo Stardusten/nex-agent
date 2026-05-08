@@ -9,7 +9,7 @@ defmodule Nex.Agent.Observe.Admin do
     Self.CodeUpgrade,
     Runtime,
     Runtime.Config,
-    Capability.Cron,
+    Tasks,
     Self.Evolution,
     Interface.Gateway,
     App.Heartbeat,
@@ -97,7 +97,7 @@ defmodule Nex.Agent.Observe.Admin do
       recent_sessions: Enum.take(list_sessions(opts), 6),
       code: code_summary(opts),
       workbench: workbench_summary(opts),
-      cron: cron_status(opts)
+      task_runtime: task_runtime_status(opts)
     }
   end
 
@@ -167,8 +167,8 @@ defmodule Nex.Agent.Observe.Admin do
     %{
       tasks: personal_tasks_list(opts),
       summary: tasks_summary(opts),
-      cron_jobs: list_cron_jobs(opts),
-      cron_status: cron_status(opts)
+      runtime_tasks: list_runtime_tasks(opts),
+      task_runtime_status: task_runtime_status(opts)
     }
   end
 
@@ -340,14 +340,14 @@ defmodule Nex.Agent.Observe.Admin do
     end
   end
 
-  @spec enable_cron_job(String.t(), boolean(), keyword()) :: {:ok, map()} | {:error, term()}
-  def enable_cron_job(job_id, enabled, opts \\ []) do
-    Cron.enable_job(job_id, enabled, workspace_opts(opts))
+  @spec enable_task(String.t(), boolean(), keyword()) :: {:ok, Tasks.t()} | {:error, term()}
+  def enable_task(task_id, enabled, opts \\ []) do
+    Tasks.enable(task_id, enabled, workspace_opts(opts))
   end
 
-  @spec run_cron_job(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
-  def run_cron_job(job_id, opts \\ []) do
-    Cron.run_job(job_id, workspace_opts(opts))
+  @spec run_task(String.t(), keyword()) :: {:ok, Tasks.t()} | {:error, term()}
+  def run_task(task_id, opts \\ []) do
+    Tasks.run_now(task_id, %{}, workspace_opts(opts))
   end
 
   @spec start_gateway() :: :ok | {:error, term()}
@@ -627,28 +627,28 @@ defmodule Nex.Agent.Observe.Admin do
   defp session_key_from_list([first | _]), do: first.key
   defp session_key_from_list([]), do: nil
 
-  defp list_cron_jobs(opts) do
-    if Process.whereis(Cron) do
-      Cron.list_jobs(workspace_opts(opts))
+  defp list_runtime_tasks(opts) do
+    if Process.whereis(Tasks) do
+      Tasks.list(workspace_opts(opts))
     else
       opts
       |> workspace_opts()
       |> Workspace.tasks_dir()
-      |> Path.join("cron_jobs.json")
+      |> Path.join("tasks.json")
       |> read_json_array()
     end
   end
 
-  defp cron_status(opts) do
-    if Process.whereis(Cron) do
-      Cron.status(workspace_opts(opts))
+  defp task_runtime_status(opts) do
+    if Process.whereis(Tasks) do
+      Tasks.status(workspace_opts(opts))
     else
-      jobs = list_cron_jobs(opts)
+      tasks = list_runtime_tasks(opts)
 
       %{
-        total: length(jobs),
-        enabled: Enum.count(jobs, &truthy(Map.get(&1, "enabled"))),
-        disabled: Enum.count(jobs, &(not truthy(Map.get(&1, "enabled")))),
+        total: length(tasks),
+        enabled: Enum.count(tasks, &truthy(Map.get(&1, "enabled"))),
+        disabled: Enum.count(tasks, &(not truthy(Map.get(&1, "enabled")))),
         next_wakeup: nil,
         next_wakeup_in: nil
       }

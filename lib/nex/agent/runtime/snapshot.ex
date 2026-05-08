@@ -26,7 +26,7 @@ defmodule Nex.Agent.Runtime.Snapshot do
             definitions_all: [map()],
             definitions_follow_up: [map()],
             definitions_subagent: [map()],
-            definitions_cron: [map()],
+            definitions_task: [map()],
             hash: String.t()
           },
           subagents: %{
@@ -47,6 +47,12 @@ defmodule Nex.Agent.Runtime.Snapshot do
             version: pos_integer(),
             hash: String.t()
           },
+          tasks: %{
+            definitions: [map()],
+            diagnostics: [map()],
+            hash: String.t(),
+            path: String.t() | nil
+          },
           plugins: %{
             manifests: [map()],
             enabled: [String.t()],
@@ -57,7 +63,7 @@ defmodule Nex.Agent.Runtime.Snapshot do
               skills: [map()],
               commands: [map()],
               hooks: [map()],
-              jobs: [map()],
+              tasks: [map()],
               workspace_files: [map()],
               mcp_servers: [map()]
             },
@@ -92,7 +98,7 @@ defmodule Nex.Agent.Runtime.Snapshot do
               definitions_all: [],
               definitions_follow_up: [],
               definitions_subagent: [],
-              definitions_cron: [],
+              definitions_task: [],
               hash: ""
             },
             subagents: %{
@@ -113,20 +119,26 @@ defmodule Nex.Agent.Runtime.Snapshot do
               version: 1,
               hash: ""
             },
+            tasks: %{
+              definitions: [],
+              diagnostics: [],
+              hash: "",
+              path: nil
+            },
             plugins: %{
               manifests: [],
               enabled: [],
               contributions: %{
-              channels: [],
-              providers: [],
-              tools: [],
-              skills: [],
-              commands: [],
-              hooks: [],
-              jobs: [],
-              workspace_files: [],
-              mcp_servers: []
-            },
+                channels: [],
+                providers: [],
+                tools: [],
+                skills: [],
+                commands: [],
+                hooks: [],
+                tasks: [],
+                workspace_files: [],
+                mcp_servers: []
+              },
               diagnostics: [],
               hash: ""
             },

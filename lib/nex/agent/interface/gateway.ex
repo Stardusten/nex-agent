@@ -116,7 +116,7 @@ defmodule Nex.Agent.Interface.Gateway do
       },
       services: %{
         bus: Process.whereis(Nex.Agent.App.Bus) != nil,
-        cron: Process.whereis(Nex.Agent.Capability.Cron) != nil,
+        tasks: Process.whereis(Nex.Agent.Tasks) != nil,
         heartbeat: Process.whereis(Nex.Agent.App.Heartbeat) != nil,
         tool_registry: Process.whereis(Nex.Agent.Capability.Tool.Registry) != nil,
         inbound_worker: Process.whereis(Nex.Agent.Conversation.InboundWorker) != nil,

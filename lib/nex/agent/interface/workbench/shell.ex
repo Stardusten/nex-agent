@@ -333,16 +333,13 @@ defmodule Nex.Agent.Interface.Workbench.Shell do
           search: (params = {}) => call("notes.search", params)
         }),
         tasks: Object.freeze({
-          scheduled: Object.freeze({
-            list: (params = {}) => call("tasks.scheduled.list", params),
-            status: () => call("tasks.scheduled.status", {}),
-            add: (params = {}) => call("tasks.scheduled.add", params),
-            update: (params = {}) => call("tasks.scheduled.update", params),
-            remove: (params = {}) => call("tasks.scheduled.remove", params),
-            enable: (params = {}) => call("tasks.scheduled.enable", params),
-            disable: (params = {}) => call("tasks.scheduled.disable", params),
-            run: (params = {}) => call("tasks.scheduled.run", params)
-          })
+          list: (params = {}) => call("tasks.list", params),
+          status: () => call("tasks.status", {}),
+          upsert: (params = {}) => call("tasks.upsert", params),
+          remove: (params = {}) => call("tasks.delete", params),
+          enable: (params = {}) => call("tasks.enable", params),
+          disable: (params = {}) => call("tasks.disable", params),
+          run: (params = {}) => call("tasks.run", params)
         })
       });
     })();

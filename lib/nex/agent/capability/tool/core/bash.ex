@@ -20,7 +20,7 @@ defmodule Nex.Agent.Capability.Tool.Core.Bash do
   def name, do: "bash"
   def description, do: "Execute a shell command"
   def category, do: :base
-  def surfaces, do: [:all, :base, :subagent, :cron]
+  def surfaces, do: [:all, :base, :subagent, :task]
 
   def definition do
     %{
@@ -330,7 +330,11 @@ defmodule Nex.Agent.Capability.Tool.Core.Bash do
     %{}
     |> maybe_put_metadata("plugin_id", Map.get(ctx, :plugin_id) || Map.get(ctx, "plugin_id"))
     |> maybe_put_metadata("hook_id", Map.get(ctx, :hook_id) || Map.get(ctx, "hook_id"))
-    |> maybe_put_metadata("job_id", Map.get(ctx, :job_id) || Map.get(ctx, "job_id"))
+    |> maybe_put_metadata(
+      "task_run_id",
+      Map.get(ctx, :task_run_id) || Map.get(ctx, "task_run_id")
+    )
+    |> maybe_put_metadata("task_id", Map.get(ctx, :task_id) || Map.get(ctx, "task_id"))
     |> maybe_put_metadata("mcp_server", Map.get(ctx, :mcp_server) || Map.get(ctx, "mcp_server"))
   end
 

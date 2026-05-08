@@ -689,7 +689,9 @@ defmodule Nex.Agent.Capability.Tool.Registry do
          module <- Module.concat(String.split(module_name, ".")),
          {:module, ^module} <- Code.ensure_loaded(module),
          true <- function_exported?(module, :execute, 2),
-         true <- function_exported?(module, :definition, 0) or function_exported?(module, :definition, 1) do
+         true <-
+           function_exported?(module, :definition, 0) or
+             function_exported?(module, :definition, 1) do
       module
     else
       _ -> nil
@@ -762,7 +764,10 @@ defmodule Nex.Agent.Capability.Tool.Registry do
   defp mcp_plugin_entry?(%{"entry_type" => "plugin_mcp"}), do: true
   defp mcp_plugin_entry?(_entry), do: false
 
-  defp plugin_mcp_entry_active?(%{"plugin_id" => plugin_id, "attrs" => %{"from" => "mcp:" <> spec}}, opts) do
+  defp plugin_mcp_entry_active?(
+         %{"plugin_id" => plugin_id, "attrs" => %{"from" => "mcp:" <> spec}},
+         opts
+       ) do
     case String.split(spec, "/", parts: 2) do
       [server_name, _tool_name] ->
         server_id = MCPServerManager.plugin_server_id(plugin_id, server_name)
@@ -822,10 +827,13 @@ defmodule Nex.Agent.Capability.Tool.Registry do
   defp plugin_projection_empty?(_plugins), do: true
 
   defp plugin_contributions_empty?(contributions) do
-    Enum.all?(~w(channels providers tools skills commands hooks jobs workspace_files mcp_servers), fn kind ->
-      Map.get(contributions, kind) in [nil, []] and
-        Map.get(contributions, plugin_kind_atom(kind)) in [nil, []]
-    end)
+    Enum.all?(
+      ~w(channels providers tools skills commands hooks tasks workspace_files mcp_servers),
+      fn kind ->
+        Map.get(contributions, kind) in [nil, []] and
+          Map.get(contributions, plugin_kind_atom(kind)) in [nil, []]
+      end
+    )
   end
 
   defp plugin_kind_atom("channels"), do: :channels
@@ -834,7 +842,7 @@ defmodule Nex.Agent.Capability.Tool.Registry do
   defp plugin_kind_atom("skills"), do: :skills
   defp plugin_kind_atom("commands"), do: :commands
   defp plugin_kind_atom("hooks"), do: :hooks
-  defp plugin_kind_atom("jobs"), do: :jobs
+  defp plugin_kind_atom("tasks"), do: :tasks
   defp plugin_kind_atom("workspace_files"), do: :workspace_files
   defp plugin_kind_atom("mcp_servers"), do: :mcp_servers
 
@@ -915,11 +923,21 @@ defmodule Nex.Agent.Capability.Tool.Registry do
 
   defp module_layers(_module), do: ["tool"]
 
-  defp execute_tool_entry(_name, %{"entry_type" => "plugin_module", "module" => module, "plugin_id" => plugin_id} = entry, args, ctx) do
+  defp execute_tool_entry(
+         _name,
+         %{"entry_type" => "plugin_module", "module" => module, "plugin_id" => plugin_id} = entry,
+         args,
+         ctx
+       ) do
     module.execute(args, enrich_plugin_ctx(ctx, entry, plugin_id))
   end
 
-  defp execute_tool_entry(name, %{"entry_type" => "plugin_mcp", "attrs" => %{} = attrs, "plugin_id" => plugin_id} = entry, args, ctx) do
+  defp execute_tool_entry(
+         name,
+         %{"entry_type" => "plugin_mcp", "attrs" => %{} = attrs, "plugin_id" => plugin_id} = entry,
+         args,
+         ctx
+       ) do
     case Map.get(attrs, "from", "") do
       "mcp:" <> spec ->
         case String.split(spec, "/", parts: 2) do
@@ -942,7 +960,8 @@ defmodule Nex.Agent.Capability.Tool.Registry do
     end
   end
 
-  defp execute_tool_entry(_name, module, args, ctx) when is_atom(module), do: module.execute(args, ctx)
+  defp execute_tool_entry(_name, module, args, ctx) when is_atom(module),
+    do: module.execute(args, ctx)
 
   defp enrich_plugin_ctx(ctx, entry, plugin_id) do
     ctx
@@ -1066,8 +1085,8 @@ defmodule Nex.Agent.Capability.Tool.Registry do
     end)
   end
 
-  defp filter_tools(tools, :cron, opts),
-    do: Enum.filter(tools, fn {name, entry} -> tool_surface?(name, entry, :cron, opts) end)
+  defp filter_tools(tools, :task, opts),
+    do: Enum.filter(tools, fn {name, entry} -> tool_surface?(name, entry, :task, opts) end)
 
   defp filter_tools(tools, :base, opts) do
     Enum.filter(tools, fn {name, entry} ->
@@ -1147,7 +1166,7 @@ defmodule Nex.Agent.Capability.Tool.Registry do
   defp ensure_all_surface([]), do: [:all]
   defp ensure_all_surface(surfaces), do: Enum.uniq([:all | surfaces])
 
-  defp normalize_surface(surface) when surface in [:all, :base, :follow_up, :subagent, :cron],
+  defp normalize_surface(surface) when surface in [:all, :base, :follow_up, :subagent, :task],
     do: surface
 
   defp normalize_surface(surface) when is_binary(surface) do
@@ -1156,7 +1175,7 @@ defmodule Nex.Agent.Capability.Tool.Registry do
       "base" -> :base
       "follow_up" -> :follow_up
       "subagent" -> :subagent
-      "cron" -> :cron
+      "task" -> :task
       _ -> nil
     end
   end

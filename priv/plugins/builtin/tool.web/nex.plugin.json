@@ -10,12 +10,12 @@
       {
         "name": "web_search",
         "module": "Nex.Agent.Tool.WebSearch",
-        "surfaces": ["all", "base", "follow_up", "subagent", "cron"]
+        "surfaces": ["all", "base", "follow_up", "subagent", "task"]
       },
       {
         "name": "web_fetch",
         "module": "Nex.Agent.Tool.WebFetch",
-        "surfaces": ["all", "base", "follow_up", "subagent", "cron"]
+        "surfaces": ["all", "base", "follow_up", "subagent", "task"]
       }
     ]
   }
