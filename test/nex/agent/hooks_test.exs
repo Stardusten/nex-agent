@@ -2,7 +2,22 @@ defmodule Nex.Agent.Capability.HooksTest do
   use ExUnit.Case, async: false
 
   alias Nex.Agent.{Turn.ContextBuilder, Capability.Hooks, Turn.Runner, Conversation.Session}
+  alias Nex.Agent.Capability.Tool.Registry
   alias Nex.Agent.Runtime.Snapshot
+
+  defmodule HookEchoTool do
+    @behaviour Nex.Agent.Capability.Tool.Behaviour
+
+    def name, do: "hook_echo_test"
+    def description, do: "Hook echo test"
+    def category, do: :tool
+
+    def definition do
+      %{name: name(), description: description(), parameters: %{type: "object", properties: %{source: %{type: "string"}}}}
+    end
+
+    def execute(args, _ctx), do: {:ok, %{"echo" => Map.get(args, "source")}}
+  end
 
   setup do
     workspace =
@@ -12,6 +27,16 @@ defmodule Nex.Agent.Capability.HooksTest do
     File.mkdir_p!(Path.join(workspace, "hooks"))
     File.mkdir_p!(kb_dir)
     File.write!(Path.join(kb_dir, "AGENTS.md"), "# KB Rules\nUse raw/webpages for clips.\n")
+
+    if Process.whereis(Nex.Agent.TaskSupervisor) == nil do
+      start_supervised!({Task.Supervisor, name: Nex.Agent.TaskSupervisor})
+    end
+
+    if Process.whereis(Registry) == nil do
+      start_supervised!({Registry, name: Registry})
+    end
+
+    Registry.register(HookEchoTool)
 
     on_exit(fn -> File.rm_rf!(workspace) end)
     {:ok, workspace: workspace, kb_agents: Path.join(kb_dir, "AGENTS.md")}
@@ -525,6 +550,66 @@ defmodule Nex.Agent.Capability.HooksTest do
 
     system = messages |> List.first() |> Map.fetch!("content")
     refute system =~ "Session Pinned Prompt"
+  end
+
+  test "plugin hooks merge into runtime hook projection", %{workspace: workspace} do
+    write_hooks!(workspace, [
+      %{
+        "id" => "workspace-text",
+        "event" => "prompt.build.before",
+        "pointcut" => %{"session" => "discord:kb"},
+        "advice" => %{"kind" => "text", "content" => "workspace"}
+      }
+    ])
+
+    plugin_data = %{
+      contributions: %{
+        hooks: [
+          %{
+            "plugin_id" => "workspace:demo.echo",
+            "id" => "echo.prompt",
+            "attrs" => %{
+              "event" => "prompt.build.before",
+              "action" => %{"type" => "add_text", "content" => "plugin"}
+            }
+          }
+        ]
+      }
+    }
+
+    hooks = Hooks.load(workspace: workspace, plugin_data: plugin_data)
+    assert Enum.map(hooks.entries, & &1["id"]) == ["workspace-text", "echo.prompt"]
+  end
+
+  test "plugin tool-result hook executes through tool registry", %{workspace: workspace} do
+    hooks = %{
+      entries: [
+        %{
+          "id" => "echo.tool",
+          "enabled" => true,
+          "event" => "prompt.build.before",
+          "plugin_id" => "workspace:demo.echo",
+          "pointcut" => %{"session" => "discord:kb"},
+          "advice" => %{
+            "kind" => "tool_result",
+            "tool" => "hook_echo_test",
+            "args" => %{"source" => "{{turn.prompt}}"},
+            "title" => "Tool Result",
+            "on_error" => "block"
+          }
+        }
+      ]
+    }
+
+    assert {:ok, [fragment]} =
+             Hooks.run(:prompt_build_before, hooks, %{
+               session_key: "discord:kb",
+               workspace: workspace,
+               turn_prompt: "remember this"
+             })
+
+    assert fragment["source"] == "tool:hook_echo_test"
+    assert fragment["content"] =~ "remember this"
   end
 
   defp write_hooks!(workspace, hooks) do

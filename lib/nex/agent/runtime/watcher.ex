@@ -8,6 +8,7 @@ defmodule Nex.Agent.Runtime.Watcher do
 
   alias Nex.Agent.{Runtime.Config, Runtime, Capability.Skills, Runtime.Workspace}
   alias Nex.Agent.Capability.Tool.Registry, as: ToolRegistry
+  alias Nex.Agent.Runtime.PluginWorkspaceFiles
 
   defstruct [
     :workspace,
@@ -119,6 +120,15 @@ defmodule Nex.Agent.Runtime.Watcher do
   end
 
   defp watched_paths(%__MODULE__{} = state) do
+    plugin_watch_paths =
+      case Runtime.current() do
+        {:ok, %{workspace: workspace, plugins: plugins}} ->
+          PluginWorkspaceFiles.watch_paths(workspace, plugins)
+
+        _ ->
+          []
+      end
+
     direct_paths =
       [state.config_path] ++ Enum.map(@workspace_files, &Path.join(state.workspace, &1))
 
@@ -133,7 +143,7 @@ defmodule Nex.Agent.Runtime.Watcher do
       |> Enum.reject(&is_nil/1)
       |> Enum.flat_map(&recursive_files/1)
 
-    (direct_paths ++ recursive_paths)
+    (direct_paths ++ recursive_paths ++ plugin_watch_paths)
     |> Enum.map(&Path.expand/1)
     |> Enum.uniq()
   end

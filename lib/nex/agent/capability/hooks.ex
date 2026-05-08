@@ -2,14 +2,17 @@ defmodule Nex.Agent.Capability.Hooks do
   @moduledoc false
 
   alias Nex.Agent.Observe.ControlPlane.Log
+  alias Nex.Agent.Extension.Plugin.Template
+  alias Nex.Agent.Capability.Tool.Registry, as: ToolRegistry
+  alias Nex.Agent.Sandbox.FileSystem
   alias Nex.Agent.Runtime.Workspace
   require Log
 
   @registry_relative Path.join("hooks", "hooks.json")
   @default_max_chars 12_000
   @default_total_max_chars 30_000
-  @allowed_events ["prompt.build.before"]
-  @allowed_kinds ["file", "text"]
+  @allowed_events ["prompt.build.before", "conversation.turn.finished"]
+  @allowed_kinds ["file", "text", "tool_result"]
   @allowed_on_error ["warn", "skip", "block"]
   @blocked_paths [
     "~/.zshrc",
@@ -31,7 +34,8 @@ defmodule Nex.Agent.Capability.Hooks do
   def load(opts \\ []) do
     path = registry_path(opts)
 
-    case File.read(path) do
+    workspace_data =
+      case File.read(path) do
       {:ok, content} ->
         case Jason.decode(content) do
           {:ok, doc} when is_map(doc) ->
@@ -54,6 +58,8 @@ defmodule Nex.Agent.Capability.Hooks do
       {:error, reason} ->
         build_data([], [diagnostic(:read_failed, path, inspect(reason))], path)
     end
+
+    merge_plugin_hooks(workspace_data, opts)
   end
 
   @spec read_registry_doc(keyword()) :: {:ok, map()} | {:error, String.t()}
@@ -153,6 +159,7 @@ defmodule Nex.Agent.Capability.Hooks do
          "enabled" => Map.get(entry, "enabled", true) == true,
          "event" => event,
          "pointcut" => pointcut,
+         "source" => %{"kind" => "workspace", "path" => nil},
          "advice" => compiled_advice
        }}
     else
@@ -220,11 +227,21 @@ defmodule Nex.Agent.Capability.Hooks do
     end
   end
 
+  defp build_fragment(%{"advice" => %{"kind" => "tool_result"} = advice} = entry, ctx, remaining) do
+    case normalize_string(Map.get(advice, "tool")) do
+      nil ->
+        handle_advice_error(entry, ctx, "tool_result hook requires advice.tool")
+
+      tool ->
+        execute_tool_fragment(entry, ctx, tool, Map.get(advice, "args", %{}), remaining)
+    end
+  end
+
   defp build_fragment(entry, ctx, _remaining),
     do: handle_advice_error(entry, ctx, "unsupported hook advice")
 
   defp read_file_fragment(entry, ctx, path, remaining) do
-    expanded = Path.expand(path)
+    expanded = resolve_path(path, ctx)
 
     cond do
       blocked_path?(expanded) ->
@@ -234,17 +251,43 @@ defmodule Nex.Agent.Capability.Hooks do
         handle_advice_error(entry, ctx, "hook file must be a regular file: #{expanded}")
 
       true ->
-        case File.read(expanded) do
-          {:ok, content} ->
-            {:ok, fragment_from_content(entry, "file", expanded, content, remaining)}
+        read_file_fragment_content(entry, ctx, expanded, remaining)
+    end
+  end
 
-          {:error, reason} ->
-            handle_advice_error(
-              entry,
-              ctx,
-              "could not read hook file #{expanded}: #{inspect(reason)}"
-            )
-        end
+  defp read_file_fragment_content(entry, ctx, expanded, remaining) do
+    case FileSystem.read_file(expanded, ctx) do
+      {:ok, content} ->
+        {:ok, fragment_from_content(entry, "file", expanded, content, remaining)}
+
+      {:ask, _request} ->
+        handle_advice_error(entry, ctx, "hook file access requires approval: #{expanded}")
+
+      {:error, reason} ->
+        handle_advice_error(
+          entry,
+          ctx,
+          "could not read hook file #{expanded}: #{inspect(reason)}"
+        )
+    end
+  end
+
+  defp execute_tool_fragment(entry, ctx, tool, raw_args, remaining) do
+    args = Template.render(raw_args, ctx)
+
+    tool_ctx =
+      ctx
+      |> Map.put(:plugin_id, Map.get(entry, "plugin_id"))
+      |> Map.put(:hook_id, Map.get(entry, "id"))
+      |> Map.put(:actor, Map.get(ctx, :actor) || %{"kind" => "owner_run", "id" => "hook"})
+
+    case ToolRegistry.execute(tool, args, tool_ctx) do
+      {:ok, result} ->
+        rendered = inspect(result, pretty: true, limit: 50, printable_limit: 8_000)
+        {:ok, fragment_from_content(entry, "tool_result", "tool:#{tool}", rendered, remaining)}
+
+      {:error, reason} ->
+        handle_advice_error(entry, ctx, "hook tool #{tool} failed: #{inspect(reason)}")
     end
   end
 
@@ -352,7 +395,12 @@ defmodule Nex.Agent.Capability.Hooks do
       chat_id: Map.get(ctx, :chat_id) || Map.get(ctx, "chat_id"),
       parent_chat_id: Map.get(ctx, :parent_chat_id) || Map.get(ctx, "parent_chat_id"),
       workspace: Map.get(ctx, :workspace) || Map.get(ctx, "workspace"),
-      run_id: Map.get(ctx, :run_id) || Map.get(ctx, "run_id")
+      run_id: Map.get(ctx, :run_id) || Map.get(ctx, "run_id"),
+      turn_prompt: Map.get(ctx, :turn_prompt) || Map.get(ctx, "turn_prompt"),
+      actor: Map.get(ctx, :actor) || Map.get(ctx, "actor"),
+      runtime_snapshot: Map.get(ctx, :runtime_snapshot) || Map.get(ctx, "runtime_snapshot"),
+      config: Map.get(ctx, :config) || Map.get(ctx, "config"),
+      plugin_data: Map.get(ctx, :plugin_data) || Map.get(ctx, "plugin_data")
     }
   end
 
@@ -363,7 +411,134 @@ defmodule Nex.Agent.Capability.Hooks do
   defp entry_priority(entry), do: normalize_integer(get_in(entry, ["advice", "priority"]), 100)
 
   defp normalize_event(:prompt_build_before), do: "prompt.build.before"
+  defp normalize_event(:conversation_turn_finished), do: "conversation.turn.finished"
   defp normalize_event(event), do: to_string(event)
+
+  defp merge_plugin_hooks(%{} = workspace_data, opts) do
+    {entries, diagnostics} = plugin_hook_entries(opts)
+    version = Map.get(workspace_data, :version, 1)
+    path = Map.get(workspace_data, :path)
+
+    build_data(
+      Map.get(workspace_data, :entries, []) ++ entries,
+      Map.get(workspace_data, :diagnostics, []) ++ diagnostics,
+      path,
+      version
+    )
+  end
+
+  defp plugin_hook_entries(opts) do
+    plugin_data = Keyword.get(opts, :plugin_data) || %{}
+    contributions = Map.get(plugin_data, :contributions) || Map.get(plugin_data, "contributions") || %{}
+    hooks = Map.get(contributions, :hooks) || Map.get(contributions, "hooks") || []
+
+    hooks
+    |> Enum.with_index()
+    |> Enum.reduce({[], []}, fn {entry, index}, {records, diags} ->
+      case normalize_plugin_hook_entry(entry, index) do
+        {:ok, record} -> {[record | records], diags}
+        {:error, diagnostic} -> {records, [diagnostic | diags]}
+      end
+    end)
+    |> then(fn {records, diags} -> {Enum.reverse(records), Enum.reverse(diags)} end)
+  end
+
+  defp normalize_plugin_hook_entry(%{"attrs" => %{} = attrs} = contribution, index) do
+    attrs = stringify_keys(attrs)
+    action = stringify_keys(Map.get(attrs, "action", %{}))
+
+    with {:ok, event} <- allowed_string(attrs, "event", @allowed_events, nil),
+         {:ok, advice} <- plugin_hook_advice(action, contribution["id"]) do
+      {:ok,
+       %{
+         "id" => contribution["id"],
+         "enabled" => Map.get(attrs, "enabled", true) != false,
+         "event" => event,
+         "pointcut" => stringify_keys(Map.get(attrs, "pointcut", %{})),
+         "plugin_id" => contribution["plugin_id"],
+         "source" => %{
+           "kind" => "plugin",
+           "plugin_id" => contribution["plugin_id"],
+           "contribution_id" => contribution["id"]
+         },
+         "advice" => advice
+       }}
+    else
+      {:error, reason} ->
+        {:error,
+         %{
+           "code" => "invalid_plugin_hook",
+           "plugin_id" => contribution["plugin_id"],
+           "kind" => "hooks",
+           "index" => index,
+           "message" => reason
+         }}
+    end
+  end
+
+  defp normalize_plugin_hook_entry(_entry, index) do
+    {:error,
+     %{
+       "code" => "invalid_plugin_hook",
+       "kind" => "hooks",
+       "index" => index,
+       "message" => "plugin hook contribution must be an object"
+     }}
+  end
+
+  defp plugin_hook_advice(%{"type" => "add_text"} = action, id) do
+    with {:ok, content} <- required_string(action, "content") do
+      {:ok,
+       %{
+         "kind" => "text",
+         "content" => content,
+         "title" => normalize_string(Map.get(action, "title")) || id,
+         "priority" => normalize_integer(Map.get(action, "priority"), 100),
+         "max_chars" => normalize_integer(Map.get(action, "maxChars"), @default_max_chars),
+         "on_error" => normalize_string(Map.get(action, "onError")) || "warn"
+       }}
+    end
+  end
+
+  defp plugin_hook_advice(%{"type" => "add_file"} = action, id) do
+    with {:ok, path} <- required_string(action, "path") do
+      {:ok,
+       %{
+         "kind" => "file",
+         "path" => path,
+         "title" => normalize_string(Map.get(action, "title")) || id,
+         "priority" => normalize_integer(Map.get(action, "priority"), 100),
+         "max_chars" => normalize_integer(Map.get(action, "maxChars"), @default_max_chars),
+         "on_error" => normalize_string(Map.get(action, "onError")) || "warn"
+       }}
+    end
+  end
+
+  defp plugin_hook_advice(%{"type" => "add_tool_result"} = action, id) do
+    with {:ok, tool} <- required_string(action, "tool") do
+      {:ok,
+       %{
+         "kind" => "tool_result",
+         "tool" => tool,
+         "args" => Map.get(action, "args", %{}),
+         "title" => normalize_string(Map.get(action, "title")) || id,
+         "priority" => normalize_integer(Map.get(action, "priority"), 100),
+         "max_chars" => normalize_integer(Map.get(action, "maxChars"), @default_max_chars),
+         "on_error" => normalize_string(Map.get(action, "onError")) || "warn"
+       }}
+    end
+  end
+
+  defp plugin_hook_advice(_action, _id),
+    do: {:error, "plugin hook action.type must be add_text, add_file, or add_tool_result"}
+
+  defp resolve_path(path, ctx) do
+    case Path.type(path) do
+      :absolute -> Path.expand(path)
+      _ -> Path.expand(path, Map.get(ctx, :workspace) || Workspace.root())
+    end
+  end
+
 
   defp normalize_registry_doc(doc) do
     doc = stringify_keys(doc)

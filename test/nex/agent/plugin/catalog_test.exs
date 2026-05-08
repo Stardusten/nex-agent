@@ -152,6 +152,45 @@ defmodule Nex.Agent.Extension.Plugin.CatalogTest do
     refute Enum.any?(data.diagnostics, &(&1["kind"] == "inventory"))
   end
 
+  test "normalizes hooks jobs workspace files and mcp servers", %{
+    builtin: builtin,
+    workspace_plugins_dir: workspace_plugins_dir
+  } do
+    write_manifest(workspace_plugins_dir, "demo.echo", %{
+      "id" => "workspace:demo.echo",
+      "title" => "Echo Demo",
+      "source" => "workspace",
+      "contributes" => %{
+        "hooks" => [
+          %{"id" => "echo.prompt", "event" => "prompt.build.before", "action" => %{"type" => "add_text", "content" => "hello"}}
+        ],
+        "jobs" => [
+          %{"id" => "echo.flush", "event" => "conversation.turn.finished", "action" => %{"type" => "tool_call", "tool" => "echo__remember"}}
+        ],
+        "workspaceFiles" => [
+          %{"id" => "echo.state", "path" => "plugin_data/echo/state.json", "kind" => "file", "onMissing" => "create", "watch" => true}
+        ],
+        "mcpServers" => [
+          %{"id" => "echo_mcp", "command" => "sh", "args" => ["-c", "exit 0"]}
+        ]
+      }
+    })
+
+    config = Config.from_map(%{"plugins" => %{"enabled" => %{"workspace:demo.echo" => true}}})
+
+    data =
+      Plugin.runtime_data(
+        config: config,
+        builtin_plugins_dir: builtin,
+        workspace_plugins_dir: workspace_plugins_dir
+      )
+
+    assert [%{"id" => "echo.prompt"}] = data.contributions["hooks"]
+    assert [%{"id" => "echo.flush"}] = data.contributions["jobs"]
+    assert [%{"id" => "echo.state"}] = data.contributions["workspace_files"]
+    assert [%{"id" => "echo_mcp"}] = data.contributions["mcp_servers"]
+  end
+
   defp write_manifest(root, name, attrs) do
     dir = Path.join(root, name)
     File.mkdir_p!(dir)

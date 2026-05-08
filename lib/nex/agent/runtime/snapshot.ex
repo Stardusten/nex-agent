@@ -55,7 +55,11 @@ defmodule Nex.Agent.Runtime.Snapshot do
               providers: [map()],
               tools: [map()],
               skills: [map()],
-              commands: [map()]
+              commands: [map()],
+              hooks: [map()],
+              jobs: [map()],
+              workspace_files: [map()],
+              mcp_servers: [map()]
             },
             diagnostics: [map()],
             hash: String.t()
@@ -113,12 +117,16 @@ defmodule Nex.Agent.Runtime.Snapshot do
               manifests: [],
               enabled: [],
               contributions: %{
-                channels: [],
-                providers: [],
-                tools: [],
-                skills: [],
-                commands: []
-              },
+              channels: [],
+              providers: [],
+              tools: [],
+              skills: [],
+              commands: [],
+              hooks: [],
+              jobs: [],
+              workspace_files: [],
+              mcp_servers: []
+            },
               diagnostics: [],
               hash: ""
             },

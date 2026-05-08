@@ -570,16 +570,11 @@ defmodule Nex.Agent.Observe.Admin do
       |> Enum.reject(&MapSet.member?(custom_names, &1))
       |> Enum.sort()
       |> Enum.map(fn name ->
-        module =
-          if Process.whereis(Registry) do
-            Registry.get(name)
-          end
-
-        %{
-          "name" => name,
-          "description" => tool_description(module),
-          "layers" => tool_layers(module)
-        }
+        if Process.whereis(Registry) do
+          Registry.describe(name) || %{"name" => name, "description" => "", "layers" => ["tool"]}
+        else
+          %{"name" => name, "description" => "", "layers" => ["tool"]}
+        end
       end)
 
     %{
@@ -596,33 +591,6 @@ defmodule Nex.Agent.Observe.Admin do
         end)
     }
   end
-
-  defp tool_description(module) when is_atom(module) do
-    if function_exported?(module, :description, 0), do: module.description(), else: ""
-  end
-
-  defp tool_description(_), do: ""
-
-  defp tool_layers(module) when is_atom(module) do
-    if function_exported?(module, :name, 0) do
-      case module.name() do
-        "soul_update" -> ["soul"]
-        "user_update" -> ["user"]
-        "skill_get" -> ["skill"]
-        "skill_capture" -> ["skill"]
-        "tool_create" -> ["tool"]
-        "tool_list" -> ["tool"]
-        "tool_delete" -> ["tool"]
-        "reflect" -> ["code"]
-        "self_update" -> ["code"]
-        _ -> ["tool"]
-      end
-    else
-      ["tool"]
-    end
-  end
-
-  defp tool_layers(_), do: ["tool"]
 
   defp list_sessions(opts) do
     session_files =

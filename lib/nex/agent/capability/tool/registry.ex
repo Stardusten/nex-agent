@@ -10,6 +10,9 @@ defmodule Nex.Agent.Capability.Tool.Registry do
   alias Nex.Agent.Observe.ControlPlane.{Log, Redactor}
   alias Nex.Agent.Conversation.FollowUp
   alias Nex.Agent.Extension.Plugin.Catalog, as: PluginCatalog
+  alias Nex.Agent.Interface.MCP.ServerManager, as: MCPServerManager
+  alias Nex.Agent.Runtime
+  alias Nex.Agent.Self.CodeUpgrade
   require Log
 
   @core_tools [
@@ -95,9 +98,19 @@ defmodule Nex.Agent.Capability.Tool.Registry do
     GenServer.call(__MODULE__, :reload)
   end
 
-  @doc "Get module for a tool name."
+  @doc "Get the raw registry entry for a tool name."
   def get(name) do
     GenServer.call(__MODULE__, {:get, name})
+  end
+
+  @doc "Get the backing module for a tool name when one exists."
+  def module_for(name) do
+    GenServer.call(__MODULE__, {:module_for, name})
+  end
+
+  @doc "Get a normalized description record for a tool name."
+  def describe(name, opts \\ []) do
+    GenServer.call(__MODULE__, {:describe, name, opts})
   end
 
   @doc "List default built-in tool names."
@@ -178,9 +191,9 @@ defmodule Nex.Agent.Capability.Tool.Registry do
       tools
       |> project_tools(opts)
       |> filter_tools(filter, opts)
-      |> Enum.sort_by(fn {name, _module} -> {definition_priority(name), name} end)
-      |> Enum.map(fn {name, module} ->
-        tool_definition(module, opts)
+      |> Enum.sort_by(fn {name, _entry} -> {definition_priority(name), name} end)
+      |> Enum.map(fn {name, entry} ->
+        tool_definition(entry, opts)
         |> normalize_tool_definition(name)
       end)
       |> Enum.reject(&is_nil/1)
@@ -208,7 +221,7 @@ defmodule Nex.Agent.Capability.Tool.Registry do
          {:error, "Unknown tool: #{name}. [Analyze the error and try a different approach.]"},
          state}
 
-      module ->
+      entry ->
         run_id = run_id_from_ctx(ctx)
         server = self()
         emit_observation(:info, "tool.registry.execute.started", attrs, observe_opts)
@@ -217,7 +230,7 @@ defmodule Nex.Agent.Capability.Tool.Registry do
           Task.Supervisor.start_child(Nex.Agent.TaskSupervisor, fn ->
             result =
               try do
-                module.execute(args, ctx)
+                execute_tool_entry(name, entry, args, ctx)
               rescue
                 e ->
                   {:error,
@@ -308,6 +321,30 @@ defmodule Nex.Agent.Capability.Tool.Registry do
   @impl true
   def handle_call({:get, name}, _from, %{tools: tools} = state) do
     {:reply, Map.get(tools, name), state}
+  end
+
+  def handle_call({:module_for, name}, _from, %{tools: tools} = state) do
+    {:reply, entry_module(Map.get(tools, name)), state}
+  end
+
+  def handle_call({:describe, name, opts}, _from, %{tools: tools} = state) do
+    entry = Map.get(tools, name)
+
+    description =
+      if entry do
+        %{
+          "name" => name,
+          "module" => entry_module_display(entry),
+          "description" => entry_description(entry),
+          "definition" => tool_definition(entry, opts),
+          "source_path" => entry_source_path(entry),
+          "layers" => entry_layers(entry),
+          "plugin_id" => entry_plugin_id(entry),
+          "entry_type" => entry_type(entry)
+        }
+      end
+
+    {:reply, description, state}
   end
 
   @impl true
@@ -438,10 +475,31 @@ defmodule Nex.Agent.Capability.Tool.Registry do
 
   defp tool_definition(module, opts) do
     cond do
+      is_map(module) and Map.get(module, "entry_type") == "plugin_mcp" ->
+        plugin_mcp_definition(module)
+
+      is_map(module) and Map.get(module, "entry_type") == "plugin_module" ->
+        tool_definition(Map.fetch!(module, "module"), opts)
+
+      true ->
+        module_tool_definition(module, opts)
+    end
+  end
+
+  defp module_tool_definition(module, opts) do
+    cond do
       function_exported?(module, :definition, 1) -> module.definition(opts)
       function_exported?(module, :definition, 0) -> module.definition()
       true -> nil
     end
+  end
+
+  defp plugin_mcp_definition(%{"attrs" => %{} = attrs, "id" => id}) do
+    %{
+      "name" => Map.get(attrs, "name", id),
+      "description" => Map.get(attrs, "description", "Plugin MCP tool"),
+      "input_schema" => Map.get(attrs, "parameters", %{"type" => "object", "properties" => %{}})
+    }
   end
 
   defp normalize_tool_definition(nil, _fallback_name), do: nil
@@ -553,13 +611,16 @@ defmodule Nex.Agent.Capability.Tool.Registry do
 
   defp plugin_tool_modules(opts \\ []) do
     opts
-    |> plugin_tool_contributions()
-    |> Enum.map(&tool_module/1)
+    |> plugin_tool_entries()
+    |> Enum.flat_map(fn
+      %{"entry_type" => "plugin_module", "module" => module} -> [module]
+      _ -> []
+    end)
     |> Enum.reject(&is_nil/1)
     |> Enum.uniq()
   end
 
-  defp plugin_tool_names(opts \\ []) do
+  defp plugin_tool_names(opts) do
     opts
     |> plugin_tool_contributions()
     |> Enum.map(& &1["id"])
@@ -568,11 +629,61 @@ defmodule Nex.Agent.Capability.Tool.Registry do
   end
 
   defp plugin_tool_contributions(opts) do
-    PluginCatalog.contributions("tools", opts)
+    cond do
+      Keyword.has_key?(opts, :plugin_data) or Keyword.has_key?(opts, :plugins) ->
+        PluginCatalog.contributions("tools", opts)
+
+      Keyword.has_key?(opts, :config) ->
+        PluginCatalog.contributions("tools", config: Keyword.fetch!(opts, :config))
+
+      true ->
+        case Runtime.current() do
+          {:ok, %{plugins: plugins}} -> PluginCatalog.contributions("tools", plugin_data: plugins)
+          _ -> PluginCatalog.contributions("tools", opts)
+        end
+    end
   end
 
-  defp tool_module(%{"source" => "builtin", "attrs" => %{} = attrs}) do
-    with module_name when is_binary(module_name) <- Map.get(attrs, "module"),
+  defp plugin_tool_entries(opts \\ []) do
+    opts
+    |> plugin_tool_contributions()
+    |> Enum.map(&tool_entry/1)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp tool_entry(%{"attrs" => %{} = attrs} = contribution) do
+    attrs = normalize_plugin_tool_attrs(attrs)
+
+    cond do
+      is_binary(Map.get(attrs, "from")) and String.starts_with?(Map.get(attrs, "from"), "mcp:") ->
+        contribution
+        |> Map.put("attrs", attrs)
+        |> Map.put("entry_type", "plugin_mcp")
+
+      module = tool_module_from_attrs(attrs) ->
+        %{
+          "entry_type" => "plugin_module",
+          "module" => module,
+          "plugin_id" => contribution["plugin_id"],
+          "id" => contribution["id"],
+          "attrs" => attrs
+        }
+
+      true ->
+        nil
+    end
+  end
+
+  defp tool_entry(_contribution), do: nil
+
+  defp tool_module_from_attrs(%{} = attrs) do
+    module_name =
+      case Map.get(attrs, "from") do
+        "module:" <> module_name -> module_name
+        _ -> Map.get(attrs, "module")
+      end
+
+    with module_name when is_binary(module_name) <- module_name,
          module <- Module.concat(String.split(module_name, ".")),
          {:module, ^module} <- Code.ensure_loaded(module),
          true <- function_exported?(module, :execute, 2) do
@@ -582,18 +693,67 @@ defmodule Nex.Agent.Capability.Tool.Registry do
     end
   end
 
-  defp tool_module(_contribution), do: nil
+  defp normalize_plugin_tool_attrs(attrs) when is_map(attrs) do
+    attrs =
+      Map.new(attrs, fn
+        {key, value} when is_atom(key) -> {Atom.to_string(key), value}
+        {key, value} -> {to_string(key), value}
+      end)
+
+    case {Map.get(attrs, "from"), Map.get(attrs, "module")} do
+      {nil, module_name} when is_binary(module_name) ->
+        Map.put(attrs, "from", "module:" <> module_name)
+
+      _ ->
+        attrs
+    end
+  end
 
   defp project_tools(tools, opts) when is_map(tools) and is_list(opts) do
-    all_plugin_names = MapSet.new(plugin_tool_names())
     enabled_plugin_names = MapSet.new(plugin_tool_names(opts))
 
-    Map.reject(tools, fn {name, _module} ->
-      MapSet.member?(all_plugin_names, name) and not MapSet.member?(enabled_plugin_names, name)
+    Map.reject(tools, fn {name, entry} ->
+      plugin_entry_hidden?(name, entry, enabled_plugin_names)
     end)
   end
 
   defp project_tools(tools, _opts), do: tools
+
+  defp plugin_entry?(%{"entry_type" => "plugin_module"}), do: true
+  defp plugin_entry?(%{"entry_type" => "plugin_mcp"}), do: true
+  defp plugin_entry?(_entry), do: false
+
+  defp plugin_entry_hidden?(name, entry, enabled_plugin_names) do
+    cond do
+      not plugin_entry?(entry) ->
+        false
+
+      not MapSet.member?(enabled_plugin_names, name) ->
+        true
+
+      mcp_plugin_entry?(entry) and not plugin_mcp_entry_active?(entry) ->
+        true
+
+      true ->
+        false
+    end
+  end
+
+  defp mcp_plugin_entry?(%{"entry_type" => "plugin_mcp"}), do: true
+  defp mcp_plugin_entry?(_entry), do: false
+
+  defp plugin_mcp_entry_active?(%{"plugin_id" => plugin_id, "attrs" => %{"from" => "mcp:" <> spec}}) do
+    case String.split(spec, "/", parts: 2) do
+      [server_name, _tool_name] ->
+        server_id = MCPServerManager.plugin_server_id(plugin_id, server_name)
+        Enum.any?(MCPServerManager.list(), &(&1.id == server_id))
+
+      _ ->
+        false
+    end
+  end
+
+  defp plugin_mcp_entry_active?(_entry), do: false
 
   defp tool_projection_opts(%{runtime_snapshot: %{plugins: plugins, config: config}}) do
     if plugin_projection_empty?(plugins),
@@ -629,7 +789,7 @@ defmodule Nex.Agent.Capability.Tool.Registry do
   defp plugin_projection_empty?(_plugins), do: true
 
   defp plugin_contributions_empty?(contributions) do
-    Enum.all?(~w(channels providers tools skills commands), fn kind ->
+    Enum.all?(~w(channels providers tools skills commands hooks jobs workspace_files mcp_servers), fn kind ->
       Map.get(contributions, kind) in [nil, []] and
         Map.get(contributions, plugin_kind_atom(kind)) in [nil, []]
     end)
@@ -640,14 +800,161 @@ defmodule Nex.Agent.Capability.Tool.Registry do
   defp plugin_kind_atom("tools"), do: :tools
   defp plugin_kind_atom("skills"), do: :skills
   defp plugin_kind_atom("commands"), do: :commands
+  defp plugin_kind_atom("hooks"), do: :hooks
+  defp plugin_kind_atom("jobs"), do: :jobs
+  defp plugin_kind_atom("workspace_files"), do: :workspace_files
+  defp plugin_kind_atom("mcp_servers"), do: :mcp_servers
 
   defp build_tools do
     %{}
     |> register_modules(@core_tools, "core")
-    |> register_modules(plugin_tool_modules(), "builtin_plugin")
+    |> register_entries(plugin_tool_entries(), "builtin_plugin")
     |> register_modules(discover_project_tool_modules(), "project")
     |> register_modules(discover_custom_tool_modules(), "custom")
   end
+
+  defp register_entries(acc, entries, source) do
+    Enum.reduce(entries, acc, fn entry, tools ->
+      name = plugin_entry_name(entry)
+
+      cond do
+        not is_binary(name) or name == "" ->
+          tools
+
+        Map.has_key?(tools, name) ->
+          Logger.warning("[Registry] Skipping #{source} tool with conflicting name #{name}")
+          tools
+
+        true ->
+          Map.put(tools, name, entry)
+      end
+    end)
+  end
+
+  defp plugin_entry_name(%{"attrs" => %{} = attrs}), do: Map.get(attrs, "name")
+  defp plugin_entry_name(_entry), do: nil
+
+  defp entry_module(%{"entry_type" => "plugin_module", "module" => module}), do: module
+  defp entry_module(module) when is_atom(module), do: module
+  defp entry_module(_entry), do: nil
+
+  defp entry_module_display(entry) do
+    case entry_module(entry) do
+      module when is_atom(module) -> inspect(module)
+      nil -> mcp_server_from_entry(entry) && "mcp:" <> mcp_server_from_entry(entry)
+    end
+  end
+
+  defp entry_description(entry) do
+    case tool_definition(entry, []) do
+      %{} = definition -> get_def_description(normalize_definition(definition))
+      _ -> ""
+    end
+  end
+
+  defp entry_source_path(entry) do
+    case entry_module(entry) do
+      module when is_atom(module) -> CodeUpgrade.source_path(module)
+      _ -> nil
+    end
+  end
+
+  defp entry_layers(entry) do
+    case entry_module(entry) do
+      module when is_atom(module) -> module_layers(module)
+      _ -> ["tool"]
+    end
+  end
+
+  defp entry_plugin_id(%{"plugin_id" => plugin_id}) when is_binary(plugin_id), do: plugin_id
+  defp entry_plugin_id(_entry), do: nil
+
+  defp entry_type(%{"entry_type" => entry_type}) when is_binary(entry_type), do: entry_type
+  defp entry_type(_entry), do: "module"
+
+  defp module_layers(module) when is_atom(module) do
+    if function_exported?(module, :name, 0) do
+      case module.name() do
+        "soul_update" -> ["soul"]
+        "user_update" -> ["user"]
+        "hook" -> ["tool"]
+        "observe" -> ["tool"]
+        "skill_get" -> ["skill"]
+        "skill_capture" -> ["skill"]
+        "tool_create" -> ["tool"]
+        "tool_list" -> ["tool"]
+        "tool_delete" -> ["tool"]
+        "task" -> ["tool"]
+        "knowledge_capture" -> ["tool"]
+        "executor_dispatch" -> ["tool"]
+        "executor_status" -> ["tool"]
+        "reflect" -> ["code"]
+        "evolution_candidate" -> ["tool"]
+        "self_update" -> ["code"]
+        "self_update_commit" -> ["code"]
+        _ -> ["tool"]
+      end
+    else
+      ["tool"]
+    end
+  end
+
+  defp module_layers(_module), do: ["tool"]
+
+  defp execute_tool_entry(_name, %{"entry_type" => "plugin_module", "module" => module, "plugin_id" => plugin_id} = entry, args, ctx) do
+    module.execute(args, enrich_plugin_ctx(ctx, entry, plugin_id))
+  end
+
+  defp execute_tool_entry(name, %{"entry_type" => "plugin_mcp", "attrs" => %{} = attrs, "plugin_id" => plugin_id} = entry, args, ctx) do
+    case Map.get(attrs, "from", "") do
+      "mcp:" <> spec ->
+        case String.split(spec, "/", parts: 2) do
+          [server_name, tool_name] ->
+            server_id = MCPServerManager.plugin_server_id(plugin_id, server_name)
+
+            MCPServerManager.call_tool(
+              server_id,
+              tool_name,
+              args,
+              plugin_ctx_metadata(enrich_plugin_ctx(ctx, entry, plugin_id))
+            )
+
+          _ ->
+            {:error, "Invalid MCP tool source for #{name}"}
+        end
+
+      _ ->
+        {:error, "Invalid MCP tool source for #{name}"}
+    end
+  end
+
+  defp execute_tool_entry(_name, module, args, ctx) when is_atom(module), do: module.execute(args, ctx)
+
+  defp enrich_plugin_ctx(ctx, entry, plugin_id) do
+    ctx
+    |> Map.put(:plugin_id, plugin_id)
+    |> Map.put(:plugin_contribution_id, Map.get(entry, "id"))
+    |> Map.put(:mcp_server, mcp_server_from_entry(entry))
+  end
+
+  defp plugin_ctx_metadata(ctx) do
+    %{
+      workspace: Map.get(ctx, :workspace) || Map.get(ctx, "workspace") || File.cwd!(),
+      session_key: Map.get(ctx, :session_key) || Map.get(ctx, "session_key") || "default",
+      channel: Map.get(ctx, :channel) || Map.get(ctx, "channel"),
+      chat_id: Map.get(ctx, :chat_id) || Map.get(ctx, "chat_id"),
+      actor: Map.get(ctx, :actor) || Map.get(ctx, "actor"),
+      plugin_id: Map.get(ctx, :plugin_id),
+      contribution_id: Map.get(ctx, :plugin_contribution_id),
+      mcp_server: Map.get(ctx, :mcp_server)
+    }
+  end
+
+  defp mcp_server_from_entry(%{"attrs" => %{"from" => "mcp:" <> spec}}) do
+    spec |> String.split("/", parts: 2) |> List.first()
+  end
+
+  defp mcp_server_from_entry(_entry), do: nil
 
   defp maybe_register_runtime_tool(tools, name, module) do
     case Map.get(tools, name) do
@@ -736,26 +1043,26 @@ defmodule Nex.Agent.Capability.Tool.Registry do
   defp filter_tools(tools, :all, _opts), do: tools
 
   defp filter_tools(tools, :follow_up, opts) do
-    Enum.filter(tools, fn {name, module} ->
-      module
+    Enum.filter(tools, fn {name, entry} ->
+      entry
       |> tool_definition(opts)
       |> normalize_definition()
       |> FollowUp.allowed_tool_definition?() and
-        tool_surface?(name, module, :follow_up, opts)
+        tool_surface?(name, entry, :follow_up, opts)
     end)
   end
 
   defp filter_tools(tools, :cron, opts),
-    do: Enum.filter(tools, fn {name, module} -> tool_surface?(name, module, :cron, opts) end)
+    do: Enum.filter(tools, fn {name, entry} -> tool_surface?(name, entry, :cron, opts) end)
 
   defp filter_tools(tools, :base, opts) do
-    Enum.filter(tools, fn {name, module} ->
-      tool_surface?(name, module, :base, opts)
+    Enum.filter(tools, fn {name, entry} ->
+      tool_surface?(name, entry, :base, opts)
     end)
   end
 
   defp filter_tools(tools, :subagent, opts),
-    do: Enum.filter(tools, fn {name, module} -> tool_surface?(name, module, :subagent, opts) end)
+    do: Enum.filter(tools, fn {name, entry} -> tool_surface?(name, entry, :subagent, opts) end)
 
   defp filter_tools(tools, _filter, _opts), do: tools
 
@@ -768,11 +1075,19 @@ defmodule Nex.Agent.Capability.Tool.Registry do
   end
 
   defp tool_surfaces(name, module, opts) do
-    case plugin_tool_surfaces(name, opts) do
+    case entry_tool_surfaces(module) || plugin_tool_surfaces(name, opts) do
       [] -> module_tool_surfaces(module)
       surfaces -> surfaces
     end
   end
+
+  defp entry_tool_surfaces(%{"attrs" => %{} = attrs}) do
+    attrs
+    |> Map.get("surfaces", [])
+    |> normalize_surfaces()
+  end
+
+  defp entry_tool_surfaces(_entry), do: nil
 
   defp plugin_tool_surfaces(name, opts) do
     opts
@@ -790,6 +1105,9 @@ defmodule Nex.Agent.Capability.Tool.Registry do
 
   defp module_tool_surfaces(module) do
     cond do
+      is_map(module) ->
+        [:all]
+
       function_exported?(module, :surfaces, 0) ->
         module.surfaces()
         |> normalize_surfaces()

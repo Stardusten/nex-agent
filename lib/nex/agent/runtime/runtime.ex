@@ -11,6 +11,7 @@ defmodule Nex.Agent.Runtime do
     Turn.ContextBuilder,
     Capability.Hooks,
     Extension.Plugin,
+    Runtime.PluginWorkspaceFiles,
     Capability.Skills,
     Runtime.Workspace
   }
@@ -231,9 +232,15 @@ defmodule Nex.Agent.Runtime do
             :hooks,
             fallback_hooks_data(state.snapshot),
             fn ->
-              call_builder(hooks_builder(opts, state), [Keyword.put(opts, :workspace, workspace)])
+              call_builder(hooks_builder(opts, state), [
+                opts
+                |> Keyword.put(:workspace, workspace)
+                |> Keyword.put(:plugin_data, plugins_data)
+              ])
             end
           )
+
+        PluginWorkspaceFiles.ensure_declared!(workspace, plugins_data)
 
         prompt_data = %{
           system_prompt: prompt,
@@ -590,7 +597,11 @@ defmodule Nex.Agent.Runtime do
       providers: [],
       tools: [],
       skills: [],
-      commands: []
+      commands: [],
+      hooks: [],
+      jobs: [],
+      workspace_files: [],
+      mcp_servers: []
     }
   end
 

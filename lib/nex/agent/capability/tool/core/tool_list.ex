@@ -3,7 +3,6 @@ defmodule Nex.Agent.Capability.Tool.Core.ToolList do
 
   @behaviour Nex.Agent.Capability.Tool.Behaviour
 
-  alias Nex.Agent.Self.CodeUpgrade
   alias Nex.Agent.Capability.Tool.CustomTools
   alias Nex.Agent.Capability.Tool.Registry
 
@@ -58,18 +57,7 @@ defmodule Nex.Agent.Capability.Tool.Core.ToolList do
     Registry.list()
     |> Enum.reject(&MapSet.member?(custom_names, &1))
     |> Enum.sort()
-    |> Enum.map(fn name ->
-      module = Registry.get(name)
-
-      %{
-        "name" => name,
-        "scope" => "builtin",
-        "layers" => layers_for(module),
-        "module" => inspect(module),
-        "description" => description_for(module),
-        "source_path" => if(module, do: CodeUpgrade.source_path(module), else: nil)
-      }
-    end)
+    |> Enum.map(fn name -> Registry.describe(name) |> Map.put("scope", "builtin") end)
   end
 
   defp custom_list do
@@ -93,21 +81,7 @@ defmodule Nex.Agent.Capability.Tool.Core.ToolList do
     if MapSet.member?(custom_names, name) do
       nil
     else
-      case Registry.get(name) do
-        nil ->
-          nil
-
-        module ->
-          %{
-            "name" => name,
-            "scope" => "builtin",
-            "layers" => layers_for(module),
-            "module" => inspect(module),
-            "description" => description_for(module),
-            "source_path" => CodeUpgrade.source_path(module),
-            "definition" => definition_for(module)
-          }
-      end
+      Registry.describe(name) |> then(&(&1 && Map.put(&1, "scope", "builtin")))
     end
   end
 
@@ -134,44 +108,4 @@ defmodule Nex.Agent.Capability.Tool.Core.ToolList do
     end
   end
 
-  defp description_for(module) do
-    if is_atom(module) and function_exported?(module, :description, 0),
-      do: module.description(),
-      else: ""
-  end
-
-  defp definition_for(module) do
-    if is_atom(module) and function_exported?(module, :definition, 0),
-      do: module.definition(),
-      else: nil
-  end
-
-  defp layers_for(module) when is_atom(module) do
-    if function_exported?(module, :name, 0) do
-      case module.name() do
-        "soul_update" -> ["soul"]
-        "user_update" -> ["user"]
-        "hook" -> ["tool"]
-        "observe" -> ["tool"]
-        "skill_get" -> ["skill"]
-        "skill_capture" -> ["skill"]
-        "tool_create" -> ["tool"]
-        "tool_list" -> ["tool"]
-        "tool_delete" -> ["tool"]
-        "task" -> ["tool"]
-        "knowledge_capture" -> ["tool"]
-        "executor_dispatch" -> ["tool"]
-        "executor_status" -> ["tool"]
-        "reflect" -> ["code"]
-        "evolution_candidate" -> ["tool"]
-        "self_update" -> ["code"]
-        "self_update_commit" -> ["code"]
-        _ -> ["tool"]
-      end
-    else
-      ["tool"]
-    end
-  end
-
-  defp layers_for(_module), do: ["tool"]
 end

@@ -457,7 +457,8 @@ defmodule Nex.Agent.Sandbox.Security do
       cwd: ctx_value(ctx, :cwd),
       channel: ctx_value(ctx, :channel),
       chat_id: ctx_value(ctx, :chat_id),
-      actor: actor_from_ctx(ctx)
+      actor: actor_from_ctx(ctx),
+      metadata: permission_metadata_from_ctx(ctx)
     }
   end
 
@@ -496,9 +497,22 @@ defmodule Nex.Agent.Sandbox.Security do
   defp actor_from_ctx(ctx) do
     case ctx_value(ctx, :user_id) || ctx_value(ctx, :actor) do
       nil -> nil
+      %{} = value -> value
       value -> %{"id" => to_string(value)}
     end
   end
+
+  defp permission_metadata_from_ctx(ctx) do
+    %{}
+    |> maybe_put_metadata("plugin_id", ctx_value(ctx, :plugin_id))
+    |> maybe_put_metadata("hook_id", ctx_value(ctx, :hook_id))
+    |> maybe_put_metadata("job_id", ctx_value(ctx, :job_id))
+    |> maybe_put_metadata("mcp_server", ctx_value(ctx, :mcp_server))
+  end
+
+  defp maybe_put_metadata(metadata, _key, nil), do: metadata
+  defp maybe_put_metadata(metadata, _key, ""), do: metadata
+  defp maybe_put_metadata(metadata, key, value), do: Map.put(metadata, key, value)
 
   defp path_not_allowed_message(policy, ctx) do
     roots =

@@ -12,7 +12,8 @@ defmodule Nex.Agent.Turn.Runner do
     Capability.Hooks,
     Conversation.RunControl,
     Conversation.Session,
-    Turn.Stream.Result
+    Turn.Stream.Result,
+    Runtime.PluginJobRunner
   }
 
   alias Nex.Agent.Observe.ControlPlane.Log, as: ControlPlaneLog
@@ -238,7 +239,12 @@ defmodule Nex.Agent.Turn.Runner do
       chat_id: chat_id,
       parent_chat_id: hook_parent_chat_id(opts),
       workspace: workspace,
-      run_id: Keyword.get(opts, :run_id)
+      run_id: Keyword.get(opts, :run_id),
+      turn_prompt: prompt,
+      runtime_snapshot: runtime_snapshot,
+      config: runtime_config,
+      plugin_data: runtime_snapshot && runtime_snapshot.plugins,
+      actor: %{"kind" => "owner_run", "id" => session.key}
     }
 
     case Hooks.run(:prompt_build_before, runtime_hooks(runtime_snapshot), hook_ctx) do
@@ -292,7 +298,7 @@ defmodule Nex.Agent.Turn.Runner do
     {put_evolution_metadata(session, metadata), runtime_system_messages}
   end
 
-  defp finalize_evolution_turn(session, initial_message_count, prompt, workspace, _opts) do
+  defp finalize_evolution_turn(session, initial_message_count, prompt, workspace, opts) do
     signals =
       session.messages
       |> Enum.drop(initial_message_count)
@@ -305,7 +311,25 @@ defmodule Nex.Agent.Turn.Runner do
 
     session = put_evolution_metadata(session, metadata)
     maybe_record_runtime_evolution_signal(signals, prompt, workspace)
+    enqueue_plugin_turn_jobs(session, prompt, workspace, opts)
     session
+  end
+
+  defp enqueue_plugin_turn_jobs(session, prompt, workspace, opts) do
+    runtime_snapshot = Keyword.get(opts, :runtime_snapshot)
+
+    ctx = %{
+      session_key: session.key,
+      workspace: workspace,
+      channel: Keyword.get(opts, :channel),
+      chat_id: Keyword.get(opts, :chat_id),
+      turn_prompt: prompt,
+      runtime_snapshot: runtime_snapshot,
+      plugin_data: runtime_snapshot && runtime_snapshot.plugins,
+      config: runtime_snapshot && runtime_snapshot.config
+    }
+
+    PluginJobRunner.enqueue_matching("conversation.turn.finished", ctx)
   end
 
   defp maybe_record_runtime_evolution_signal(

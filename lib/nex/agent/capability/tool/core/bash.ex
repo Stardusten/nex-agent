@@ -196,7 +196,8 @@ defmodule Nex.Agent.Capability.Tool.Core.Bash do
       cwd: Map.get(ctx, :cwd) || Map.get(ctx, "cwd") || File.cwd!(),
       command: command,
       requested_execution: if(escalation.requested?, do: :elevated, else: :sandboxed),
-      actor: actor_from_ctx(ctx)
+      actor: actor_from_ctx(ctx),
+      metadata: permission_metadata(ctx)
     }
   end
 
@@ -320,9 +321,22 @@ defmodule Nex.Agent.Capability.Tool.Core.Bash do
   defp actor_from_ctx(ctx) do
     case Map.get(ctx, :user_id) || Map.get(ctx, "user_id") || Map.get(ctx, :actor) do
       nil -> nil
+      %{} = value -> value
       value -> %{"id" => to_string(value)}
     end
   end
+
+  defp permission_metadata(ctx) do
+    %{}
+    |> maybe_put_metadata("plugin_id", Map.get(ctx, :plugin_id) || Map.get(ctx, "plugin_id"))
+    |> maybe_put_metadata("hook_id", Map.get(ctx, :hook_id) || Map.get(ctx, "hook_id"))
+    |> maybe_put_metadata("job_id", Map.get(ctx, :job_id) || Map.get(ctx, "job_id"))
+    |> maybe_put_metadata("mcp_server", Map.get(ctx, :mcp_server) || Map.get(ctx, "mcp_server"))
+  end
+
+  defp maybe_put_metadata(metadata, _key, nil), do: metadata
+  defp maybe_put_metadata(metadata, _key, ""), do: metadata
+  defp maybe_put_metadata(metadata, key, value), do: Map.put(metadata, key, value)
 
   defp interactive_approval_context?(%Request{} = request) do
     present?(request.channel) and present?(request.chat_id)

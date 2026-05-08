@@ -1,248 +1,123 @@
 defmodule Nex.Agent.Interface.MCP.ServerManager do
   @moduledoc """
-  MCP Server manager - dynamically start/stop MCP servers.
-
-  Supports both stdio and HTTP transports, with configuration-based auto-start.
-
-  ## Usage
-
-      # Start an MCP server (stdio)
-      {:ok, server_id} = Nex.Agent.Interface.MCP.ServerManager.start("filesystem", [
-        command: "npx",
-        args: ["-y", "@modelcontextprotocol/server-filesystem", "/Users/test/data"]
-      ])
-
-      # Start an MCP server (HTTP)
-      {:ok, server_id} = Nex.Agent.Interface.MCP.ServerManager.start("github", [
-        url: "https://mcp.example.com/github",
-        headers: %{"Authorization" => "Bearer xxx"},
-        tool_timeout: 120
-      ])
-
-      # Call a tool
-      {:ok, result} = Nex.Agent.Interface.MCP.ServerManager.call_tool(server_id, "read_file", %{path: "..."})
-
-      # Stop a server
-      :ok = Nex.Agent.Interface.MCP.ServerManager.stop(server_id)
-
-      # List running servers
-      servers = Nex.Agent.Interface.MCP.ServerManager.list()
-
-  ## Configuration-based Auto-start
-
-  Configure MCP servers in config:
-
-      config :nex_agent, :mcp_servers, %{
-        "filesystem" => %{
-          command: "npx",
-          args: ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/dir"],
-          tool_timeout: 60
-        },
-        "github" => %{
-          url: "https://mcp.example.com/github",
-          headers: %{"Authorization" => "Bearer xxx"},
-          tool_timeout: 120
-        }
-      }
-
-  Then call `start_configured/0` to auto-start all configured servers.
+  MCP server lifecycle manager.
   """
 
   use GenServer
   require Logger
 
+  alias Nex.Agent.Interface.MCP
+  alias Nex.Agent.Runtime
+  alias Nex.Agent.Sandbox.Approval
+  alias Nex.Agent.Sandbox.Approval.Request
+  alias Nex.Agent.Sandbox.PermissionRule
+
   @name __MODULE__
 
-  defstruct [:servers, :tool_registry]
-
-  # Client API
-
+  @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
-    GenServer.start_link(__MODULE__, [], opts ++ [name: @name])
+    GenServer.start_link(__MODULE__, %{servers: %{}, registry: nil}, opts ++ [name: @name])
   end
 
-  @doc """
-  Start an MCP server with the given config.
-
-  ## Parameters
-
-  * `name` - Server name (for identification)
-  * `config` - Server configuration keyword list or map
-
-  ## Config Options (Stdio)
-
-  * `:command` - Command to run (e.g., "npx", "python")
-  * `:args` - Command arguments (list)
-  * `:env` - Environment variables (map)
-  * `:tool_timeout` - Tool call timeout in seconds (default: 30)
-
-  ## Config Options (HTTP)
-
-  * `:url` - HTTP endpoint URL
-  * `:headers` - HTTP headers (map)
-  * `:tool_timeout` - Tool call timeout in seconds (default: 30)
-
-  ## Examples
-
-      {:ok, server_id} = Nex.Agent.Interface.MCP.ServerManager.start("filesystem", [
-        command: "npx",
-        args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
-      ])
-
-      {:ok, server_id} = Nex.Agent.Interface.MCP.ServerManager.start("github", [
-        url: "https://mcp.example.com/github",
-        headers: %{"Authorization" => "Bearer xxx"}
-      ])
-  """
-  @spec start(String.t(), keyword() | map()) :: {:ok, String.t()} | {:error, String.t()}
-  def start(name, config) do
-    GenServer.call(@name, {:start, name, config})
+  @spec start(String.t(), keyword() | map(), keyword()) :: {:ok, String.t()} | {:error, String.t()}
+  def start(name, config, opts \\ []) do
+    GenServer.call(@name, {:start, name, config, opts})
   end
 
-  @doc """
-  Stop a running MCP server.
-  """
   @spec stop(String.t()) :: :ok | {:error, String.t()}
   def stop(server_id) do
     GenServer.call(@name, {:stop, server_id})
   end
 
-  @doc """
-  Call a tool on an MCP server.
-  """
-  @spec call_tool(String.t(), String.t(), map()) :: {:ok, map()} | {:error, String.t()}
-  def call_tool(server_id, tool_name, arguments) do
-    GenServer.call(@name, {:call_tool, server_id, tool_name, arguments}, 60_000)
+  @spec call_tool(String.t(), String.t(), map(), keyword()) :: {:ok, map()} | {:error, String.t()}
+  def call_tool(server_id, tool_name, arguments, opts \\ []) do
+    GenServer.call(@name, {:call_tool, server_id, tool_name, arguments, opts}, 60_000)
   end
 
-  @doc """
-  List all running servers.
-  """
   @spec list() :: [map()]
   def list do
     GenServer.call(@name, :list)
   end
 
-  @doc """
-  Find a running server by name. Returns `{:ok, server_id}` or `:error`.
-  """
   @spec get_by_name(String.t()) :: {:ok, String.t()} | :error
   def get_by_name(name) do
     GenServer.call(@name, {:get_by_name, name})
   end
 
-  @doc """
-  Discover and auto-start available MCP servers from config.
-  """
   @spec start_configured() :: {:ok, [String.t()]} | {:error, String.t()}
   def start_configured do
     GenServer.call(@name, :start_configured)
   end
 
-  @doc """
-  Start configured servers and register tools to registry.
-  """
   @spec start_and_register(term()) :: {:ok, [String.t()]} | {:error, String.t()}
   def start_and_register(registry) do
     GenServer.call(@name, {:start_and_register, registry})
   end
 
-  @doc """
-  Register tools from a running MCP server to the Tool Registry.
-  """
   @spec register_tools(String.t()) :: :ok | {:error, String.t()}
   def register_tools(server_id) do
     GenServer.call(@name, {:register_tools, server_id})
   end
 
-  # Server Callbacks
-
-  @impl true
-  def init([]) do
-    {:ok, %{servers: %{}}}
+  @spec reconcile(map()) :: :ok | {:error, term()}
+  def reconcile(plugin_data) do
+    GenServer.call(@name, {:reconcile, plugin_data}, :infinity)
   end
 
+  @spec plugin_server_id(String.t(), String.t()) :: String.t()
+  def plugin_server_id(plugin_id, server_name), do: "plugin:" <> plugin_id <> ":" <> server_name
+
   @impl true
-  def handle_call({:start, name, config}, _from, state) do
-    server_id = "#{name}-#{:crypto.strong_rand_bytes(4) |> Base.encode16()}"
+  def init(state), do: {:ok, state}
 
-    # Normalize config to keyword list
-    normalized = normalize_config(config)
-
-    case Nex.Agent.Interface.MCP.start_link(normalized) do
-      {:ok, pid} ->
-        # Initialize the connection
-        case Nex.Agent.Interface.MCP.initialize(pid) do
-          {:ok, _init_result} ->
-            # Get tool timeout from config
-            tool_timeout = Keyword.get(normalized, :tool_timeout, 30)
-
-            new_servers =
-              Map.put(state.servers, server_id, %{
-                pid: pid,
-                name: name,
-                config: normalized,
-                tool_timeout: tool_timeout,
-                tools: []
-              })
-
-            Logger.info("[MCP] Started server '#{name}' (id: #{server_id})")
-            {:reply, {:ok, server_id}, %{state | servers: new_servers}}
-
-          {:error, reason} ->
-            Nex.Agent.Interface.MCP.stop(pid)
-            {:reply, {:error, "Failed to initialize: #{inspect(reason)}"}, state}
-        end
-
-      {:error, reason} ->
-        {:reply, {:error, "Failed to start: #{inspect(reason)}"}, state}
+  @impl true
+  def handle_call({:start, name, config, opts}, _from, state) do
+    case start_server(state, name, config, opts) do
+      {:ok, server_id, next_state} -> {:reply, {:ok, server_id}, next_state}
+      {:error, reason, next_state} -> {:reply, {:error, reason}, next_state}
     end
   end
 
-  @impl true
   def handle_call({:stop, server_id}, _from, state) do
+    case stop_server(state, server_id) do
+      {:ok, next_state} -> {:reply, :ok, next_state}
+      {:error, reason, next_state} -> {:reply, {:error, reason}, next_state}
+    end
+  end
+
+  def handle_call({:call_tool, server_id, tool_name, arguments, opts}, _from, state) do
     case Map.get(state.servers, server_id) do
       nil ->
         {:reply, {:error, "Server not found"}, state}
 
       server ->
-        Nex.Agent.Interface.MCP.stop(server.pid)
-        new_servers = Map.delete(state.servers, server_id)
-        Logger.info("[MCP] Stopped server '#{server.name}' (id: #{server_id})")
-        {:reply, :ok, %{state | servers: new_servers}}
+        with :ok <- authorize_call(server, tool_name, opts) do
+          timeout = (server.tool_timeout || 30) * 1000
+          {:reply, MCP.call_tool(server.pid, tool_name, arguments, timeout), state}
+        else
+          {:error, reason} -> {:reply, {:error, reason}, state}
+        end
     end
   end
 
-  @impl true
-  def handle_call({:call_tool, server_id, tool_name, arguments}, _from, state) do
-    case Map.get(state.servers, server_id) do
-      nil ->
-        {:reply, {:error, "Server not found"}, state}
-
-      server ->
-        timeout = (server.tool_timeout || 30) * 1000
-        result = Nex.Agent.Interface.MCP.call_tool(server.pid, tool_name, arguments, timeout)
-        {:reply, result, state}
-    end
-  end
-
-  @impl true
   def handle_call(:list, _from, state) do
     servers =
-      Enum.map(state.servers, fn {id, config} ->
+      Enum.map(state.servers, fn {id, server} ->
         %{
           id: id,
-          name: config.name,
-          config: config.config,
-          tool_timeout: config.tool_timeout,
-          tools_count: length(config.tools)
+          name: server.name,
+          config: server.config,
+          tool_timeout: server.tool_timeout,
+          tools_count: length(server.tools),
+          origin: server.origin,
+          plugin_id: server.plugin_id,
+          contribution_id: server.contribution_id
         }
       end)
 
     {:reply, servers, state}
   end
 
-  @impl true
   def handle_call({:get_by_name, name}, _from, state) do
     result =
       Enum.find_value(state.servers, :error, fn {id, server} ->
@@ -252,48 +127,40 @@ defmodule Nex.Agent.Interface.MCP.ServerManager do
     {:reply, result, state}
   end
 
-  @impl true
   def handle_call(:start_configured, _from, state) do
     configured = Application.get_env(:nex_agent, :mcp_servers, %{})
 
     results =
       Enum.map(configured, fn {name, config} ->
-        case start(name, config) do
-          {:ok, server_id} -> {:ok, server_id}
-          error -> error
-        end
+        start(name, config)
       end)
 
-    successes = Enum.filter(results, &match?({:ok, _}, &1))
-    {:reply, {:ok, Enum.map(successes, fn {:ok, id} -> id end)}, state}
+    successes =
+      results
+      |> Enum.filter(&match?({:ok, _}, &1))
+      |> Enum.map(fn {:ok, id} -> id end)
+
+    {:reply, {:ok, successes}, state}
   end
 
-  @impl true
   def handle_call({:start_and_register, registry}, _from, state) do
-    # First start configured servers
     {:ok, server_ids} = start_configured()
-
-    # Then register their tools
-    Enum.each(server_ids, fn server_id ->
-      register_tools_to_registry(server_id, registry)
-    end)
-
-    {:reply, {:ok, server_ids}, state}
+    Enum.each(server_ids, &register_tools_to_registry(&1, state, registry))
+    {:reply, {:ok, server_ids}, %{state | registry: registry}}
   end
 
-  @impl true
   def handle_call({:register_tools, server_id}, _from, state) do
     case Map.get(state.servers, server_id) do
       nil ->
         {:reply, {:error, "Server not found"}, state}
 
       server ->
-        # Get tools from MCP server
-        case Nex.Agent.Interface.MCP.list_tools(server.pid) do
-          {:ok, tools} ->
-            # Update server state with tools
-            new_servers = put_in(state.servers[server_id].tools, tools)
-            {:reply, {:ok, length(tools)}, %{state | servers: new_servers}}
+        case MCP.list_tools(server.pid) do
+          {:ok, %{"tools" => tools}} ->
+            {:reply, {:ok, length(tools)}, put_in(state, [:servers, server_id, :tools], tools)}
+
+          {:ok, tools} when is_list(tools) ->
+            {:reply, {:ok, length(tools)}, put_in(state, [:servers, server_id, :tools], tools)}
 
           {:error, reason} ->
             {:reply, {:error, reason}, state}
@@ -301,41 +168,288 @@ defmodule Nex.Agent.Interface.MCP.ServerManager do
     end
   end
 
+  def handle_call({:reconcile, plugin_data}, _from, state) do
+    desired = desired_plugin_servers(plugin_data)
+
+    state =
+      state
+      |> stop_removed_plugin_servers(desired)
+      |> start_missing_plugin_servers(desired)
+
+    {:reply, :ok, state}
+  end
+
   @impl true
   def terminate(_reason, state) do
-    # Stop all servers
-    Enum.each(state.servers, fn {_, server} ->
-      Nex.Agent.Interface.MCP.stop(server.pid)
-    end)
-
+    Enum.each(state.servers, fn {_id, server} -> MCP.stop(server.pid) end)
     :ok
   end
 
-  # Private functions
-
   defp normalize_config(config) when is_map(config) do
-    config
-    |> Enum.map(fn {k, v} -> {String.to_atom(k), v} end)
+    Enum.map(config, fn {k, v} ->
+      key =
+        case k do
+          key when is_atom(key) -> key
+          key -> String.to_atom(to_string(key))
+        end
+
+      {key, v}
+    end)
   end
 
   defp normalize_config(config) when is_list(config), do: config
+  defp normalize_config(_config), do: []
 
-  defp register_tools_to_registry(server_id, registry) do
-    case Map.get(registry, server_id) do
-      nil ->
-        :ok
+  defp start_server(state, name, config, opts) do
+    server_id =
+      Keyword.get(opts, :server_id) ||
+        "#{name}-#{:crypto.strong_rand_bytes(4) |> Base.encode16(case: :lower)}"
 
-      server ->
-        case Nex.Agent.Interface.MCP.list_tools(server.pid) do
-          {:ok, tools} ->
-            # Would register each tool to registry here
-            # For now just log
-            Logger.info("[MCP] Would register #{length(tools)} tools from #{server.name}")
+    normalized = normalize_config(config)
+
+    case MCP.start_link(normalized) do
+      {:ok, pid} ->
+        case MCP.initialize(pid) do
+          {:ok, _init_result} ->
+            server = %{
+              pid: pid,
+              name: name,
+              config: normalized,
+              tool_timeout: Keyword.get(normalized, :tool_timeout, 30),
+              tools: [],
+              origin: Keyword.get(opts, :origin, :manual),
+              plugin_id: Keyword.get(opts, :plugin_id),
+              contribution_id: Keyword.get(opts, :contribution_id)
+            }
+
+            {:ok, server_id, put_in(state, [:servers, server_id], server)}
+
+          {:error, reason} ->
+            MCP.stop(pid)
+            {:error, "Failed to initialize: #{inspect(reason)}", state}
+        end
+
+      {:error, reason} ->
+        {:error, "Failed to start: #{inspect(reason)}", state}
+    end
+  end
+
+  defp stop_server(state, server_id) do
+    case Map.pop(state.servers, server_id) do
+      {nil, _servers} ->
+        {:error, "Server not found", state}
+
+      {server, servers} ->
+        MCP.stop(server.pid)
+        {:ok, %{state | servers: servers}}
+    end
+  end
+
+  defp register_tools_to_registry(server_id, state, registry) do
+    case {Map.get(state.servers, server_id), registry} do
+      {%{pid: pid, name: name}, _registry} ->
+        case MCP.list_tools(pid) do
+          {:ok, %{"tools" => tools}} ->
+            Logger.info("[MCP] Would register #{length(tools)} tools from #{name}")
             :ok
 
-          {:error, _} ->
+          {:ok, tools} when is_list(tools) ->
+            Logger.info("[MCP] Would register #{length(tools)} tools from #{name}")
+            :ok
+
+          _ ->
             :ok
         end
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp desired_plugin_servers(plugin_data) do
+    contributions = Map.get(plugin_data, :contributions) || Map.get(plugin_data, "contributions") || %{}
+    Map.get(contributions, :mcp_servers) || Map.get(contributions, "mcp_servers") || []
+  end
+
+  defp stop_removed_plugin_servers(state, desired) do
+    desired_ids =
+      desired
+      |> Enum.map(fn entry -> plugin_server_id(entry["plugin_id"], entry["id"]) end)
+      |> MapSet.new()
+
+    Enum.reduce(state.servers, state, fn {server_id, server}, acc ->
+      if server.origin == :plugin and not MapSet.member?(desired_ids, server_id) do
+        MCP.stop(server.pid)
+        %{acc | servers: Map.delete(acc.servers, server_id)}
+      else
+        acc
+      end
+    end)
+  end
+
+  defp start_missing_plugin_servers(state, desired) do
+    runtime_ctx = current_runtime_context()
+
+    Enum.reduce(desired, state, fn entry, acc ->
+      runtime_id = plugin_server_id(entry["plugin_id"], entry["id"])
+
+      cond do
+        Map.has_key?(acc.servers, runtime_id) ->
+          acc
+
+        not supported_plugin_server?(entry) ->
+          Logger.warning("[MCP] Skipping unsupported plugin MCP server #{runtime_id}")
+          acc
+
+        true ->
+          case authorize_connect(entry, runtime_ctx.workspace) do
+            :ok ->
+              attrs = Map.fetch!(entry, "attrs")
+
+              start_config =
+                attrs
+                |> Map.put_new("workspace", runtime_ctx.workspace)
+                |> Map.put_new("cwd", runtime_ctx.workspace)
+                |> Map.put("config", runtime_ctx.config)
+
+              case start_server(
+                     acc,
+                     entry["id"],
+                     start_config,
+                     [
+                       server_id: runtime_id,
+                       origin: :plugin,
+                       plugin_id: entry["plugin_id"],
+                       contribution_id: entry["id"]
+                     ]
+                   ) do
+                {:ok, _runtime_id, next_state} ->
+                  next_state
+
+                {:error, reason, next_state} ->
+                  Logger.warning(
+                    "[MCP] Failed to start plugin MCP server #{runtime_id}: #{inspect(reason)}"
+                  )
+
+                  next_state
+              end
+
+            {:error, reason} ->
+              Logger.warning("[MCP] Plugin MCP server #{runtime_id} not started: #{reason}")
+              acc
+          end
+      end
+    end)
+  end
+
+  defp supported_plugin_server?(%{"attrs" => %{"command" => command}}) when is_binary(command), do: true
+  defp supported_plugin_server?(_entry), do: false
+
+  defp authorize_connect(%{"plugin_id" => plugin_id, "id" => contribution_id, "attrs" => %{}}, workspace) do
+    session_key = "plugin:" <> plugin_id
+    raw_event = mcp_raw_event("connect", plugin_id, contribution_id, nil, workspace, [])
+
+    case Approval.debug_decision(workspace, session_key, raw_event) do
+      %{action: :allow} ->
+        :ok
+
+      %{action: :deny} ->
+        {:error, "approval denied for plugin MCP connect"}
+
+      _ ->
+        {:error, "approval required for plugin MCP connect"}
+    end
+  end
+
+  defp authorize_call(%{origin: :plugin, plugin_id: plugin_id, contribution_id: contribution_id}, tool_name, opts) do
+    workspace = Keyword.get(opts, :workspace, current_runtime_context().workspace)
+    session_key = Keyword.get(opts, :session_key, "plugin:" <> plugin_id)
+    raw_event = mcp_raw_event("call", plugin_id, contribution_id, tool_name, workspace, opts)
+
+    case Approval.debug_decision(workspace, session_key, raw_event) do
+      %{action: :allow} ->
+        :ok
+
+      %{action: :deny} ->
+        {:error, "approval denied for plugin MCP tool call"}
+
+      _ ->
+        if interactive_opts?(opts) do
+          request =
+            Request.new(%{
+              kind: :mcp,
+              operation: :call,
+              subject: contribution_id <> "/" <> tool_name,
+              workspace: workspace,
+              session_key: session_key,
+              channel: Keyword.get(opts, :channel),
+              chat_id: Keyword.get(opts, :chat_id),
+              description: "Allow plugin MCP tool call #{tool_name} for #{plugin_id}/#{contribution_id}",
+              grant_key: first_grant_key(raw_event),
+              grant_options: PermissionRule.grant_options(raw_event),
+              authorized_actor: actor_from_opts(opts),
+              metadata: %{"permission_event" => PermissionRule.raw_event_to_map(raw_event)}
+            })
+
+          case Approval.request(request, publish?: false) do
+            {:ok, :approved} -> :ok
+            {:error, :denied} -> {:error, "approval denied for plugin MCP tool call"}
+            {:error, reason} -> {:error, "approval failed for plugin MCP tool call: #{inspect(reason)}"}
+          end
+        else
+          {:error, "approval required for plugin MCP tool call"}
+        end
+    end
+  end
+
+  defp authorize_call(_server, _tool_name, _opts), do: :ok
+
+  defp mcp_raw_event(action, plugin_id, contribution_id, tool_name, workspace, opts) do
+    tool_event_name =
+      case {action, tool_name} do
+        {"connect", _} -> "mcp:connect:#{plugin_id}:#{contribution_id}"
+        {"call", name} -> "mcp:call:#{plugin_id}:#{contribution_id}:#{name}"
+      end
+
+    %{
+      tool_name: tool_event_name,
+      workspace: workspace,
+      channel: Keyword.get(opts, :channel),
+      chat_id: Keyword.get(opts, :chat_id),
+      actor: actor_from_opts(opts),
+      metadata: %{
+        "plugin_id" => plugin_id,
+        "mcp_server" => contribution_id
+      }
+    }
+  end
+
+  defp actor_from_opts(opts) do
+    case Keyword.get(opts, :actor) do
+      %{} = actor -> actor
+      value when is_binary(value) -> %{"id" => value}
+      _ -> %{"kind" => "system", "id" => "plugin-mcp"}
+    end
+  end
+
+  defp first_grant_key(raw_event) do
+    raw_event
+    |> PermissionRule.grant_options()
+    |> List.first(%{})
+    |> Map.get("grant_key", "")
+  end
+
+  defp interactive_opts?(opts) do
+    present?(Keyword.get(opts, :channel)) and present?(Keyword.get(opts, :chat_id))
+  end
+
+  defp present?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present?(_value), do: false
+
+  defp current_runtime_context do
+    case Runtime.current() do
+      {:ok, %{workspace: workspace, config: config}} -> %{workspace: workspace, config: config}
+      _ -> %{workspace: File.cwd!(), config: nil}
     end
   end
 end

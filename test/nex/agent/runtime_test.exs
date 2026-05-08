@@ -57,6 +57,43 @@ defmodule Nex.Agent.RuntimeTest do
       })
     )
 
+    File.mkdir_p!(Path.join(workspace, "plugins/demo-echo"))
+
+    File.write!(
+      Path.join(workspace, "plugins/demo-echo/nex.plugin.json"),
+      Jason.encode!(%{
+        "id" => "workspace:demo-echo",
+        "title" => "Demo Echo",
+        "source" => "workspace",
+        "contributes" => %{
+          "hooks" => [
+            %{
+              "id" => "echo.prompt",
+              "event" => "prompt.build.before",
+              "action" => %{
+                "type" => "add_file",
+                "path" => "plugin_data/echo/state.json",
+                "title" => "Echo State"
+              }
+            }
+          ],
+          "jobs" => [
+            %{
+              "id" => "echo.flush",
+              "event" => "conversation.turn.finished",
+              "action" => %{"type" => "tool_call", "tool" => "echo__remember", "args" => %{"source" => "{{turn.prompt}}"}}
+            }
+          ],
+          "workspaceFiles" => [
+            %{"id" => "echo.state", "path" => "plugin_data/echo/state.json", "kind" => "file", "onMissing" => "create", "watch" => true}
+          ],
+          "mcpServers" => [
+            %{"id" => "echo_mcp", "command" => "sh", "args" => ["-c", "exit 0"]}
+          ]
+        }
+      })
+    )
+
     previous_workspace = Application.get_env(:nex_agent, :workspace_path)
     previous_config_path = Application.get_env(:nex_agent, :config_path)
     Application.put_env(:nex_agent, :workspace_path, workspace)
@@ -236,7 +273,11 @@ defmodule Nex.Agent.RuntimeTest do
 
     config = %{
       config
-      | plugins: Map.put(config.plugins, "enabled", %{"workspace:catalog-probe" => true})
+      | plugins:
+          Map.put(config.plugins, "enabled", %{
+            "workspace:catalog-probe" => true,
+            "workspace:demo-echo" => true
+          })
     }
 
     assert {:ok, %Snapshot{} = snapshot} =
@@ -249,6 +290,12 @@ defmodule Nex.Agent.RuntimeTest do
              contribution["plugin_id"] == "workspace:catalog-probe" and
                contribution["id"] == "workspace:catalog-guide"
            end)
+
+    assert Enum.any?(snapshot.plugins.contributions.hooks, &(&1["id"] == "echo.prompt"))
+    assert Enum.any?(snapshot.plugins.contributions.jobs, &(&1["id"] == "echo.flush"))
+    assert Enum.any?(snapshot.plugins.contributions.workspace_files, &(&1["id"] == "echo.state"))
+    assert Enum.any?(snapshot.plugins.contributions.mcp_servers, &(&1["id"] == "echo_mcp"))
+    assert File.exists?(Path.join(workspace, "plugin_data/echo/state.json"))
 
     old_hash = snapshot.plugins.hash
 
@@ -516,6 +563,7 @@ defmodule Nex.Agent.RuntimeTest do
         "nex-agent-runtime-explicit-#{System.unique_integer([:positive])}"
       )
 
+    File.mkdir_p!(explicit_workspace)
     File.write!(Path.join(explicit_workspace, "AGENTS.md"), "# AGENTS\nExplicit workspace.\n")
 
     on_exit(fn -> File.rm_rf!(explicit_workspace) end)

@@ -6,7 +6,7 @@ defmodule Nex.Agent.Runtime.Reconciler do
   use GenServer
   require Logger
 
-  alias Nex.Agent.{Interface.Gateway, Runtime}
+  alias Nex.Agent.{Interface.Gateway, Interface.MCP.ServerManager, Runtime}
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
@@ -24,6 +24,14 @@ defmodule Nex.Agent.Runtime.Reconciler do
         Logger.warning("[Runtime.Reconciler] Subscribe failed: #{inspect(reason)}")
     end
 
+    case Runtime.current() do
+      {:ok, %{plugins: plugins}} ->
+        if Process.whereis(ServerManager), do: ServerManager.reconcile(plugins)
+
+      _ ->
+        :ok
+    end
+
     {:ok, %{}}
   end
 
@@ -31,6 +39,14 @@ defmodule Nex.Agent.Runtime.Reconciler do
   def handle_info({:runtime_updated, %{new_version: _new_version}} = event, state) do
     if Process.whereis(Gateway) do
       _ = Gateway.reconcile(event)
+    end
+
+    case Runtime.current() do
+      {:ok, %{plugins: plugins}} ->
+        if Process.whereis(ServerManager), do: ServerManager.reconcile(plugins)
+
+      _ ->
+        :ok
     end
 
     {:noreply, state}

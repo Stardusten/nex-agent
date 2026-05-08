@@ -6,11 +6,15 @@ defmodule Nex.Agent.Extension.Plugin.Contribution do
   alias Nex.Agent.Extension.Plugin.Manifest
 
   @active_kinds %{
-    "channels" => "channel",
-    "providers" => "provider",
-    "tools" => "tool",
-    "skills" => "skill",
-    "commands" => "command"
+    "channels" => {"channels", "channel"},
+    "providers" => {"providers", "provider"},
+    "tools" => {"tools", "tool"},
+    "skills" => {"skills", "skill"},
+    "commands" => {"commands", "command"},
+    "hooks" => {"hooks", "hook"},
+    "jobs" => {"jobs", "job"},
+    "workspaceFiles" => {"workspace_files", "workspace_file"},
+    "mcpServers" => {"mcp_servers", "mcp_server"}
   }
 
   @deferred_kinds ~w(workbench_apps workbench_views subagents)
@@ -39,7 +43,11 @@ defmodule Nex.Agent.Extension.Plugin.Contribution do
       "providers" => [],
       "tools" => [],
       "skills" => [],
-      "commands" => []
+      "commands" => [],
+      "hooks" => [],
+      "jobs" => [],
+      "workspace_files" => [],
+      "mcp_servers" => []
     }
   end
 
@@ -52,6 +60,8 @@ defmodule Nex.Agent.Extension.Plugin.Contribution do
 
   defp normalize_active_kind(manifest, kind, entries, contribs, diagnostics)
        when is_list(entries) do
+    {collection_key, _record_kind} = Map.fetch!(@active_kinds, kind)
+
     {records, entry_diagnostics} =
       entries
       |> Enum.with_index()
@@ -62,7 +72,7 @@ defmodule Nex.Agent.Extension.Plugin.Contribution do
         end
       end)
 
-    {Map.update!(contribs, kind, &(Enum.reverse(records) ++ &1)),
+    {Map.update!(contribs, collection_key, &(Enum.reverse(records) ++ &1)),
      entry_diagnostics ++ diagnostics}
   end
 
@@ -79,7 +89,7 @@ defmodule Nex.Agent.Extension.Plugin.Contribution do
     else
       {:ok,
        %{
-         "kind" => Map.fetch!(@active_kinds, kind),
+         "kind" => record_kind(kind),
          "plugin_id" => manifest.id,
          "plugin_root" => plugin_root(manifest),
          "id" => contribution_id,
@@ -98,7 +108,17 @@ defmodule Nex.Agent.Extension.Plugin.Contribution do
   defp contribution_id("tools", attrs, _index), do: normalized_attr(attrs, "name")
   defp contribution_id("skills", attrs, _index), do: normalized_attr(attrs, "id")
   defp contribution_id("commands", attrs, _index), do: normalized_attr(attrs, "name")
+  defp contribution_id("hooks", attrs, _index), do: normalized_attr(attrs, "id")
+  defp contribution_id("jobs", attrs, _index), do: normalized_attr(attrs, "id")
+  defp contribution_id("workspaceFiles", attrs, _index), do: normalized_attr(attrs, "id")
+  defp contribution_id("mcpServers", attrs, _index), do: normalized_attr(attrs, "id")
   defp contribution_id(_kind, _attrs, index), do: Integer.to_string(index)
+
+  defp record_kind(kind) do
+    @active_kinds
+    |> Map.fetch!(kind)
+    |> elem(1)
+  end
 
   defp plugin_root(%Manifest{path: path}) when is_binary(path), do: Path.dirname(path)
   defp plugin_root(_manifest), do: nil
