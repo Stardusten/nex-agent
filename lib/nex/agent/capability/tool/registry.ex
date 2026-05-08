@@ -328,7 +328,10 @@ defmodule Nex.Agent.Capability.Tool.Registry do
   end
 
   def handle_call({:describe, name, opts}, _from, %{tools: tools} = state) do
-    entry = Map.get(tools, name)
+    entry =
+      tools
+      |> project_tools(tool_projection_opts_from_describe_opts(opts))
+      |> Map.get(name)
 
     description =
       if entry do
@@ -479,7 +482,11 @@ defmodule Nex.Agent.Capability.Tool.Registry do
         plugin_mcp_definition(module)
 
       is_map(module) and Map.get(module, "entry_type") == "plugin_module" ->
-        tool_definition(Map.fetch!(module, "module"), opts)
+        module
+        |> Map.fetch!("module")
+        |> tool_definition(opts)
+        |> normalize_definition()
+        |> Map.put("name", plugin_entry_name(module) || Map.get(module, "id"))
 
       true ->
         module_tool_definition(module, opts)
@@ -606,18 +613,7 @@ defmodule Nex.Agent.Capability.Tool.Registry do
   end
 
   defp builtin_tool_modules do
-    @core_tools ++ plugin_tool_modules()
-  end
-
-  defp plugin_tool_modules(opts \\ []) do
-    opts
-    |> plugin_tool_entries()
-    |> Enum.flat_map(fn
-      %{"entry_type" => "plugin_module", "module" => module} -> [module]
-      _ -> []
-    end)
-    |> Enum.reject(&is_nil/1)
-    |> Enum.uniq()
+    @core_tools
   end
 
   defp plugin_tool_names(opts) do
@@ -644,7 +640,7 @@ defmodule Nex.Agent.Capability.Tool.Registry do
     end
   end
 
-  defp plugin_tool_entries(opts \\ []) do
+  defp plugin_tool_entries(opts) do
     opts
     |> plugin_tool_contributions()
     |> Enum.map(&tool_entry/1)
@@ -711,8 +707,11 @@ defmodule Nex.Agent.Capability.Tool.Registry do
 
   defp project_tools(tools, opts) when is_map(tools) and is_list(opts) do
     enabled_plugin_names = MapSet.new(plugin_tool_names(opts))
+    plugin_tools = plugin_tools_map(opts)
 
-    Map.reject(tools, fn {name, entry} ->
+    tools
+    |> Map.merge(plugin_tools, fn _name, existing, _plugin -> existing end)
+    |> Map.reject(fn {name, entry} ->
       plugin_entry_hidden?(name, entry, enabled_plugin_names)
     end)
   end
@@ -722,6 +721,17 @@ defmodule Nex.Agent.Capability.Tool.Registry do
   defp plugin_entry?(%{"entry_type" => "plugin_module"}), do: true
   defp plugin_entry?(%{"entry_type" => "plugin_mcp"}), do: true
   defp plugin_entry?(_entry), do: false
+
+  defp plugin_tools_map(opts) do
+    opts
+    |> plugin_tool_entries()
+    |> Enum.reduce(%{}, fn entry, acc ->
+      case plugin_entry_name(entry) do
+        name when is_binary(name) and name != "" -> Map.put(acc, name, entry)
+        _ -> acc
+      end
+    end)
+  end
 
   defp plugin_entry_hidden?(name, entry, enabled_plugin_names) do
     cond do
@@ -776,6 +786,9 @@ defmodule Nex.Agent.Capability.Tool.Registry do
 
   defp tool_projection_opts(_ctx), do: []
 
+  defp tool_projection_opts_from_describe_opts(opts) when is_list(opts), do: opts
+  defp tool_projection_opts_from_describe_opts(_opts), do: []
+
   defp maybe_put_opt(opts, _key, nil), do: opts
   defp maybe_put_opt(opts, _key, false), do: opts
   defp maybe_put_opt(opts, key, value), do: Keyword.put(opts, key, value)
@@ -808,27 +821,8 @@ defmodule Nex.Agent.Capability.Tool.Registry do
   defp build_tools do
     %{}
     |> register_modules(@core_tools, "core")
-    |> register_entries(plugin_tool_entries(), "builtin_plugin")
     |> register_modules(discover_project_tool_modules(), "project")
     |> register_modules(discover_custom_tool_modules(), "custom")
-  end
-
-  defp register_entries(acc, entries, source) do
-    Enum.reduce(entries, acc, fn entry, tools ->
-      name = plugin_entry_name(entry)
-
-      cond do
-        not is_binary(name) or name == "" ->
-          tools
-
-        Map.has_key?(tools, name) ->
-          Logger.warning("[Registry] Skipping #{source} tool with conflicting name #{name}")
-          tools
-
-        true ->
-          Map.put(tools, name, entry)
-      end
-    end)
   end
 
   defp plugin_entry_name(%{"attrs" => %{} = attrs}), do: Map.get(attrs, "name")

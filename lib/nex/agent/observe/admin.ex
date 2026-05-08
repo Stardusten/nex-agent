@@ -560,7 +560,7 @@ defmodule Nex.Agent.Observe.Admin do
 
     builtin_names =
       if Process.whereis(Registry) do
-        Registry.list()
+        Registry.definitions(:all) |> Enum.map(& &1["name"])
       else
         Registry.builtin_names()
       end

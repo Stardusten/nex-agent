@@ -33,31 +33,34 @@ defmodule Nex.Agent.Capability.Tool.Core.ToolList do
     }
   end
 
-  def execute(%{"detail" => tool_name}, _ctx) when is_binary(tool_name) and tool_name != "" do
-    case custom_detail(tool_name) || builtin_detail(tool_name) do
+  def execute(%{"detail" => tool_name}, ctx) when is_binary(tool_name) and tool_name != "" do
+    case custom_detail(tool_name) || builtin_detail(tool_name, ctx) do
       nil -> {:error, "Tool not found: #{tool_name}"}
       detail -> {:ok, detail}
     end
   end
 
-  def execute(%{"scope" => scope}, _ctx) when scope in ["builtin", "custom", "all"] do
+  def execute(%{"scope" => scope}, ctx) when scope in ["builtin", "custom", "all"] do
     {:ok,
      %{
        scope: scope,
-       builtin: if(scope in ["builtin", "all"], do: builtin_list(), else: []),
+       builtin: if(scope in ["builtin", "all"], do: builtin_list(ctx), else: []),
        custom: if(scope in ["custom", "all"], do: custom_list(), else: [])
      }}
   end
 
   def execute(_args, ctx), do: execute(%{"scope" => "all"}, ctx)
 
-  defp builtin_list do
+  defp builtin_list(ctx) do
     custom_names = MapSet.new(Enum.map(custom_list(), & &1["name"]))
 
-    Registry.list()
+    Registry.definitions(:all, registry_opts(ctx))
+    |> Enum.map(& &1["name"])
     |> Enum.reject(&MapSet.member?(custom_names, &1))
     |> Enum.sort()
-    |> Enum.map(fn name -> Registry.describe(name) |> Map.put("scope", "builtin") end)
+    |> Enum.map(fn name ->
+      Registry.describe(name, registry_opts(ctx)) |> Map.put("scope", "builtin")
+    end)
   end
 
   defp custom_list do
@@ -75,13 +78,14 @@ defmodule Nex.Agent.Capability.Tool.Core.ToolList do
     end)
   end
 
-  defp builtin_detail(name) do
+  defp builtin_detail(name, ctx) do
     custom_names = MapSet.new(Enum.map(custom_list(), & &1["name"]))
 
     if MapSet.member?(custom_names, name) do
       nil
     else
-      Registry.describe(name) |> then(&(&1 && Map.put(&1, "scope", "builtin")))
+      Registry.describe(name, registry_opts(ctx))
+      |> then(&(&1 && Map.put(&1, "scope", "builtin")))
     end
   end
 
@@ -107,5 +111,20 @@ defmodule Nex.Agent.Capability.Tool.Core.ToolList do
         }
     end
   end
+
+  defp registry_opts(ctx) when is_map(ctx) do
+    []
+    |> maybe_put(:plugin_data, Map.get(ctx, :plugin_data) || Map.get(ctx, "plugin_data"))
+    |> maybe_put(:config, Map.get(ctx, :config) || Map.get(ctx, "config"))
+    |> maybe_put(
+      :runtime_snapshot,
+      Map.get(ctx, :runtime_snapshot) || Map.get(ctx, "runtime_snapshot")
+    )
+  end
+
+  defp registry_opts(_ctx), do: []
+
+  defp maybe_put(opts, _key, nil), do: opts
+  defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
 
 end
