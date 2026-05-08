@@ -2,8 +2,6 @@ defmodule Nex.Agent.Self.Evolution.Executor do
   @moduledoc false
 
   alias Nex.Agent.{Runtime.Config, Turn.Runner}
-  alias Nex.Agent.Capability.Tool.Registry
-
   alias Nex.Agent.Capability.Tool.Core.{
     ApplyPatch,
     Find,
@@ -17,7 +15,6 @@ defmodule Nex.Agent.Self.Evolution.Executor do
   def realize(candidate, mode, ctx) when is_map(candidate) and is_binary(mode) do
     execution =
       case candidate["kind"] do
-        "memory_candidate" -> memory_execution(candidate)
         "soul_candidate" -> soul_execution(candidate, ctx)
         "skill_candidate" -> skill_execution(candidate)
         "code_hint" -> code_execution(candidate, mode, ctx)
@@ -76,16 +73,6 @@ defmodule Nex.Agent.Self.Evolution.Executor do
   end
 
   def apply_realization(
-        %{"execution" => %{"tool" => "memory_write", "args" => args}} = realization,
-        ctx
-      ) do
-    case execute_tool("memory_write", args, ctx) do
-      {:ok, result} -> {:ok, Map.put(realization, "result", result)}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  def apply_realization(
         %{"execution" => %{"tool" => "soul_update", "args" => args}} = realization,
         ctx
       ) do
@@ -107,24 +94,6 @@ defmodule Nex.Agent.Self.Evolution.Executor do
 
   def apply_realization(%{"execution" => %{"tool" => tool}}, _ctx) do
     {:error, "Execution mode apply is not supported for #{tool}"}
-  end
-
-  defp execute_tool(name, args, ctx) do
-    if Process.whereis(Registry) do
-      Registry.execute(name, args, ctx)
-    else
-      {:error, "Tool registry unavailable: #{name}"}
-    end
-  end
-
-  defp memory_execution(candidate) do
-    %{
-      "tool" => "memory_write",
-      "args" => %{
-        "action" => "append",
-        "content" => bounded_content(candidate["summary"], candidate["rationale"])
-      }
-    }
   end
 
   defp soul_execution(candidate, ctx) do
@@ -450,13 +419,6 @@ defmodule Nex.Agent.Self.Evolution.Executor do
 
   defp ensure_deploy_succeeded(other),
     do: {:error, "unexpected self_update result #{inspect(other)}"}
-
-  defp bounded_content(summary, rationale) do
-    [summary, rationale]
-    |> Enum.reject(&(&1 in [nil, ""]))
-    |> Enum.join("\n\n")
-    |> bounded_string(1200)
-  end
 
   defp bounded_string(value, limit) do
     value

@@ -4,7 +4,7 @@ defmodule Nex.Agent.UserUpdateTest do
   Code.require_file("layer_contract_helper.exs", __DIR__)
 
   alias Nex.Agent.LayerContractHelper
-  alias Nex.Agent.Knowledge.Memory
+  alias Nex.Agent.Knowledge.UserProfile
   alias Nex.Agent.Capability.Tool.Core.UserUpdate
 
   setup do
@@ -33,14 +33,14 @@ defmodule Nex.Agent.UserUpdateTest do
                %{workspace: workspace}
              )
 
-    assert Memory.read_user_profile(workspace: workspace) =~ "Prefers concise Chinese responses."
+    assert UserProfile.read(workspace: workspace) =~ "Prefers concise Chinese responses."
   end
 
   test "user_update add upserts an existing profile field instead of duplicating", %{
     workspace: workspace
   } do
     :ok =
-      Memory.write_user_profile(
+      UserProfile.write(
         "# User Profile\n\n## Basic Information\n\n- **Name**: (user's name)\n",
         workspace: workspace
       )
@@ -54,7 +54,7 @@ defmodule Nex.Agent.UserUpdateTest do
                %{workspace: workspace}
              )
 
-    profile = Memory.read_user_profile(workspace: workspace)
+    profile = UserProfile.read(workspace: workspace)
     assert profile =~ "- **Name**: fenix"
     refute profile =~ "(user's name)"
     assert length(Regex.scan(~r/^- \*\*Name\*\*:/m, profile)) == 1
@@ -62,7 +62,7 @@ defmodule Nex.Agent.UserUpdateTest do
 
   test "user_update set replaces profile", %{workspace: workspace} do
     :ok =
-      Memory.write_user_profile("Name: fenix\nTimezone: Asia/Shanghai\n", workspace: workspace)
+      UserProfile.write("Name: fenix\nTimezone: Asia/Shanghai\n", workspace: workspace)
 
     assert {:ok, _} =
              UserUpdate.execute(
@@ -74,7 +74,7 @@ defmodule Nex.Agent.UserUpdateTest do
                %{workspace: workspace}
              )
 
-    profile = Memory.read_user_profile(workspace: workspace)
+    profile = UserProfile.read(workspace: workspace)
     assert profile =~ "- **Name**: fenix"
     assert profile =~ "- **Timezone**: UTC+8"
   end
@@ -133,7 +133,7 @@ defmodule Nex.Agent.UserUpdateTest do
                %{workspace: workspace}
              )
 
-    profile = Memory.read_user_profile(workspace: workspace)
+    profile = UserProfile.read(workspace: workspace)
     refute profile =~ "Claude"
   end
 

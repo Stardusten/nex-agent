@@ -55,7 +55,6 @@ defmodule Nex.Agent.MessageToolTest do
              MapSet.new([
                "executor_status",
                "interrupt_session",
-               "memory_status",
                "observe",
                "read",
                "skill_get",
@@ -72,7 +71,6 @@ defmodule Nex.Agent.MessageToolTest do
     refute MapSet.member?(names, "message")
     refute MapSet.member?(names, "spawn_task")
     refute MapSet.member?(names, "cron")
-    refute MapSet.member?(names, "memory_write")
   end
 
   test "message tool forwards explicit feishu structured message metadata" do

@@ -8,9 +8,6 @@ defmodule Nex.Agent.Self.Evolution do
   alias Nex.Agent.Self.Evolution.{Candidates, Evidence}
   require Log
 
-  @evolution_counter_file ".evolution_counter"
-  @consolidations_per_evolution 5
-
   @type trigger :: :manual | :post_consolidation | :scheduled_daily | :scheduled_weekly
   @type profile :: :quick | :routine | :deep
 
@@ -116,43 +113,6 @@ defmodule Nex.Agent.Self.Evolution do
 
   @spec candidate(String.t(), keyword()) :: {:ok, map()} | {:error, String.t()}
   def candidate(candidate_id, opts \\ []), do: Candidates.get(candidate_id, workspace_opts(opts))
-
-  @spec maybe_trigger_after_consolidation(keyword()) :: boolean()
-  def maybe_trigger_after_consolidation(opts \\ []) do
-    workspace_opts = workspace_opts(opts)
-    counter_path = Path.join(Workspace.memory_dir(workspace_opts), @evolution_counter_file)
-
-    current =
-      case File.read(counter_path) do
-        {:ok, content} ->
-          case Integer.parse(String.trim(content)) do
-            {n, _} -> n
-            :error -> 0
-          end
-
-        {:error, _} ->
-          0
-      end
-
-    new_count = current + 1
-    File.write!(counter_path, to_string(new_count))
-
-    if rem(new_count, @consolidations_per_evolution) == 0 do
-      Log.info(
-        "evolution.threshold_reached",
-        %{"consolidation_count" => new_count, "threshold" => @consolidations_per_evolution},
-        workspace_opts
-      )
-
-      Task.Supervisor.start_child(Nex.Agent.TaskSupervisor, fn ->
-        run_evolution_cycle(Keyword.put(opts, :trigger, :post_consolidation))
-      end)
-
-      true
-    else
-      false
-    end
-  end
 
   defp run_cycle_with_evidence(evidence, :sleep, _opts) do
     candidates = low_cost_candidates(evidence, :sleep)
@@ -271,8 +231,6 @@ defmodule Nex.Agent.Self.Evolution do
   defp reflection_prompt(evidence, profile, opts) do
     workspace_opts = workspace_opts(opts)
     soul = read_file(Workspace.root(workspace_opts), "SOUL.md")
-    memory = read_file(Workspace.memory_dir(workspace_opts), "MEMORY.md")
-
     skills =
       Skills.list(workspace_opts)
       |> Enum.map(fn skill ->
@@ -286,19 +244,16 @@ defmodule Nex.Agent.Self.Evolution do
     Analyze the ControlPlane evidence pack and propose owner-approved evolution candidates only.
 
     Rules:
-    - Do not propose automatic deploys, patches, memory writes, skill writes, or SOUL changes.
+    - Do not propose automatic deploys, patches, skill writes, or SOUL changes.
     - Every candidate must cite evidence_ids drawn from the evidence pack observations.
     - Prefer concise, bounded candidates over broad redesigns.
     - Use `record_only` when evidence is weak.
-    - `memory_candidate`, `skill_candidate`, `soul_candidate`, and `code_hint` are proposals only.
+    - `skill_candidate`, `soul_candidate`, and `code_hint` are proposals only.
 
     Requested profile: #{Atom.to_string(profile)}
 
     ## Current Soul
     #{if soul == "", do: "(empty)", else: soul}
-
-    ## Current Memory
-    #{if memory == "", do: "(empty)", else: memory}
 
     ## Current Skills
     #{if skills == "", do: "(none)", else: skills}
@@ -332,7 +287,6 @@ defmodule Nex.Agent.Self.Evolution do
                       "enum" => [
                         "record_only",
                         "reflection_candidate",
-                        "memory_candidate",
                         "skill_candidate",
                         "soul_candidate",
                         "code_hint"
@@ -381,7 +335,6 @@ defmodule Nex.Agent.Self.Evolution do
     if kind in [
          "record_only",
          "reflection_candidate",
-         "memory_candidate",
          "skill_candidate",
          "soul_candidate",
          "code_hint"

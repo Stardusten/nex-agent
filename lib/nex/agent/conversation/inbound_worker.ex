@@ -28,7 +28,6 @@ defmodule Nex.Agent.Conversation.InboundWorker do
   alias Nex.Agent.Conversation.Command.StatusView
   alias Nex.Agent.Interface.Outbound.Action, as: OutboundAction
   alias Nex.Agent.Interface.Channel.Catalog, as: ChannelCatalog
-  alias Nex.Agent.Knowledge.Memory.Updater, as: MemoryUpdater
   alias Nex.Agent.Observe.ControlPlane.{Query, Redactor}
   alias Nex.Agent.Interface.Inbound.Envelope
   alias Nex.Agent.Interface.Media.{Hydrator, Projector, Ref}
@@ -221,7 +220,6 @@ defmodule Nex.Agent.Conversation.InboundWorker do
   @impl true
   def handle_info({:async_result, key, run_id, {:ok, result, updated_agent}, payload}, state) do
     from_cron = Map.get(payload.metadata, "_from_cron") == true
-    from_subagent = Map.get(payload.metadata, "_from_subagent") == true
 
     if current_owner_run?(state, key, run_id) and RunControl.finish_owner(run_id, result) == :ok do
       observe_owner_dispatch(
@@ -255,15 +253,6 @@ defmodule Nex.Agent.Conversation.InboundWorker do
 
       publish_task_complete(payload, :ok)
 
-      maybe_enqueue_memory_refresh(
-        updated_agent,
-        payload,
-        from_cron,
-        from_subagent,
-        state.agent_prompt_fun,
-        state.config
-      )
-
       {:noreply, maybe_drain_pending(state, key)}
     else
       Logger.info(
@@ -277,7 +266,6 @@ defmodule Nex.Agent.Conversation.InboundWorker do
   @impl true
   def handle_info({:async_result, key, run_id, {:error, reason, updated_agent}, payload}, state) do
     from_cron = Map.get(payload.metadata, "_from_cron") == true
-    from_subagent = Map.get(payload.metadata, "_from_subagent") == true
 
     if current_owner_run?(state, key, run_id) and RunControl.fail_owner(run_id, reason) == :ok do
       observe_owner_dispatch(
@@ -306,15 +294,6 @@ defmodule Nex.Agent.Conversation.InboundWorker do
       end
 
       publish_task_complete(payload, :error)
-
-      maybe_enqueue_memory_refresh(
-        updated_agent,
-        payload,
-        from_cron,
-        from_subagent,
-        state.agent_prompt_fun,
-        state.config
-      )
 
       {:noreply, maybe_drain_pending(state, key)}
     else
@@ -1758,99 +1737,6 @@ defmodule Nex.Agent.Conversation.InboundWorker do
   defp maybe_put_opt(opts, _key, nil), do: opts
   defp maybe_put_opt(opts, key, value), do: Keyword.put(opts, key, value)
 
-  defp maybe_enqueue_memory_refresh(_agent, _payload, true, _from_subagent, _prompt_fun, _config),
-    do: :ok
-
-  defp maybe_enqueue_memory_refresh(_agent, _payload, _from_cron, true, _prompt_fun, _config),
-    do: :ok
-
-  defp maybe_enqueue_memory_refresh(
-         %Nex.Agent{} = agent,
-         payload,
-         false,
-         false,
-         prompt_fun,
-         config
-       ) do
-    if memory_refresh_allowed?(agent, prompt_fun) do
-      enqueue_memory_refresh(agent, payload, config)
-    end
-  end
-
-  defp memory_refresh_allowed?(%Nex.Agent{} = agent, prompt_fun) do
-    metadata = agent.session.metadata || %{}
-
-    default_agent_prompt_fun?(prompt_fun) or
-      Map.has_key?(metadata, "memory_refresh_llm_call_fun") or
-      Map.has_key?(metadata, "memory_refresh_req_llm_stream_text_fun")
-  end
-
-  defp memory_refresh_allowed?(_agent, prompt_fun), do: default_agent_prompt_fun?(prompt_fun)
-
-  defp default_agent_prompt_fun?(fun) when is_function(fun, 3) do
-    info = Function.info(fun)
-
-    Keyword.get(info, :type) == :external and
-      Keyword.get(info, :module) == Nex.Agent and
-      Keyword.get(info, :name) == :prompt and
-      Keyword.get(info, :arity) == 3
-  end
-
-  defp default_agent_prompt_fun?(_fun), do: false
-
-  defp enqueue_memory_refresh(%Nex.Agent{} = agent, payload, config) do
-    runtime = memory_refresh_runtime(config, agent)
-
-    MemoryUpdater.enqueue(
-      agent.session,
-      provider: runtime.provider,
-      model: runtime.model,
-      api_key: runtime.api_key,
-      base_url: runtime.base_url,
-      provider_options: runtime.provider_options,
-      workspace: agent.workspace,
-      channel: payload.channel,
-      chat_id: payload_chat_id(payload),
-      model_role: runtime.model_role,
-      notify_memory_updates: true,
-      source: "owner_run"
-    )
-  end
-
-  defp memory_refresh_runtime(%Config{} = config, %Nex.Agent{} = agent) do
-    case Config.memory_model_runtime(config) do
-      %{provider: provider, model_id: model} = runtime ->
-        %{
-          provider: provider,
-          model: model,
-          api_key: runtime.api_key,
-          base_url: runtime.base_url,
-          provider_options: runtime.provider_options,
-          model_role: "memory"
-        }
-
-      _ ->
-        %{
-          provider: agent.provider,
-          model: agent.model,
-          api_key: agent.api_key,
-          base_url: agent.base_url,
-          provider_options: agent.provider_options || [],
-          model_role: "runtime"
-        }
-    end
-  end
-
-  defp memory_refresh_runtime(_config, %Nex.Agent{} = agent) do
-    %{
-      provider: agent.provider,
-      model: agent.model,
-      api_key: agent.api_key,
-      base_url: agent.base_url,
-      provider_options: agent.provider_options || [],
-      model_role: "runtime"
-    }
-  end
 
   # Suppress LLM outputs that are clearly not real replies to the user.
   # Uses structural checks rather than keyword blocklists.

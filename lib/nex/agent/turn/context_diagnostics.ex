@@ -3,11 +3,10 @@ defmodule Nex.Agent.Turn.ContextDiagnostics do
   Deterministic layer-boundary diagnostics for context files and write validation.
   """
 
-  @type layer :: :agents | :identity | :soul | :user | :tools | :memory | :unknown
+  @type layer :: :agents | :identity | :soul | :user | :tools | :unknown
 
   @type category ::
-          :persona_style_instruction_in_memory
-          | :user_profile_data_in_soul
+          :user_profile_data_in_soul
           | :identity_definition_in_soul
           | :outdated_capability_model_claim_in_agents
           | :identity_persona_instruction_in_user
@@ -21,14 +20,6 @@ defmodule Nex.Agent.Turn.ContextDiagnostics do
         }
 
   @rules [
-    %{
-      layer: :memory,
-      category: :persona_style_instruction_in_memory,
-      message:
-        "MEMORY.md contains persona/style instructions; persona and style guidance belongs to SOUL.md.",
-      pattern:
-        ~r/\b(?:you should|you must|always|never|respond|answer|speak|write)\b[^\n]*\b(?:tone|style|persona|personality|voice|concise|formal|casual)\b/i
-    },
     %{
       layer: :soul,
       category: :user_profile_data_in_soul,
@@ -118,6 +109,5 @@ defmodule Nex.Agent.Turn.ContextDiagnostics do
   defp layer_to_source(:soul), do: "SOUL.md"
   defp layer_to_source(:user), do: "USER.md"
   defp layer_to_source(:tools), do: "TOOLS.md"
-  defp layer_to_source(:memory), do: "memory/MEMORY.md"
   defp layer_to_source(_), do: "unknown"
 end

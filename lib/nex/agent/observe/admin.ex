@@ -115,8 +115,6 @@ defmodule Nex.Agent.Observe.Admin do
       recent_candidates: Evolution.recent_candidates(workspace_opts(opts)) |> Enum.take(20),
       soul_preview: file_preview(Path.join(workspace, "SOUL.md")),
       user_preview: file_preview(Path.join(workspace, "USER.md"), 40),
-      memory_preview:
-        file_preview(Path.join(Workspace.memory_dir(workspace: workspace), "MEMORY.md")),
       layers: evolution_layers(opts)
     }
   end
@@ -137,14 +135,11 @@ defmodule Nex.Agent.Observe.Admin do
   @spec memory_state(keyword()) :: map()
   def memory_state(opts \\ []) do
     workspace = workspace(opts)
-    memory_dir = Workspace.memory_dir(workspace: workspace)
 
     %{
       workspace: workspace,
       soul_preview: file_preview(Path.join(workspace, "SOUL.md"), 40),
-      memory_preview: file_preview(Path.join(memory_dir, "MEMORY.md"), 80),
       user_preview: file_preview(Path.join(workspace, "USER.md"), 60),
-      memory_bytes: file_size(Path.join(memory_dir, "MEMORY.md")),
       recent_events:
         Query.recent_events(Keyword.put(workspace_opts(opts), :limit, 80))
         |> Enum.filter(fn entry ->
@@ -278,17 +273,12 @@ defmodule Nex.Agent.Observe.Admin do
 
       %Session{} = session ->
         messages = session.messages
-        unreviewed = max(length(messages) - session.last_consolidated, 0)
 
         %{
           key: session.key,
           created_at: session.created_at,
           updated_at: session.updated_at,
           total_messages: length(messages),
-          last_consolidated: session.last_consolidated,
-          last_reviewed_message_count: session.last_consolidated,
-          unconsolidated_messages: unreviewed,
-          unreviewed_messages: unreviewed,
           last_prompt: get_in(session.metadata || %{}, ["runtime_evolution", "last_prompt"]),
           messages:
             messages
@@ -312,25 +302,6 @@ defmodule Nex.Agent.Observe.Admin do
       |> Keyword.put_new(:trigger, :manual)
       |> Keyword.merge(current_llm_opts(opts))
     )
-  end
-
-  @spec consolidate_memory(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
-  def consolidate_memory(session_key, opts \\ []) when is_binary(session_key) do
-    result = execute_tool("memory_consolidate", %{"session_key" => session_key}, tool_ctx(opts))
-
-    case result do
-      {:ok, payload} ->
-        Log.info(
-          "memory.consolidated",
-          Map.merge(payload, %{"session_key" => session_key}),
-          workspace_opts(opts)
-        )
-
-        {:ok, payload}
-
-      other ->
-        other
-    end
   end
 
   @spec reset_session(String.t(), keyword()) :: :ok | {:error, term()}
@@ -542,9 +513,9 @@ defmodule Nex.Agent.Observe.Admin do
       %{
         key: "MEMORY",
         href: "/memory",
-        summary: "项目事实、长期经验与上下文",
+        summary: "层路由、用户画像与演化候选",
         detail:
-          "#{length(Evolution.recent_signals(workspace_opts(opts)))} recent signal observations · #{file_size(Path.join(Workspace.memory_dir(workspace: workspace), "MEMORY.md"))} bytes"
+          "#{length(Evolution.recent_signals(workspace_opts(opts)))} recent signal observations · #{length(Evolution.recent_candidates(workspace_opts(opts)))} derived candidates"
       },
       %{
         key: "EVOLUTION",
@@ -637,10 +608,6 @@ defmodule Nex.Agent.Observe.Admin do
       case module.name() do
         "soul_update" -> ["soul"]
         "user_update" -> ["user"]
-        "memory_consolidate" -> ["memory"]
-        "memory_status" -> ["memory"]
-        "memory_rebuild" -> ["memory"]
-        "memory_write" -> ["memory"]
         "skill_get" -> ["skill"]
         "skill_capture" -> ["skill"]
         "tool_create" -> ["tool"]
@@ -670,9 +637,6 @@ defmodule Nex.Agent.Observe.Admin do
       session = load_session_from_path(path)
 
       if session do
-        last_consolidated = session.last_consolidated || 0
-        unconsolidated = max(length(session.messages) - last_consolidated, 0)
-
         last_message =
           case List.last(session.messages) do
             %{} = message -> Map.get(message, "content")
@@ -684,8 +648,6 @@ defmodule Nex.Agent.Observe.Admin do
           created_at: session.created_at,
           updated_at: session.updated_at,
           total_messages: length(session.messages),
-          last_consolidated: last_consolidated,
-          unconsolidated_messages: unconsolidated,
           last_message: truncate_text(last_message, 120)
         }
       end
@@ -961,13 +923,6 @@ defmodule Nex.Agent.Observe.Admin do
     case File.read(path) do
       {:ok, content} -> content
       {:error, _} -> ""
-    end
-  end
-
-  defp file_size(path) do
-    case File.stat(path) do
-      {:ok, stat} -> stat.size
-      {:error, _} -> 0
     end
   end
 

@@ -5,7 +5,6 @@ defmodule Nex.Agent.Conversation.InboundWorkerTest do
     App.Bus,
     Runtime.Config,
     Conversation.InboundWorker,
-    Knowledge.Memory,
     Conversation.RunControl,
     Turn.Runner,
     Runtime,
@@ -28,14 +27,11 @@ defmodule Nex.Agent.Conversation.InboundWorkerTest do
     workspace =
       Path.join(System.tmp_dir!(), "nex-agent-inbound-#{System.unique_integer([:positive])}")
 
-    File.mkdir_p!(Path.join(workspace, "memory"))
     File.mkdir_p!(Path.join(workspace, "skills"))
     File.write!(Path.join(workspace, "AGENTS.md"), "# AGENTS\n")
     File.write!(Path.join(workspace, "SOUL.md"), "# SOUL\n")
     File.write!(Path.join(workspace, "USER.md"), "# USER\n")
     File.write!(Path.join(workspace, "TOOLS.md"), "# TOOLS\n")
-    File.write!(Path.join(workspace, "memory/MEMORY.md"), "# Memory\n")
-    File.write!(Path.join(workspace, "memory/HISTORY.md"), "# History\n")
 
     Application.put_env(:nex_agent, :workspace_path, workspace)
     Skills.load()
@@ -61,12 +57,6 @@ defmodule Nex.Agent.Conversation.InboundWorkerTest do
     if Process.whereis(Nex.Agent.Conversation.SessionManager) == nil do
       start_supervised!(
         {Nex.Agent.Conversation.SessionManager, name: Nex.Agent.Conversation.SessionManager}
-      )
-    end
-
-    if Process.whereis(Nex.Agent.Knowledge.Memory.Updater) == nil do
-      start_supervised!(
-        {Nex.Agent.Knowledge.Memory.Updater, name: Nex.Agent.Knowledge.Memory.Updater}
       )
     end
 
@@ -1361,7 +1351,6 @@ defmodule Nex.Agent.Conversation.InboundWorkerTest do
 
     File.mkdir_p!(Path.join(other_workspace, "memory"))
     File.write!(Path.join(other_workspace, "AGENTS.md"), "# Other AGENTS\n")
-    File.write!(Path.join(other_workspace, "memory/MEMORY.md"), "# Memory\n")
 
     on_exit(fn -> File.rm_rf!(other_workspace) end)
 
@@ -1510,71 +1499,6 @@ defmodule Nex.Agent.Conversation.InboundWorkerTest do
 
     refute Enum.any?(payloads, &(&1.content == "已发送一个简单的表情回复。"))
     refute Enum.any?(payloads, &(&1.metadata["_progress"] == true))
-  end
-
-  test "inbound worker publishes final reply before background memory refresh finishes", %{
-    workspace: workspace
-  } do
-    parent = self()
-    worker_name = String.to_atom("inbound_worker_memory_#{System.unique_integer([:positive])}")
-
-    prompt_fun = fn agent, _prompt, _opts ->
-      updated_session =
-        agent.session
-        |> Session.add_message("user", "hello")
-        |> Session.add_message("assistant", "final reply")
-        |> then(fn session ->
-          metadata =
-            Map.merge(session.metadata || %{}, %{
-              "memory_refresh_llm_call_fun" => fn _messages, _llm_opts ->
-                send(parent, :memory_refresh_started)
-                Process.sleep(200)
-
-                {:ok,
-                 %{
-                   "status" => "update",
-                   "memory_update" =>
-                     "# Long-term Memory\n\n## User Preferences\n- Likes concise replies.\n"
-                 }}
-              end
-            })
-
-          %{session | metadata: metadata}
-        end)
-
-      {:ok, "final reply", %{agent | session: updated_session, workspace: workspace}}
-    end
-
-    start_supervised!(
-      {InboundWorker,
-       name: worker_name, config: default_worker_config(), agent_prompt_fun: prompt_fun}
-    )
-
-    send(Process.whereis(worker_name), {
-      :bus_message,
-      :inbound,
-      %Envelope{
-        channel: @feishu_instance,
-        chat_id: "chat-memory",
-        sender_id: "tester",
-        text: "hello",
-        message_type: :text,
-        raw: %{},
-        metadata: %{},
-        media_refs: [],
-        attachments: []
-      }
-    })
-
-    assert_receive {:bus_message, @feishu_topic, payload}, 1_000
-    assert payload.content == "final reply"
-    assert Memory.read_long_term(workspace: workspace) == "# Memory\n"
-
-    assert_receive :memory_refresh_started, 1_000
-
-    wait_for(fn ->
-      Memory.read_long_term(workspace: workspace) =~ "Likes concise replies."
-    end)
   end
 
   test "feishu stream sink updates card incrementally and suppresses default final outbound" do

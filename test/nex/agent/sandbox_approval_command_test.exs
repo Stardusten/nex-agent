@@ -19,9 +19,7 @@ defmodule Nex.Agent.SandboxApprovalCommandTest do
         "nex-agent-approval-command-#{System.unique_integer([:positive])}"
       )
 
-    File.mkdir_p!(Path.join(workspace, "memory"))
     File.write!(Path.join(workspace, "AGENTS.md"), "# AGENTS\n")
-    File.write!(Path.join(workspace, "memory/MEMORY.md"), "# Memory\n")
 
     if Process.whereis(Bus) == nil do
       start_supervised!({Bus, name: Bus})

@@ -125,11 +125,6 @@ defmodule Nex.Agent.App.OnboardingMigrationTest do
     assert legacy_job["message"] =~ "Create a daily personal summary"
     assert legacy_job["message"] =~ "action=`summary`"
 
-    memory_template = File.read!(Path.join(workspace, "memory/MEMORY.md"))
-    assert memory_template =~ "## Environment Facts"
-    assert memory_template =~ "## Project Conventions"
-    assert memory_template =~ "## Workflow Lessons"
-    refute memory_template =~ "## User Information"
   end
 
   test "new workspace templates do not encode identity replacement", %{workspace: workspace} do
@@ -191,9 +186,6 @@ defmodule Nex.Agent.App.OnboardingMigrationTest do
 
     assert tools_content =~ "Tool reference"
     assert tools_content =~ "Built-in Tool Families"
-    assert tools_content =~ "memory_consolidate"
-    assert tools_content =~ "memory_status"
-    assert tools_content =~ "memory_rebuild"
     assert tools_content =~ "builtin:nex-code-maintenance"
     assert tools_content =~ "builtin:runtime-observability"
     assert tools_content =~ "builtin:memory-and-evolution-routing"
@@ -266,8 +258,6 @@ defmodule Nex.Agent.App.OnboardingMigrationTest do
     assert File.exists?(Path.join(workspace, "SOUL.md"))
     assert File.exists?(Path.join(workspace, "USER.md"))
     assert File.exists?(Path.join(workspace, "TOOLS.md"))
-    assert File.exists?(Path.join(workspace, "memory/MEMORY.md"))
-    assert File.exists?(Path.join(workspace, "memory/HISTORY.md"))
 
     agents = File.read!(Path.join(workspace, "AGENTS.md"))
     identity = File.read!(Path.join(workspace, "IDENTITY.md"))

@@ -13,8 +13,6 @@ defmodule Nex.Agent do
     Runtime.Workspace
   }
 
-  alias Nex.Agent.Knowledge.Memory.Updater, as: MemoryUpdater
-
   @type t :: %__MODULE__{
           session_key: String.t(),
           session: Session.t(),
@@ -146,8 +144,6 @@ defmodule Nex.Agent do
     metadata = Keyword.get(opts, :metadata, %{})
     parent_chat_id = parent_chat_id(opts, metadata)
     project = Keyword.get(opts, :project)
-    schedule_memory_refresh = Keyword.get(opts, :schedule_memory_refresh, true)
-
     session =
       if skip_consolidation do
         # Cron: use ephemeral session, don't pollute user session
@@ -178,7 +174,7 @@ defmodule Nex.Agent do
         chat_id: chat_id,
         workspace: workspace,
         metadata: metadata,
-        schedule_memory_refresh: schedule_memory_refresh
+        schedule_memory_refresh: false
       ]
       |> maybe_put(:runtime_snapshot, runtime_snapshot)
       |> maybe_put(:runtime_version, runtime_snapshot && runtime_snapshot.version)
@@ -200,13 +196,6 @@ defmodule Nex.Agent do
       {:ok, result, session} ->
         unless skip_consolidation, do: SessionManager.save(session, workspace: workspace)
 
-        maybe_enqueue_memory_refresh(
-          session,
-          schedule_memory_refresh,
-          skip_consolidation,
-          runner_opts
-        )
-
         {:ok, result,
          %{
            agent
@@ -220,13 +209,6 @@ defmodule Nex.Agent do
 
       {:error, reason, session} ->
         unless skip_consolidation, do: SessionManager.save(session, workspace: workspace)
-
-        maybe_enqueue_memory_refresh(
-          session,
-          schedule_memory_refresh,
-          skip_consolidation,
-          runner_opts
-        )
 
         {:error, reason,
          %{
@@ -346,54 +328,4 @@ defmodule Nex.Agent do
     end
   end
 
-  defp maybe_enqueue_memory_refresh(_session, false, _skip_consolidation, _runner_opts), do: :ok
-  defp maybe_enqueue_memory_refresh(_session, _schedule, true, _runner_opts), do: :ok
-
-  defp maybe_enqueue_memory_refresh(session, true, false, runner_opts) do
-    runtime = memory_refresh_runtime(runner_opts)
-
-    MemoryUpdater.enqueue(
-      session,
-      provider: runtime.provider,
-      model: runtime.model,
-      api_key: runtime.api_key,
-      base_url: runtime.base_url,
-      provider_options: runtime.provider_options,
-      workspace: Keyword.get(runner_opts, :workspace),
-      channel: Keyword.get(runner_opts, :channel),
-      chat_id: Keyword.get(runner_opts, :chat_id),
-      model_role: runtime.model_role,
-      notify_memory_updates: true,
-      source: "agent_prompt",
-      req_llm_stream_text_fun: Keyword.get(runner_opts, :req_llm_stream_text_fun),
-      llm_call_fun: Keyword.get(runner_opts, :llm_call_fun)
-    )
-  end
-
-  defp memory_refresh_runtime(runner_opts) do
-    runtime_snapshot = Keyword.get(runner_opts, :runtime_snapshot)
-    config = runtime_snapshot && runtime_snapshot.config
-
-    case config && Config.memory_model_runtime(config) do
-      %{provider: provider, model_id: model} = runtime ->
-        %{
-          provider: provider,
-          model: model,
-          api_key: runtime.api_key,
-          base_url: runtime.base_url,
-          provider_options: runtime.provider_options,
-          model_role: "memory"
-        }
-
-      _ ->
-        %{
-          provider: Keyword.get(runner_opts, :provider),
-          model: Keyword.get(runner_opts, :model),
-          api_key: Keyword.get(runner_opts, :api_key),
-          base_url: Keyword.get(runner_opts, :base_url),
-          provider_options: Keyword.get(runner_opts, :provider_options, []),
-          model_role: "runtime"
-        }
-    end
-  end
 end

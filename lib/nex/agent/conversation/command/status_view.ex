@@ -9,7 +9,7 @@ defmodule Nex.Agent.Conversation.Command.StatusView do
 
   @history_limit 50
   @status_model_limit 6
-  @role_model_keys ["default_model", "cheap_model", "advisor_model", "memory_model"]
+  @role_model_keys ["default_model", "cheap_model", "advisor_model"]
 
   @type model_source :: :session_override | :default | :first_available | :none
 

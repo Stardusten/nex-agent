@@ -48,12 +48,9 @@ defmodule Nex.Agent.Turn.ContextBuilder do
       |> add_evolution_guidance()
 
     {parts, bootstrap_diagnostics} = load_bootstrap_files_with_diagnostics(parts, workspace)
-    {parts, memory_diagnostics} = add_memory_with_diagnostics(parts, workspace)
     parts = add_skill_catalog(parts, workspace, opts)
 
-    diagnostics = bootstrap_diagnostics ++ memory_diagnostics
-
-    {Enum.join(parts, "\n\n---\n\n"), diagnostics}
+    {Enum.join(parts, "\n\n---\n\n"), bootstrap_diagnostics}
   end
 
   @doc """
@@ -86,7 +83,6 @@ defmodule Nex.Agent.Turn.ContextBuilder do
     ## Workspace
     Your workspace is at: #{workspace_path}
     - Identity: #{workspace_path}/IDENTITY.md (durable self-model)
-    - Long-term memory: #{workspace_path}/memory/MEMORY.md (write important facts here)
     - Custom skills: #{workspace_path}/skills/{skill-name}/SKILL.md
     - Workspace tools: #{Path.join(workspace_path, "tools")}/{tool-name}/
     - Notes and raw captures: #{workspace_path}/notes/
@@ -97,8 +93,8 @@ defmodule Nex.Agent.Turn.ContextBuilder do
 
     ## Runtime Capability Map
     - You are a long-running NexAgent personal agent runtime instance, not a one-off chatbot or a generic CLI wrapper.
-    - Chat channels are user-facing surfaces. The durable working state lives in workspace, sessions, memory, skills, tools, ControlPlane, Workbench, and CODE self-update paths.
-    - You can use deterministic tools, load skills on demand, maintain durable memory/skills, inspect runtime observations, author Workbench apps, and modify framework CODE through the self-update lane.
+    - Chat channels are user-facing surfaces. The durable working state lives in workspace, sessions, skills, tools, ControlPlane, Workbench, and CODE self-update paths.
+    - You can use deterministic tools, load skills on demand, inspect runtime observations, author Workbench apps, and modify framework CODE through the self-update lane.
     - Workbench is the built-in local web UI and app host. When enabled with default config, its local URL is `http://127.0.0.1:50051/workbench`.
     - Workbench apps are optional iframe artifacts under `workspace/workbench/apps/`; an empty app directory does not mean the Workbench Server is absent.
 
@@ -127,7 +123,7 @@ defmodule Nex.Agent.Turn.ContextBuilder do
     Load the relevant built-in skill before acting on these low-frequency workflows:
     - `builtin:nex-code-maintenance`: framework CODE edits, runtime activation, deploy/rollback, ReqLLM/provider adapter work, and CODE-layer tests.
     - `builtin:runtime-observability`: runtime status, failures, stuck runs, logs, incidents, ControlPlane observations, budgets, gauges, owner runs, and background task evidence.
-    - `builtin:memory-and-evolution-routing`: memory refresh/status/rebuild, durable memory writes, user corrections, layer routing, and self-improvement/evolution candidates.
+    - `builtin:memory-and-evolution-routing`: layer routing, durable corrections, and self-improvement/evolution candidates.
     - `builtin:lark-feishu-ops`: Feishu/Lark native payloads, media sends, business operations, `lark-cli`, and Feishu-specific troubleshooting.
     - `builtin:workbench-app-authoring`: creating or modifying Workbench apps, app manifests, iframe assets, static app artifacts, and app-local `reload.sh`.
     - `builtin:command-permission-rules`: repeated or complex permission approvals, path read/write rule scope, namespaced permission tools, `Allow rule` semantics, elevated command rules, sandbox retry strategy, and durable permission-rule reasoning.
@@ -180,7 +176,7 @@ defmodule Nex.Agent.Turn.ContextBuilder do
     - CODE: internal implementation upgrades
 
     Prefer the highest layer that solves the need. Do not persist one-off outputs, temporary state, or information that is easy to rediscover.
-    For memory refresh/status/rebuild, durable corrections, and evolution candidate routing, load `builtin:memory-and-evolution-routing` before acting.
+    For durable corrections and evolution candidate routing, load `builtin:memory-and-evolution-routing` before acting.
     """
 
     parts ++ [guidance]
@@ -236,17 +232,6 @@ defmodule Nex.Agent.Turn.ContextBuilder do
 
   defp normalize_bootstrap_content(_layer, content), do: content
 
-  defp add_memory_with_diagnostics(parts, workspace) do
-    memory_raw = Nex.Agent.Knowledge.Memory.read_long_term(workspace: workspace)
-
-    diagnostics =
-      ContextDiagnostics.scan(:memory, memory_raw, source: "memory/MEMORY.md")
-
-    memory = Nex.Agent.Knowledge.Memory.get_memory_context(workspace: workspace)
-    parts = if memory == "", do: parts, else: parts ++ ["# Memory\n\n" <> memory]
-    {parts, diagnostics}
-  end
-
   defp add_skill_catalog(parts, workspace, opts) do
     if Keyword.get(opts, :skip_skills, false) do
       parts
@@ -276,7 +261,6 @@ defmodule Nex.Agent.Turn.ContextBuilder do
   defp layer_label(:soul), do: "SOUL"
   defp layer_label(:user), do: "USER"
   defp layer_label(:tools), do: "TOOLS"
-  defp layer_label(:memory), do: "MEMORY"
   defp layer_label(_), do: "UNKNOWN"
 
   defp layer_boundary(:agents),
@@ -298,9 +282,6 @@ defmodule Nex.Agent.Turn.ContextBuilder do
   defp layer_boundary(:tools),
     do:
       "Tool descriptions and usage references only; does not define identity, persona, or durable memory facts."
-
-  defp layer_boundary(:memory),
-    do: "Durable factual context only; does not define identity or persona ownership."
 
   defp layer_boundary(_),
     do: "Legacy content is tolerated but interpreted under layer boundaries with diagnostics."

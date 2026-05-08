@@ -65,9 +65,6 @@ defmodule Nex.Agent.KnowledgeTest do
     assert Enum.any?(captures, &(&1["id"] == note_capture["id"]))
     assert Enum.any?(captures, &(&1["id"] == web_capture["id"]))
 
-    assert {:ok, %{"target" => "memory"}} =
-             Knowledge.promote(note_capture["id"], "memory", workspace: workspace)
-
     assert {:ok, %{"target" => "user"}} =
              Knowledge.promote(chat_capture["id"], "user", workspace: workspace)
 
@@ -82,7 +79,6 @@ defmodule Nex.Agent.KnowledgeTest do
     assert {:ok, %{"target" => "skill"}} =
              Knowledge.promote(note_capture["id"], "skill", workspace: workspace)
 
-    assert File.read!(Path.join(workspace, "memory/MEMORY.md")) =~ "Release process"
     assert File.read!(Path.join(workspace, "USER.md")) =~ "prefers concise Chinese replies"
     assert File.read!(Path.join(workspace, "projects/nex-agent/PROJECT.md")) =~ "Deploy guide"
     assert File.exists?(Path.join(workspace, "skills/release_note_md/SKILL.md"))

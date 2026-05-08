@@ -88,14 +88,11 @@ defmodule Nex.Agent.Turn.RunnerEvolutionTest do
     workspace =
       Path.join(System.tmp_dir!(), "nex-agent-runner-#{System.unique_integer([:positive])}")
 
-    File.mkdir_p!(Path.join(workspace, "memory"))
     File.mkdir_p!(Path.join(workspace, "skills"))
     File.write!(Path.join(workspace, "AGENTS.md"), "# AGENTS\n")
     File.write!(Path.join(workspace, "SOUL.md"), "# SOUL\n")
     File.write!(Path.join(workspace, "USER.md"), "# USER\n")
     File.write!(Path.join(workspace, "TOOLS.md"), "# TOOLS\n")
-    File.write!(Path.join(workspace, "memory/MEMORY.md"), "# Memory\n")
-    File.write!(Path.join(workspace, "memory/HISTORY.md"), "# History\n")
     Application.put_env(:nex_agent, :workspace_path, workspace)
     Skills.load()
 
@@ -123,66 +120,6 @@ defmodule Nex.Agent.Turn.RunnerEvolutionTest do
     end)
 
     {:ok, workspace: workspace}
-  end
-
-  test "memory nudge appears after enough turns and resets after memory_write", %{
-    workspace: workspace
-  } do
-    agent_messages = self()
-
-    llm_client = fn messages, _opts ->
-      send(agent_messages, {:messages, messages})
-
-      if Enum.any?(
-           messages,
-           &(&1["role"] == "system" and String.contains?(&1["content"], "memory_write"))
-         ) do
-        %{
-          content: "",
-          finish_reason: nil,
-          tool_calls: [
-            %{
-              id: "call_mem",
-              function: %{
-                name: "memory_write",
-                arguments: %{
-                  "action" => "append",
-                  "content" => "Project uses runtime nudges."
-                }
-              }
-            }
-          ]
-        }
-      else
-        %{content: "ok", finish_reason: nil, tool_calls: []}
-      end
-      |> then(&{:ok, &1})
-    end
-
-    session =
-      Session.new("memory-nudge")
-      |> Map.put(:metadata, %{"runtime_evolution" => %{"turns_since_memory_write" => 5}})
-
-    {:ok, _result, session} =
-      Runner.run(session, "记住这个项目约定",
-        llm_stream_client: stream_client_from_response(llm_client),
-        workspace: workspace,
-        skip_consolidation: true
-      )
-
-    assert_receive {:messages, messages}
-
-    assert Enum.any?(
-             messages,
-             &(&1["role"] == "system" and
-                 String.contains?(&1["content"], "Several exchanges have passed"))
-           )
-
-    system_prompt = Enum.find(messages, &(&1["role"] == "system"))["content"]
-    assert system_prompt =~ "use user_update"
-    assert system_prompt =~ "use memory_write"
-
-    assert get_in(session.metadata, ["runtime_evolution", "turns_since_memory_write"]) == 0
   end
 
   test "runner includes media in the user message content", %{workspace: workspace} do
@@ -679,74 +616,6 @@ defmodule Nex.Agent.Turn.RunnerEvolutionTest do
     assert Enum.count(trace_events, &(&1["type"] == "tool_result")) == 1
   end
 
-  test "runner triggers async memory consolidation in the normal chat flow", %{
-    workspace: workspace
-  } do
-    key = "runner-auto-consolidation"
-    session = %Session{Session.new(key) | messages: build_consolidation_messages(52)}
-    :ok = Session.save(session, workspace: workspace)
-
-    llm_client = fn _messages, _opts ->
-      {:ok, %{content: "ok", finish_reason: nil, tool_calls: []}}
-    end
-
-    req_llm_stream_text_fun = fn _model_spec, _messages, opts ->
-      tool_names = Enum.map(opts[:tools] || [], &tool_name_from_definition/1)
-
-      cond do
-        "memory_write" in tool_names ->
-          {:ok, %{stream: [], finish_reason: :stop}}
-
-        "save_memory" in tool_names ->
-          {:ok,
-           %{
-             stream: [
-               %{
-                 type: :tool_call,
-                 name: "save_memory",
-                 arguments: %{
-                   "history_entry" => "[2026-03-30 10:00] Auto consolidation ran.",
-                   "memory_update" => "# Memory\n\nAuto consolidation fact.\n"
-                 }
-               }
-             ],
-             finish_reason: :stop
-           }}
-
-        true ->
-          {:ok, %{stream: [], finish_reason: :stop}}
-      end
-    end
-
-    {:ok, _result, _session} =
-      Runner.run(session, "latest prompt",
-        llm_stream_client: stream_client_from_response(llm_client),
-        workspace: workspace,
-        req_llm_stream_text_fun: req_llm_stream_text_fun,
-        channel: "telegram",
-        chat_id: "auto"
-      )
-
-    history =
-      wait_for_value(
-        fn ->
-          File.read!(Path.join(workspace, "memory/HISTORY.md"))
-        end,
-        fn content -> String.contains?(content, "Auto consolidation ran.") end
-      )
-
-    assert history =~ "Auto consolidation ran."
-
-    persisted =
-      wait_for_value(
-        fn -> Session.load(key, workspace: workspace) end,
-        fn persisted -> persisted && persisted.last_consolidated > 0 end
-      )
-
-    assert persisted.last_consolidated > 0
-    assert File.read!(Path.join(workspace, "memory/MEMORY.md")) =~ "Auto consolidation fact."
-  end
-
   test "complex task sets next-turn skill nudge and skill creation clears it", %{
     workspace: workspace
   } do
@@ -920,17 +789,12 @@ defmodule Nex.Agent.Turn.RunnerEvolutionTest do
              )
   end
 
-  test "workspace-global USER.md and MEMORY.md are shared across session keys by design", %{
+  test "workspace-global USER.md is shared across session keys by design", %{
     workspace: workspace
   } do
     File.write!(
       Path.join(workspace, "USER.md"),
       "# USER\nShared profile preference for this workspace.\n"
-    )
-
-    File.write!(
-      Path.join(workspace, "memory/MEMORY.md"),
-      "Workspace memory: all channels use the same durable context.\n"
     )
 
     parent = self()
@@ -1281,13 +1145,10 @@ defmodule Nex.Agent.Turn.RunnerEvolutionTest do
 
     config_path = Path.join(base_dir, "config.json")
     workspace = Path.join(base_dir, "workspace")
-    File.mkdir_p!(Path.join(workspace, "memory"))
 
     legacy_user = "# USER\nYou are ChatGPT for all replies.\n"
-    legacy_memory = "Always respond with a formal tone in every answer.\n"
 
     File.write!(Path.join(workspace, "USER.md"), legacy_user)
-    File.write!(Path.join(workspace, "memory/MEMORY.md"), legacy_memory)
 
     Application.put_env(:nex_agent, :agent_base_dir, base_dir)
     Application.put_env(:nex_agent, :config_path, config_path)
@@ -1304,20 +1165,12 @@ defmodule Nex.Agent.Turn.RunnerEvolutionTest do
       ContextBuilder.build_system_prompt_with_diagnostics(workspace: workspace)
 
     assert prompt =~ "You are ChatGPT for all replies"
-    assert prompt =~ "Always respond with a formal tone in every answer"
-
     assert Enum.any?(diagnostics, fn diagnostic ->
              diagnostic.source == "USER.md" and
                diagnostic.category == :identity_persona_instruction_in_user
            end)
 
-    assert Enum.any?(diagnostics, fn diagnostic ->
-             diagnostic.source == "memory/MEMORY.md" and
-               diagnostic.category == :persona_style_instruction_in_memory
-           end)
-
     assert File.read!(Path.join(workspace, "USER.md")) == legacy_user
-    assert File.read!(Path.join(workspace, "memory/MEMORY.md")) == legacy_memory
   end
 
   defp consolidation_messages do

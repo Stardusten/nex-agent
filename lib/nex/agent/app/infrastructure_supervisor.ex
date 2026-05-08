@@ -18,7 +18,6 @@ defmodule Nex.Agent.App.InfrastructureSupervisor do
       Nex.Agent.Sandbox.Approval,
       Nex.Agent.Capability.Tool.Registry,
       Nex.Agent.Interface.MCP.ServerManager,
-      Nex.Agent.Knowledge.Memory.Updater,
       Nex.Agent.Capability.Cron,
       Nex.Agent.App.Heartbeat
     ]

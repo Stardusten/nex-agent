@@ -198,7 +198,6 @@ defmodule Nex.Agent.Interface.Workbench.SessionApp do
   end
 
   defp session_summary(%Session{} = session, run, config, warning_counts) do
-    last_consolidated = session.last_consolidated || 0
     message_count = length(session.messages)
     {channel, chat_id} = parse_session_key(session.key)
 
@@ -210,8 +209,6 @@ defmodule Nex.Agent.Interface.Workbench.SessionApp do
       "created_at" => datetime_to_iso8601(session.created_at),
       "updated_at" => updated_at(session, run),
       "total_messages" => message_count,
-      "last_consolidated" => last_consolidated,
-      "unconsolidated_messages" => max(message_count - last_consolidated, 0),
       "last_message" => last_message_preview(session),
       "model" => model_view(config, session),
       "run" => run && run_view(run, :summary),

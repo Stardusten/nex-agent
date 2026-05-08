@@ -1,12 +1,12 @@
 ---
 name: memory-and-evolution-routing
-description: Use when deciding whether to write MEMORY, USER, SOUL, SKILL, TOOL, or CODE; handling memory refresh/status/rebuild; processing user corrections; or routing self-improvement/evolution candidates.
+description: Use when deciding whether to route a durable change into MEMORY, USER, SOUL, SKILL, TOOL, or CODE; processing user corrections; or routing self-improvement/evolution candidates during the memory-system reset.
 user-invocable: false
 ---
 
 # Memory And Evolution Routing
 
-Use this skill when a user asks the agent to remember something, corrects the agent's self-model or workflow assumptions, asks whether memory updated, requests memory refresh/rebuild, or asks the agent to improve itself.
+Use this skill when a user asks the agent to remember something, corrects the agent's self-model or workflow assumptions, or asks the agent to improve itself.
 
 ## Layer Routing
 
@@ -21,18 +21,20 @@ Choose the highest layer that solves the need:
 
 Do not persist one-off outputs, temporary investigation notes, raw TODO lists, or facts that are easy to rediscover.
 
-## Memory Tools
+## Current Reset Boundary
 
-Use the dedicated memory tools when they directly match the request:
+The legacy file-backed memory toolchain has been removed during the current reset.
 
-- `memory_consolidate`: user explicitly asks to trigger memory refresh now.
-- `memory_status`: user asks to check refresh status or whether refresh is running.
-- `memory_rebuild`: user explicitly wants a full rebuild from session history.
-- `memory_write`: persist a durable memory fact when the user clearly wants it saved or the fact is stable and important.
+- Do not call `memory_consolidate`, `memory_status`, `memory_rebuild`, or `memory_write`.
+- Do not inspect or rely on `memory/MEMORY.md` as a runtime truth source.
+- If the user asks to "remember" something during this reset window, route it to the right surviving layer instead:
+  - `USER.md` for user profile and collaboration preferences
+  - `SOUL.md` for persona/style
+  - `SKILL` for reusable workflow knowledge
+  - `CODE` for framework behavior
+- If the request truly needs a new long-term memory capability, treat it as design/implementation work for the upcoming plugin-based memory system rather than trying to revive the retired path.
 
-When a built-in memory tool directly matches, call it before inspecting implementation with `read` or `bash`.
-
-When asked whether memory was updated or previously triggered, inspect MEMORY and current session/runtime state before answering. Empty `MEMORY.md` does not prove this is the first conversation or that no prior session history exists.
+When asked whether memory was updated or previously triggered, answer from the current reset state: the old automatic memory runtime is removed, and the replacement plugin-based path is not yet active unless explicitly implemented.
 
 ## User Corrections
 
@@ -50,13 +52,13 @@ Route them:
 
 ## Evolution Candidates
 
-Evolution proposes candidates first. It must not automatically deploy, patch, write memory, write skills, or edit SOUL.
+Evolution proposes candidates first. It must not automatically deploy, patch, write skills, or edit SOUL.
 
 Owner-approved execution goes through the single `evolution_candidate` lane:
 
 - use `evolution_candidate list` / `show` to inspect derived candidate lifecycle
 - use `evolution_candidate approve` / `reject` only as the owner run
-- memory/soul/skill candidates must reuse existing deterministic write tools
+- soul/skill candidates must reuse existing deterministic write tools
 - code candidates must still flow through `apply_patch` and `self_update deploy`
 
 Do not add parallel candidate state files or parallel approval tools.

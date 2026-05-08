@@ -271,7 +271,7 @@ defmodule Nex.Agent.Capability.SkillsTest do
              )
 
     assert {:ok, memory_skill} = Skills.read_catalog_skill(memory_card)
-    assert memory_skill["content"] =~ "memory_consolidate"
+    assert memory_skill["content"] =~ "legacy file-backed memory toolchain has been removed"
     assert memory_skill["content"] =~ "evolution_candidate"
 
     assert {:ok, feishu_card} =

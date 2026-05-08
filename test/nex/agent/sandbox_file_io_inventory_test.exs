@@ -10,7 +10,6 @@ defmodule Nex.Agent.SandboxFileIOInventoryTest do
     "lib/nex/agent/capability/tool/core/message.ex",
     "lib/nex/agent/capability/tool/core/user_update.ex",
     "lib/nex/agent/capability/tool/core/soul_update.ex",
-    "priv/plugins/builtin/tool.memory/lib/nex/agent/tool/memory_write.ex",
     "priv/plugins/builtin/channel.feishu/lib/nex/agent/channel/feishu.ex"
   ]
 

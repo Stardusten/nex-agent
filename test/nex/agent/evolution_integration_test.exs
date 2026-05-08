@@ -12,14 +12,12 @@ defmodule Nex.Agent.Self.EvolutionIntegrationTest do
     workspace =
       Path.join(System.tmp_dir!(), "nex-evo-integ-#{System.unique_integer([:positive])}")
 
-    for dir <- ~w(memory skills sessions) do
+    for dir <- ~w(skills sessions) do
       File.mkdir_p!(Path.join(workspace, dir))
     end
 
     File.write!(Path.join(workspace, "SOUL.md"), "# Soul\n\n- Be helpful\n- Be concise\n")
     File.write!(Path.join(workspace, "USER.md"), "# USER\n- likes structured output\n")
-    File.write!(Path.join(workspace, "memory/MEMORY.md"), "# Memory\n")
-    File.write!(Path.join(workspace, "memory/HISTORY.md"), "")
 
     Application.put_env(:nex_agent, :workspace_path, workspace)
 
@@ -107,7 +105,6 @@ defmodule Nex.Agent.Self.EvolutionIntegrationTest do
              )
 
     soul_before = File.read!(Path.join(workspace, "SOUL.md"))
-    memory_before = File.read!(Path.join(workspace, "memory/MEMORY.md"))
     skill_dirs_before = Path.wildcard(Path.join(workspace, "skills/*"))
     parent = self()
 
@@ -135,8 +132,8 @@ defmodule Nex.Agent.Self.EvolutionIntegrationTest do
              "risk" => "medium"
            },
            %{
-             "kind" => "memory_candidate",
-             "summary" => "Review whether JSON output preference belongs in durable memory",
+             "kind" => "skill_candidate",
+             "summary" => "Capture a reusable JSON-output workflow",
              "rationale" => "User corrections repeatedly mentioned JSON output.",
              "evidence_ids" => Enum.map(signals, & &1["id"]) |> Enum.take(2),
              "risk" => "low"
@@ -164,7 +161,6 @@ defmodule Nex.Agent.Self.EvolutionIntegrationTest do
     assert prompt =~ "\"candidate_history\""
 
     assert File.read!(Path.join(workspace, "SOUL.md")) == soul_before
-    assert File.read!(Path.join(workspace, "memory/MEMORY.md")) == memory_before
     assert Path.wildcard(Path.join(workspace, "skills/*")) == skill_dirs_before
 
     events = Evolution.recent_events(workspace: workspace)
@@ -227,9 +223,9 @@ defmodule Nex.Agent.Self.EvolutionIntegrationTest do
              Log.info(
                "evolution.candidate.proposed",
                %{
-                 "id" => "cand_memory_apply",
-                 "kind" => "memory_candidate",
-                 "summary" => "Remember JSON output preference",
+                 "id" => "cand_soul_apply",
+                 "kind" => "soul_candidate",
+                 "summary" => "Prefer explicit JSON confirmation language",
                  "rationale" => "User repeatedly requested JSON output.",
                  "evidence_ids" => ["obs_1"],
                  "risk" => "low",
@@ -241,16 +237,16 @@ defmodule Nex.Agent.Self.EvolutionIntegrationTest do
 
     assert {:ok, approved} =
              EvolutionCandidate.execute(
-               %{"action" => "approve", "candidate_id" => "cand_memory_apply"},
+               %{"action" => "approve", "candidate_id" => "cand_soul_apply"},
                %{workspace: workspace}
              )
 
     assert approved["apply"]["status"] == "applied"
 
-    assert File.read!(Path.join(workspace, "memory/MEMORY.md")) =~
-             "Remember JSON output preference"
+    assert File.read!(Path.join(workspace, "SOUL.md")) =~
+             "Prefer explicit JSON confirmation language"
 
-    assert {:ok, candidate} = Evolution.candidate("cand_memory_apply", workspace: workspace)
+    assert {:ok, candidate} = Evolution.candidate("cand_soul_apply", workspace: workspace)
     assert candidate["status"] == "applied"
 
     tags =

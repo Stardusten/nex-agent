@@ -16,7 +16,6 @@ defmodule Nex.Agent.Turn.Runner do
   }
 
   alias Nex.Agent.Observe.ControlPlane.Log, as: ControlPlaneLog
-  alias Nex.Agent.Knowledge.Memory.Updater, as: MemoryUpdater
   alias Nex.Agent.Observe.ControlPlane.Redactor
   require ControlPlaneLog
   alias Nex.Agent.Runtime.Snapshot
@@ -288,13 +287,12 @@ defmodule Nex.Agent.Turn.Runner do
 
     runtime_system_messages =
       []
-      |> maybe_add_memory_nudge(metadata)
       |> maybe_add_skill_nudge(metadata)
 
     {put_evolution_metadata(session, metadata), runtime_system_messages}
   end
 
-  defp finalize_evolution_turn(session, initial_message_count, prompt, workspace, opts) do
+  defp finalize_evolution_turn(session, initial_message_count, prompt, workspace, _opts) do
     signals =
       session.messages
       |> Enum.drop(initial_message_count)
@@ -303,12 +301,10 @@ defmodule Nex.Agent.Turn.Runner do
     metadata =
       session
       |> evolution_metadata()
-      |> Map.put("turns_since_memory_write", next_memory_turn_count(session, signals))
       |> Map.put("pending_skill_nudge", next_skill_nudge(session, signals))
 
     session = put_evolution_metadata(session, metadata)
     maybe_record_runtime_evolution_signal(signals, prompt, workspace)
-    maybe_enqueue_memory_refresh(session, workspace, opts)
     session
   end
 
@@ -1023,10 +1019,6 @@ defmodule Nex.Agent.Turn.Runner do
 
   defp tool_notice_emoji("bash"), do: "⚙️"
   defp tool_notice_emoji("get_memory"), do: "🧠"
-  defp tool_notice_emoji("memory_status"), do: "🧠"
-  defp tool_notice_emoji("memory_write"), do: "🧠"
-  defp tool_notice_emoji("memory_rebuild"), do: "🧠"
-  defp tool_notice_emoji("memory_consolidate"), do: "🧠"
   defp tool_notice_emoji("skill_get"), do: "📚"
   defp tool_notice_emoji("read"), do: "📖"
   defp tool_notice_emoji("find"), do: "🔍"
@@ -2427,18 +2419,6 @@ defmodule Nex.Agent.Turn.Runner do
     %{session | metadata: Map.put(session.metadata || %{}, "runtime_evolution", metadata)}
   end
 
-  defp maybe_add_memory_nudge(messages, metadata) do
-    if Map.get(metadata, "turns_since_memory_write", 0) >= 5 do
-      messages ++
-        [
-          "[Runtime Evolution] Several exchanges have passed since durable memory was refreshed. " <>
-            "If this turn confirms a lasting fact, use user_update for user-profile facts and use memory_write for durable project or workflow knowledge."
-        ]
-    else
-      messages
-    end
-  end
-
   defp maybe_add_skill_nudge(messages, metadata) do
     if Map.get(metadata, "pending_skill_nudge") == true do
       messages ++
@@ -2450,15 +2430,6 @@ defmodule Nex.Agent.Turn.Runner do
     end
   end
 
-  defp next_memory_turn_count(_session, %{wrote_memory: true}), do: 0
-
-  defp next_memory_turn_count(session, _signals) do
-    session
-    |> evolution_metadata()
-    |> Map.get("turns_since_memory_write", 0)
-    |> Kernel.+(1)
-  end
-
   defp next_skill_nudge(_session, %{created_skill: true}), do: false
   defp next_skill_nudge(_session, %{complex_task: true}), do: true
 
@@ -2466,66 +2437,6 @@ defmodule Nex.Agent.Turn.Runner do
     session
     |> evolution_metadata()
     |> Map.get("pending_skill_nudge", false)
-  end
-
-  defp maybe_enqueue_memory_refresh(session, workspace, opts) do
-    if Keyword.get(opts, :skip_consolidation, false) or
-         Keyword.get(opts, :schedule_memory_refresh, true) == false do
-      :ok
-    else
-      maybe_enqueue_memory_refresh_now(session, workspace, opts)
-    end
-  end
-
-  defp maybe_enqueue_memory_refresh_now(session, workspace, opts) do
-    if Process.whereis(MemoryUpdater) do
-      runtime = memory_refresh_runtime(opts)
-
-      MemoryUpdater.enqueue(session,
-        provider: runtime.provider,
-        model: runtime.model,
-        api_key: runtime.api_key,
-        base_url: runtime.base_url,
-        provider_options: runtime.provider_options,
-        workspace: workspace,
-        channel: Keyword.get(opts, :channel),
-        chat_id: Keyword.get(opts, :chat_id),
-        model_role: runtime.model_role,
-        notify_memory_updates: false,
-        source: "runner_finalize",
-        req_llm_stream_text_fun: Keyword.get(opts, :req_llm_stream_text_fun),
-        llm_call_fun: Keyword.get(opts, :llm_call_fun)
-      )
-    end
-
-    :ok
-  end
-
-  defp memory_refresh_runtime(opts) do
-    runtime_snapshot = Keyword.get(opts, :runtime_snapshot)
-    config = runtime_snapshot && runtime_snapshot.config
-
-    case config && Config.memory_model_runtime(config) do
-      %{provider: provider, model_id: model} = runtime ->
-        %{
-          provider: provider,
-          model: model,
-          api_key: runtime.api_key,
-          base_url: runtime.base_url,
-          provider_options: runtime.provider_options,
-          model_role: "memory"
-        }
-
-      _ ->
-        %{
-          provider: Keyword.get(opts, :provider),
-          model: Keyword.get(opts, :model),
-          api_key: Keyword.get(opts, :api_key),
-          base_url: Keyword.get(opts, :base_url),
-          provider_options: Keyword.get(opts, :provider_options, []),
-          model_role: "runtime"
-        }
-    end
   end
 
   defp collect_evolution_signals(delta_messages, prompt) do
@@ -2553,7 +2464,6 @@ defmodule Nex.Agent.Turn.Runner do
       |> then(fn lowered -> Enum.any?(@user_correction_terms, &String.contains?(lowered, &1)) end)
 
     %{
-      wrote_memory: "memory_write" in used_tools,
       created_skill: "skill_capture" in used_tools,
       used_tools: used_tools,
       tool_call_count: tool_call_count,

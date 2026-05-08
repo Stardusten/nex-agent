@@ -7,7 +7,6 @@ defmodule Nex.Agent.RuntimeWatcherTest do
     workspace =
       Path.join(System.tmp_dir!(), "nex-agent-watcher-#{System.unique_integer([:positive])}")
 
-    File.mkdir_p!(Path.join(workspace, "memory"))
     File.mkdir_p!(Path.join(workspace, "hooks"))
     File.mkdir_p!(Path.join(workspace, "plugins"))
     File.mkdir_p!(Path.join(workspace, "skills"))
@@ -17,7 +16,6 @@ defmodule Nex.Agent.RuntimeWatcherTest do
     File.write!(Path.join(workspace, "SOUL.md"), "# SOUL\n")
     File.write!(Path.join(workspace, "USER.md"), "# USER\n")
     File.write!(Path.join(workspace, "TOOLS.md"), "# TOOLS\n")
-    File.write!(Path.join(workspace, "memory/MEMORY.md"), "# Memory\n")
     File.write!(Path.join(workspace, "hooks/hooks.json"), ~s({"version":1,"hooks":[]}\n))
 
     config_path = Path.join(workspace, "config.json")

@@ -12,7 +12,6 @@ defmodule Nex.Agent.Conversation.FollowUp do
   @allowed_tools MapSet.new([
                    "executor_status",
                    "find",
-                   "memory_status",
                    "observe",
                    "read",
                    "skill_get",

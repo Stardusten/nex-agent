@@ -71,14 +71,10 @@ defmodule Nex.Agent.ToolAlignmentTest do
     assert File.read!(Path.join(workspace, "SOUL.md")) =~ "Stay precise."
   end
 
-  test "tool_list exposes split user and memory layers" do
+  test "tool_list exposes current layer split" do
     assert {:ok, result} = ToolList.execute(%{"scope" => "builtin"}, %{})
 
     builtins = result[:builtin]
-    memory_consolidate = Enum.find(builtins, &(&1["name"] == "memory_consolidate"))
-    memory_rebuild = Enum.find(builtins, &(&1["name"] == "memory_rebuild"))
-    memory_status = Enum.find(builtins, &(&1["name"] == "memory_status"))
-    memory_write = Enum.find(builtins, &(&1["name"] == "memory_write"))
     hook = Enum.find(builtins, &(&1["name"] == "hook"))
     reflect = Enum.find(builtins, &(&1["name"] == "reflect"))
     self_update = Enum.find(builtins, &(&1["name"] == "self_update"))
@@ -87,10 +83,6 @@ defmodule Nex.Agent.ToolAlignmentTest do
     skill_capture = Enum.find(builtins, &(&1["name"] == "skill_capture"))
     tool_create = Enum.find(builtins, &(&1["name"] == "tool_create"))
 
-    assert memory_consolidate["layers"] == ["memory"]
-    assert memory_rebuild["layers"] == ["memory"]
-    assert memory_status["layers"] == ["memory"]
-    assert memory_write["layers"] == ["memory"]
     assert hook["layers"] == ["tool"]
     assert reflect["layers"] == ["code"]
     assert self_update["layers"] == ["code"]
@@ -186,8 +178,6 @@ defmodule Nex.Agent.ToolAlignmentTest do
     refute "task" in names
     refute "spawn_task" in names
     refute "knowledge_capture" in names
-    refute "memory_consolidate" in names
-    refute "memory_write" in names
     refute "edit" in names
     refute "write" in names
     refute "list_dir" in names
@@ -443,29 +433,6 @@ defmodule Nex.Agent.ToolAlignmentTest do
            ]
   end
 
-  test "memory tool descriptions clearly separate consolidate status and rebuild intents" do
-    definitions = Registry.definitions(:all)
-
-    tools =
-      definitions
-      |> Map.new(&{&1["name"], &1})
-
-    names = Enum.map(definitions, & &1["name"])
-
-    assert tools["memory_consolidate"]["description"] =~ "trigger memory consolidation"
-    assert tools["memory_consolidate"]["description"] =~ "触发记忆整理"
-    assert tools["memory_status"]["description"] =~ "check memory status"
-    assert tools["memory_status"]["description"] =~ "检查记忆状态"
-    assert tools["memory_rebuild"]["description"] =~ "full rebuild"
-    assert tools["memory_rebuild"]["description"] =~ "重建记忆"
-
-    assert Enum.find_index(names, &(&1 == "memory_consolidate")) <
-             Enum.find_index(names, &(&1 == "memory_status"))
-
-    assert Enum.find_index(names, &(&1 == "memory_status")) <
-             Enum.find_index(names, &(&1 == "memory_rebuild"))
-  end
-
   test "runner keeps raw slash-prefixed prompts and does not persist mode metadata", %{
     workspace: workspace
   } do
@@ -640,64 +607,6 @@ defmodule Nex.Agent.ToolAlignmentTest do
     assert system["role"] == "system"
     assert system["content"] =~ ~s(<skill id="workspace:trim-check">)
     assert system["content"] =~ "Use to verify skill catalog survives history trimming."
-  end
-
-  test "agent prompt passes session key into runner tool context", %{workspace: workspace} do
-    llm_client = fn messages, _opts ->
-      tool_result_present =
-        Enum.any?(messages, fn
-          %{"role" => "tool", "name" => "memory_status", "content" => content} ->
-            String.contains?(content, "\"session_key\"")
-
-          _ ->
-            false
-        end)
-
-      if tool_result_present do
-        tool_result =
-          Enum.find(messages, fn
-            %{"role" => "tool", "name" => "memory_status"} -> true
-            _ -> false
-          end)
-
-        {:ok, %{content: tool_result["content"], finish_reason: nil, tool_calls: []}}
-      else
-        {:ok,
-         %{
-           content: "",
-           finish_reason: nil,
-           tool_calls: [
-             %{
-               id: "memory_status",
-               function: %{
-                 name: "memory_status",
-                 arguments: %{}
-               }
-             }
-           ]
-         }}
-      end
-    end
-
-    {:ok, agent} =
-      Nex.Agent.start(
-        workspace: workspace,
-        channel: "feishu",
-        chat_id: "session-key-check",
-        api_key: "test-api-key"
-      )
-
-    assert {:ok, result, _updated_agent} =
-             Nex.Agent.prompt(agent, "检查记忆状态",
-               llm_stream_client: stream_client_from_response(llm_client),
-               workspace: workspace,
-               skip_consolidation: true,
-               channel: "feishu",
-               chat_id: "session-key-check"
-             )
-
-    decoded = Jason.decode!(result)
-    assert decoded["session_key"] == "feishu:session-key-check"
   end
 
   defp wait_for_registry_tool(name, module, attempts \\ 20)

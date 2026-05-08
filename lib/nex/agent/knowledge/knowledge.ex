@@ -3,7 +3,7 @@ defmodule Nex.Agent.Knowledge do
 
   alias Nex.Agent.{
     Turn.ContextDiagnostics,
-    Knowledge.Memory,
+    Knowledge.UserProfile,
     Capability.Tool.Registry,
     Capability.Skills,
     Runtime.Workspace
@@ -83,17 +83,8 @@ defmodule Nex.Agent.Knowledge do
     Path.join(Workspace.notes_dir(opts), @capture_file)
   end
 
-  defp do_promote(capture, "memory", opts) do
-    case Memory.apply_memory_write("append", "memory", capture["summary"] || capture["content"],
-           workspace: Workspace.root(opts)
-         ) do
-      {:ok, _} -> {:ok, %{"target" => "memory", "capture_id" => capture["id"]}}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
   defp do_promote(capture, "user", opts) do
-    current = Memory.read_user_profile(workspace: Workspace.root(opts))
+    current = UserProfile.read(workspace: Workspace.root(opts))
     line = String.trim(capture["summary"] || capture["content"])
 
     case ContextDiagnostics.validate_write(:user, line, source: "USER.md") do
@@ -105,7 +96,7 @@ defmodule Nex.Agent.Knowledge do
             String.trim_trailing(current) <> "\n\n" <> line <> "\n"
           end
 
-        Memory.write_user_profile(updated, workspace: Workspace.root(opts))
+        UserProfile.write(updated, workspace: Workspace.root(opts))
         {:ok, %{"target" => "user", "capture_id" => capture["id"]}}
 
       {:error, diagnostics} ->

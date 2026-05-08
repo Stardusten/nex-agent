@@ -12,8 +12,7 @@ defmodule Nex.Agent.Conversation.Session do
     :created_at,
     :updated_at,
     :metadata,
-    messages: [],
-    last_consolidated: 0
+    messages: []
   ]
 
   @type t :: %__MODULE__{
@@ -21,8 +20,7 @@ defmodule Nex.Agent.Conversation.Session do
           messages: [map()],
           created_at: DateTime.t(),
           updated_at: DateTime.t(),
-          metadata: map(),
-          last_consolidated: non_neg_integer()
+          metadata: map()
         }
 
   @doc false
@@ -61,8 +59,7 @@ defmodule Nex.Agent.Conversation.Session do
       messages: [],
       created_at: now,
       updated_at: now,
-      metadata: %{},
-      last_consolidated: 0
+      metadata: %{}
     }
   end
 
@@ -207,11 +204,11 @@ defmodule Nex.Agent.Conversation.Session do
   end
 
   @doc """
-  Clear all messages and reset consolidation state.
+  Clear all messages.
   """
   @spec clear(t()) :: t()
   def clear(%__MODULE__{} = session) do
-    %{session | messages: [], last_consolidated: 0, updated_at: DateTime.utc_now()}
+    %{session | messages: [], updated_at: DateTime.utc_now()}
   end
 
   @doc """
@@ -272,8 +269,7 @@ defmodule Nex.Agent.Conversation.Session do
           "key" => session.key,
           "created_at" => session.created_at |> DateTime.to_iso8601(),
           "updated_at" => session.updated_at |> DateTime.to_iso8601(),
-          "metadata" => session.metadata,
-          "last_consolidated" => session.last_consolidated
+          "metadata" => session.metadata
         }
         | session.messages
       ]
@@ -341,8 +337,7 @@ defmodule Nex.Agent.Conversation.Session do
           messages: parsed_messages,
           created_at: parse_datetime(Map.get(meta, "created_at")),
           updated_at: parse_datetime(Map.get(meta, "updated_at")),
-          metadata: Map.get(meta, "metadata", %{}),
-          last_consolidated: Map.get(meta, "last_consolidated", 0)
+          metadata: Map.get(meta, "metadata", %{})
         }
 
       _ ->

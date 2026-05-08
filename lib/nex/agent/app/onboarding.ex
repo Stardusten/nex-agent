@@ -194,9 +194,7 @@ defmodule Nex.Agent.App.Onboarding do
     templates = [
       {Path.join(w, "IDENTITY.md"), identity_template()},
       {Path.join(w, "SOUL.md"), soul_template()},
-      {Path.join(w, "USER.md"), user_template()},
-      {Path.join(w, "memory/MEMORY.md"), memory_template()},
-      {Path.join(w, "memory/HISTORY.md"), history_template()}
+      {Path.join(w, "USER.md"), user_template()}
     ]
 
     Enum.each(managed_templates, fn {path, key, content} ->
@@ -413,7 +411,6 @@ defmodule Nex.Agent.App.Onboarding do
 
     - Workspace root: `~/.nex/agent/workspace`
     - Identity: `workspace/IDENTITY.md`
-    - Memory: `workspace/memory/MEMORY.md`
     - Skills: `workspace/skills/<name>/SKILL.md`
     - Workspace tools: `workspace/tools/<name>/`
     - Notes and captures: `workspace/notes/`
@@ -426,8 +423,8 @@ defmodule Nex.Agent.App.Onboarding do
     ## Runtime Capability Map
 
     - I am a long-running NexAgent personal agent runtime instance, not a one-off chatbot or a generic CLI wrapper.
-    - Chat channels are user-facing surfaces; durable working state lives in workspace, sessions, memory, skills, tools, ControlPlane, Workbench, and CODE self-update paths.
-    - I can use deterministic tools, load skills on demand, maintain durable memory/skills, inspect runtime observations, author Workbench apps, and modify framework CODE through the self-update lane.
+    - Chat channels are user-facing surfaces; durable working state lives in workspace, sessions, skills, tools, ControlPlane, Workbench, and CODE self-update paths.
+    - I can use deterministic tools, load skills on demand, inspect runtime observations, author Workbench apps, and modify framework CODE through the self-update lane.
     - Workbench is the built-in local web UI and app host. When enabled with default config, its local URL is `http://127.0.0.1:50051/workbench`.
     - Workbench apps are optional iframe artifacts under `workspace/workbench/apps/`; an empty app directory does not mean the Workbench Server is absent.
 
@@ -437,8 +434,7 @@ defmodule Nex.Agent.App.Onboarding do
 
     1. Default runtime identity and runtime guidance
     2. Bootstrap files (`AGENTS.md`, `IDENTITY.md`, `SOUL.md`, `USER.md`, `TOOLS.md`)
-    3. Long-term memory context
-    4. On-demand skill discovery guidance
+    3. On-demand skill discovery guidance
 
     Keep this file concise, stable, and system-level.
 
@@ -470,7 +466,7 @@ defmodule Nex.Agent.App.Onboarding do
 
     - `builtin:nex-code-maintenance`: framework CODE edits, runtime activation, deploy/rollback, ReqLLM/provider work, and CODE-layer tests.
     - `builtin:runtime-observability`: runtime status, failures, stuck runs, incidents, ControlPlane evidence, budgets, gauges, owner runs, and background tasks.
-    - `builtin:memory-and-evolution-routing`: memory refresh/status/rebuild, durable corrections, layer routing, and self-improvement/evolution candidates.
+    - `builtin:memory-and-evolution-routing`: layer routing, durable corrections, and self-improvement/evolution candidates.
     - `builtin:lark-feishu-ops`: Feishu/Lark native payloads, media sends, `lark-cli`, business operations, and Feishu-specific troubleshooting.
     - `builtin:workbench-app-authoring`: Workbench apps, manifests, iframe assets, static app artifacts, permissions, and app-local `reload.sh`.
 
@@ -544,7 +540,6 @@ defmodule Nex.Agent.App.Onboarding do
     - Coding executor orchestration: `executor_dispatch`, `executor_status`
     - SOUL layer: `soul_update`
     - USER layer: `user_update`
-    - MEMORY layer: `memory_consolidate`, `memory_status`, `memory_rebuild`, `memory_write`
     - SKILL layer: `skill_get`, `skill_capture`
     - TOOL layer: `tool_list`, `tool_create`, `tool_delete`
     - CODE layer: `reflect`, `self_update`, `self_update_commit`
@@ -556,7 +551,7 @@ defmodule Nex.Agent.App.Onboarding do
     - Validate tool outputs before taking follow-up actions.
     - Load `builtin:nex-code-maintenance` before CODE deploy/rollback/provider work or owner-approved self-update source commits.
     - Load `builtin:runtime-observability` before answering runtime status, failure, stuck-run, log, incident, budget, gauge, owner-run, or background-task questions.
-    - Load `builtin:memory-and-evolution-routing` before memory refresh/status/rebuild, durable correction, layer routing, or evolution-candidate work.
+    - Load `builtin:memory-and-evolution-routing` before durable correction, layer routing, or evolution-candidate work.
     - Load `builtin:lark-feishu-ops` before Feishu/Lark native payload, media, business operation, or `lark-cli` work.
     - Load `builtin:workbench-app-authoring` before creating or modifying Workbench apps.
 
@@ -633,37 +628,4 @@ defmodule Nex.Agent.App.Onboarding do
     """
   end
 
-  defp memory_template do
-    """
-    # Long-term Memory
-
-    This file stores important facts that persist across conversations.
-
-    ## Environment Facts
-
-    (Stable facts about runtime, infrastructure, and toolchain)
-
-    ## Project Conventions
-
-    (Important project-specific conventions and decisions)
-
-    ## Project Context
-
-    (Information about ongoing projects)
-
-    ## Workflow Lessons
-
-    (Reusable lessons learned from successful or failed execution paths)
-
-    ---
-
-    *This file is automatically updated when important information should be remembered.*
-    """
-  end
-
-  defp history_template do
-    """
-    # History
-    """
-  end
 end

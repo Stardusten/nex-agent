@@ -149,12 +149,8 @@ defmodule Nex.Agent.Capability.Tool.Core.ToolList do
   defp layers_for(module) when is_atom(module) do
     if function_exported?(module, :name, 0) do
       case module.name() do
-        "memory_consolidate" -> ["memory"]
         "soul_update" -> ["soul"]
         "user_update" -> ["user"]
-        "memory_status" -> ["memory"]
-        "memory_rebuild" -> ["memory"]
-        "memory_write" -> ["memory"]
         "hook" -> ["tool"]
         "observe" -> ["tool"]
         "skill_get" -> ["skill"]

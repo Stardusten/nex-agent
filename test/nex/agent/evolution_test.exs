@@ -11,16 +11,9 @@ defmodule Nex.Agent.Self.EvolutionTest do
     workspace =
       Path.join(System.tmp_dir!(), "nex-agent-evolution-#{System.unique_integer([:positive])}")
 
-    File.mkdir_p!(Path.join(workspace, "memory"))
     File.mkdir_p!(Path.join(workspace, "skills"))
     File.write!(Path.join(workspace, "SOUL.md"), "# Soul\n\n## Values\n- Be helpful\n")
     File.write!(Path.join(workspace, "USER.md"), "# USER\n- likes concise replies\n")
-    File.write!(Path.join(workspace, "memory/MEMORY.md"), "# Memory\nStable facts live here.\n")
-
-    File.write!(
-      Path.join(workspace, "memory/HISTORY.md"),
-      "[2026-03-20 10:00] historical note.\n"
-    )
 
     Application.put_env(:nex_agent, :workspace_path, workspace)
 
@@ -70,8 +63,8 @@ defmodule Nex.Agent.Self.EvolutionTest do
                  "evolution.candidate.proposed",
                  %{
                    "id" => "cand_memory",
-                   "kind" => "memory_candidate",
-                   "summary" => "Persist JSON preference",
+                   "kind" => "skill_candidate",
+                   "summary" => "Capture JSON preference workflow",
                    "rationale" => "Repeated corrections asked for JSON output",
                    "evidence_ids" => ["obs_1", "obs_2"],
                    "risk" => "low",
@@ -100,15 +93,15 @@ defmodule Nex.Agent.Self.EvolutionTest do
                  "evolution.candidate.apply.failed",
                  %{
                    "candidate_id" => "cand_memory",
-                   "error_summary" => "memory write failed"
+                   "error_summary" => "skill capture failed"
                  },
                  workspace: workspace
                )
 
       assert {:ok, candidate} = Evolution.candidate("cand_memory", workspace: workspace)
       assert candidate["status"] == "failed"
-      assert candidate["kind"] == "memory_candidate"
-      assert candidate["latest_error"] == "memory write failed"
+      assert candidate["kind"] == "skill_candidate"
+      assert candidate["latest_error"] == "skill capture failed"
       assert length(candidate["lifecycle_observation_ids"]) == 3
 
       assert [%{"candidate_id" => "cand_memory", "status" => "failed"}] =
@@ -121,8 +114,8 @@ defmodule Nex.Agent.Self.EvolutionTest do
                  "evolution.candidate.proposed",
                  %{
                    "id" => "cand_old",
-                   "kind" => "memory_candidate",
-                   "summary" => "Persist JSON preference",
+                   "kind" => "skill_candidate",
+                   "summary" => "Capture JSON preference workflow",
                    "rationale" => "old rationale",
                    "evidence_ids" => ["obs_1"],
                    "risk" => "low",
@@ -138,8 +131,8 @@ defmodule Nex.Agent.Self.EvolutionTest do
                  %{
                    "candidate_id" => "cand_old",
                    "superseded_by" => "cand_new",
-                   "kind" => "memory_candidate",
-                   "summary" => "Persist JSON preference"
+                   "kind" => "skill_candidate",
+                   "summary" => "Capture JSON preference workflow"
                  },
                  workspace: workspace
                )
@@ -315,47 +308,6 @@ defmodule Nex.Agent.Self.EvolutionTest do
     end
   end
 
-  describe "maybe_trigger_after_consolidation/1" do
-    test "counter persists and triggers async evolution at threshold", %{workspace: workspace} do
-      write_budget(workspace, 60)
-      seed_observations(workspace)
-
-      Enum.each(1..4, fn _ ->
-        refute Evolution.maybe_trigger_after_consolidation(workspace: workspace)
-      end)
-
-      assert Evolution.maybe_trigger_after_consolidation(
-               workspace: workspace,
-               llm_call_fun: fn _messages, _opts ->
-                 {:ok,
-                  %{
-                    "observations" => "Routine reflection.",
-                    "candidates" => [
-                      %{
-                        "kind" => "code_hint",
-                        "summary" => "Add targeted retry guidance",
-                        "rationale" => "Repeated runner/tool failures were observed.",
-                        "evidence_ids" =>
-                          Evolution.recent_signals(workspace: workspace)
-                          |> Enum.map(& &1["id"]),
-                        "risk" => "medium"
-                      }
-                    ]
-                  }}
-               end
-             )
-
-      counter_path = Path.join(Workspace.memory_dir(workspace: workspace), ".evolution_counter")
-      assert File.read!(counter_path) |> String.trim() == "5"
-
-      assert wait_until(fn ->
-               Enum.any?(Evolution.recent_events(workspace: workspace), fn event ->
-                 event["tag"] == "evolution.cycle.completed"
-               end)
-             end)
-    end
-  end
-
   describe "run_evolution_cycle/1" do
     test "sleep budget skips without invoking the LLM", %{workspace: workspace} do
       write_budget(workspace, 0)
@@ -387,7 +339,6 @@ defmodule Nex.Agent.Self.EvolutionTest do
       seed_observations(workspace)
 
       soul_before = File.read!(Path.join(workspace, "SOUL.md"))
-      memory_before = File.read!(Path.join(workspace, "memory/MEMORY.md"))
 
       assert {:ok, result} = Evolution.run_evolution_cycle(workspace: workspace)
 
@@ -396,7 +347,6 @@ defmodule Nex.Agent.Self.EvolutionTest do
       assert result.candidate_count == 1
       assert [%{"kind" => "reflection_candidate"}] = result.candidates
       assert File.read!(Path.join(workspace, "SOUL.md")) == soul_before
-      assert File.read!(Path.join(workspace, "memory/MEMORY.md")) == memory_before
     end
 
     test "normal budget builds evidence pack and returns candidate actions only", %{
@@ -430,7 +380,6 @@ defmodule Nex.Agent.Self.EvolutionTest do
                )
 
       soul_before = File.read!(Path.join(workspace, "SOUL.md"))
-      memory_before = File.read!(Path.join(workspace, "memory/MEMORY.md"))
       parent = self()
 
       llm_call_fun = fn messages, _opts ->
@@ -482,7 +431,6 @@ defmodule Nex.Agent.Self.EvolutionTest do
       assert result.evidence_count == 4
       assert length(candidate["evidence_ids"]) >= 1
       assert File.read!(Path.join(workspace, "SOUL.md")) == soul_before
-      assert File.read!(Path.join(workspace, "memory/MEMORY.md")) == memory_before
 
       assert_receive {:prompt, prompt}, 500
       assert prompt =~ "\"evolution.signal.recorded\""

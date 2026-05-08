@@ -737,7 +737,6 @@ defmodule Nex.Agent.Interface.Workbench.ServerTest do
   test "serves self evolution energy candidates detail and confirmed actions", %{
     workspace: workspace
   } do
-    File.mkdir_p!(Path.join(workspace, "memory"))
 
     assert {:ok, evidence} =
              Nex.Agent.Observe.ControlPlane.Log.warning(
@@ -824,16 +823,14 @@ defmodule Nex.Agent.Interface.Workbench.ServerTest do
   end
 
   test "self evolution apply uses candidate execution lane", %{workspace: workspace} do
-    File.mkdir_p!(Path.join(workspace, "memory"))
-    File.write!(Path.join(workspace, "memory/MEMORY.md"), "# Memory\n")
 
     assert {:ok, _} =
              Nex.Agent.Observe.ControlPlane.Log.info(
                "evolution.candidate.proposed",
                %{
-                 "id" => "cand_memory_apply",
-                 "kind" => "memory_candidate",
-                 "summary" => "Remember workbench confirmation rule",
+                 "id" => "cand_soul_apply",
+                 "kind" => "soul_candidate",
+                 "summary" => "Add workbench confirmation rule",
                  "rationale" => "Owner wants action confirmation in Workbench.",
                  "evidence_ids" => [],
                  "risk" => "low",
@@ -854,16 +851,16 @@ defmodule Nex.Agent.Interface.Workbench.ServerTest do
                 "apply" => %{"status" => "applied"}
               }
             }} =
-             post_json(port, "/api/workbench/evolution/candidates/cand_memory_apply/apply", %{
+             post_json(port, "/api/workbench/evolution/candidates/cand_soul_apply/apply", %{
                "confirm" => true,
                "decision_reason" => "approved from workbench"
              })
 
     assert {:ok, %{"status" => "applied"}} =
-             Evolution.candidate("cand_memory_apply", workspace: workspace)
+             Evolution.candidate("cand_soul_apply", workspace: workspace)
 
-    assert File.read!(Path.join(workspace, "memory/MEMORY.md")) =~
-             "Remember workbench confirmation rule"
+    assert File.read!(Path.join(workspace, "SOUL.md")) =~
+             "Add workbench confirmation rule"
   end
 
   test "rejects non-loopback runtime hosts", %{workspace: workspace} do

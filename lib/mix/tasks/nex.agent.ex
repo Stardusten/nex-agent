@@ -196,10 +196,7 @@ defmodule Mix.Tasks.Nex.Agent do
     end)
 
     soul_path = Path.join(target.workspace, "SOUL.md")
-    memory_path = Path.join(target.workspace, "memory/MEMORY.md")
-
     soul_before = file_size(soul_path)
-    memory_before = file_size(memory_path)
 
     Mix.shell().info("")
     Mix.shell().info("Running evolution cycle...")
@@ -217,7 +214,6 @@ defmodule Mix.Tasks.Nex.Agent do
         Mix.shell().info("  Candidate count: #{result.candidate_count}")
         Mix.shell().info("")
         Mix.shell().info("SOUL.md bytes: #{soul_before} → #{file_size(soul_path)}")
-        Mix.shell().info("MEMORY.md bytes: #{memory_before} → #{file_size(memory_path)}")
         Mix.shell().info("")
 
         Enum.each(result.candidates, fn candidate ->

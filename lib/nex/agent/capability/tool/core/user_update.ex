@@ -4,7 +4,7 @@ defmodule Nex.Agent.Capability.Tool.Core.UserUpdate do
   @behaviour Nex.Agent.Capability.Tool.Behaviour
 
   alias Nex.Agent.Turn.ContextDiagnostics
-  alias Nex.Agent.Knowledge.Memory
+  alias Nex.Agent.Runtime.Workspace
   alias Nex.Agent.Sandbox.FileSystem
 
   def name, do: "user_update"
@@ -174,7 +174,7 @@ defmodule Nex.Agent.Capability.Tool.Core.UserUpdate do
   defp profile_workspace(workspace) when is_binary(workspace) and workspace != "",
     do: workspace
 
-  defp profile_workspace(_workspace), do: Memory.workspace_path()
+  defp profile_workspace(_workspace), do: Workspace.root()
 
   defp put_ctx_workspace(ctx, workspace) when is_map(ctx), do: Map.put(ctx, :workspace, workspace)
 

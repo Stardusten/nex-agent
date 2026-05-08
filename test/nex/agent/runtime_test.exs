@@ -10,7 +10,6 @@ defmodule Nex.Agent.RuntimeTest do
     workspace =
       Path.join(System.tmp_dir!(), "nex-agent-runtime-#{System.unique_integer([:positive])}")
 
-    File.mkdir_p!(Path.join(workspace, "memory"))
     File.mkdir_p!(Path.join(workspace, "hooks"))
     File.mkdir_p!(Path.join(workspace, "plugins/catalog-probe"))
     File.mkdir_p!(Path.join(workspace, "skills/catalog-guide"))
@@ -19,7 +18,6 @@ defmodule Nex.Agent.RuntimeTest do
     File.write!(Path.join(workspace, "SOUL.md"), "# SOUL\nRuntime SOUL layer.\n")
     File.write!(Path.join(workspace, "USER.md"), "# USER\nRuntime USER layer.\n")
     File.write!(Path.join(workspace, "TOOLS.md"), "# TOOLS\nRuntime TOOLS layer.\n")
-    File.write!(Path.join(workspace, "memory/MEMORY.md"), "# Memory\nRuntime memory.\n")
 
     File.write!(
       Path.join(workspace, "hooks/hooks.json"),
@@ -518,9 +516,7 @@ defmodule Nex.Agent.RuntimeTest do
         "nex-agent-runtime-explicit-#{System.unique_integer([:positive])}"
       )
 
-    File.mkdir_p!(Path.join(explicit_workspace, "memory"))
     File.write!(Path.join(explicit_workspace, "AGENTS.md"), "# AGENTS\nExplicit workspace.\n")
-    File.write!(Path.join(explicit_workspace, "memory/MEMORY.md"), "# Memory\n")
 
     on_exit(fn -> File.rm_rf!(explicit_workspace) end)
 

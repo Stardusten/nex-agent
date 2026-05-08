@@ -10,7 +10,7 @@ defmodule Nex.Agent.Interface.Workbench.ConfigPanel do
   alias Nex.Agent.Runtime.Snapshot
 
   @context_strategies ~w(server_side server_side_then_recent provider_native provider_native_then_recent native native_compaction)
-  @role_keys ~w(default_model cheap_model memory_model advisor_model)
+  @role_keys ~w(default_model cheap_model advisor_model)
   @provider_reserved_keys ~w(type api_key base_url)
   @model_reserved_keys ~w(provider id context_window context_tokens max_context_tokens context_limit model_context_window auto_compact_token_limit model_auto_compact_token_limit context_strategy)
   @secret_placeholder "******"

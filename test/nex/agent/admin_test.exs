@@ -214,7 +214,6 @@ defmodule Nex.Agent.Observe.AdminTest do
   test "console-facing admin states keep the key fields used by panels", %{workspace: workspace} do
     File.write!(Path.join(workspace, "SOUL.md"), "# SOUL\n- stay layered\n")
     File.write!(Path.join(workspace, "USER.md"), "# USER\n- likes structured consoles\n")
-    File.write!(Path.join(workspace, "memory/MEMORY.md"), "# MEMORY\n- keep stable facts here\n")
 
     session =
       Session.new("qa:console")
@@ -238,10 +237,8 @@ defmodule Nex.Agent.Observe.AdminTest do
     assert length(evolution_state.recent_signals) == 1
     assert is_list(overview_state.recent_candidates)
     assert is_list(evolution_state.recent_candidates)
-    assert memory_state.memory_preview =~ "# MEMORY"
-    assert memory_state.memory_bytes > 0
-    assert sessions_state.selected_session.last_consolidated == 0
-    assert sessions_state.selected_session.unconsolidated_messages == 2
+    assert memory_state.user_preview =~ "# USER"
+    assert sessions_state.selected_session.total_messages == 2
   end
 
   test "evolution_state derives candidate lifecycle from control plane observations", %{
@@ -252,8 +249,8 @@ defmodule Nex.Agent.Observe.AdminTest do
                "evolution.candidate.proposed",
                %{
                  "id" => "cand_admin",
-                 "kind" => "memory_candidate",
-                 "summary" => "Remember JSON preference",
+                 "kind" => "skill_candidate",
+                 "summary" => "Capture JSON preference workflow",
                  "rationale" => "Repeated corrections asked for JSON",
                  "evidence_ids" => ["obs_1"],
                  "risk" => "low",

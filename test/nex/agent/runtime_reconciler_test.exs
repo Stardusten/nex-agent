@@ -10,12 +10,10 @@ defmodule Nex.Agent.RuntimeReconcilerTest do
     workspace =
       Path.join(System.tmp_dir!(), "nex-agent-reconciler-#{System.unique_integer([:positive])}")
 
-    File.mkdir_p!(Path.join(workspace, "memory"))
     File.write!(Path.join(workspace, "AGENTS.md"), "# AGENTS\n")
     File.write!(Path.join(workspace, "SOUL.md"), "# SOUL\n")
     File.write!(Path.join(workspace, "USER.md"), "# USER\n")
     File.write!(Path.join(workspace, "TOOLS.md"), "# TOOLS\n")
-    File.write!(Path.join(workspace, "memory/MEMORY.md"), "# Memory\n")
 
     if Process.whereis(Nex.Agent.App.Bus) == nil do
       start_supervised!({Nex.Agent.App.Bus, name: Nex.Agent.App.Bus})

@@ -731,10 +731,6 @@ defmodule Nex.Agent.Capability.Tool.Registry do
   defp normalize_definition(%{"function" => inner}) when is_map(inner), do: inner
   defp normalize_definition(def_map), do: def_map
 
-  defp definition_priority("memory_consolidate"), do: 0
-  defp definition_priority("memory_status"), do: 1
-  defp definition_priority("memory_rebuild"), do: 2
-  defp definition_priority("memory_write"), do: 3
   defp definition_priority(_name), do: 100
 
   defp filter_tools(tools, :all, _opts), do: tools

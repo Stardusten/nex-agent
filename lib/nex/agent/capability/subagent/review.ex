@@ -5,7 +5,7 @@ defmodule Nex.Agent.Capability.Subagent.Review do
   Tracks performance, analyzes patterns, and suggests code upgrade opportunities.
   """
 
-  alias Nex.Agent.Knowledge.Memory
+  alias Nex.Agent.Runtime.Workspace
 
   @type performance_metric :: %{
           module: String.t(),
@@ -42,9 +42,13 @@ defmodule Nex.Agent.Capability.Subagent.Review do
       timestamp: DateTime.utc_now() |> DateTime.to_iso8601()
     }
 
-    Memory.append_history(
+    entry =
       "[#{String.slice(metric.timestamp, 0, 16)}] SUBAGENT_PERFORMANCE #{Jason.encode!(metric)}"
-    )
+
+    path = history_path()
+    File.mkdir_p!(Path.dirname(path))
+    prefix = if File.exists?(path) and File.read!(path) != "", do: "\n", else: ""
+    File.write!(path, prefix <> entry <> "\n", [:append])
 
     :ok
   end
@@ -297,7 +301,7 @@ defmodule Nex.Agent.Capability.Subagent.Review do
   end
 
   defp history_path do
-    Path.join(Memory.workspace_path(), "memory/HISTORY.md")
+    Path.join(Workspace.root(), "notes/subagent_review_history.log")
   end
 
   defp parse_window("1d"), do: DateTime.add(DateTime.utc_now(), -86_400)

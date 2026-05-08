@@ -18,12 +18,10 @@ defmodule Nex.Agent.Turn.RunnerStreamTest do
         "nex-agent-runner-stream-#{System.unique_integer([:positive])}"
       )
 
-    File.mkdir_p!(Path.join(workspace, "memory"))
     File.write!(Path.join(workspace, "AGENTS.md"), "# AGENTS\n")
     File.write!(Path.join(workspace, "SOUL.md"), "# SOUL\n")
     File.write!(Path.join(workspace, "USER.md"), "# USER\n")
     File.write!(Path.join(workspace, "TOOLS.md"), "# TOOLS\n")
-    File.write!(Path.join(workspace, "memory/MEMORY.md"), "# Memory\n")
 
     on_exit(fn -> File.rm_rf!(workspace) end)
 
@@ -71,12 +69,10 @@ defmodule Nex.Agent.Turn.RunnerStreamTest do
         "nex-agent-runner-stream-markdown-#{System.unique_integer([:positive])}"
       )
 
-    File.mkdir_p!(Path.join(workspace, "memory"))
     File.write!(Path.join(workspace, "AGENTS.md"), "# AGENTS\n")
     File.write!(Path.join(workspace, "SOUL.md"), "# SOUL\n")
     File.write!(Path.join(workspace, "USER.md"), "# USER\n")
     File.write!(Path.join(workspace, "TOOLS.md"), "# TOOLS\n")
-    File.write!(Path.join(workspace, "memory/MEMORY.md"), "# Memory\n")
 
     on_exit(fn -> File.rm_rf!(workspace) end)
 
@@ -136,12 +132,10 @@ defmodule Nex.Agent.Turn.RunnerStreamTest do
         "nex-agent-runner-stream-reset-#{System.unique_integer([:positive])}"
       )
 
-    File.mkdir_p!(Path.join(workspace, "memory"))
     File.write!(Path.join(workspace, "AGENTS.md"), "# AGENTS\n")
     File.write!(Path.join(workspace, "SOUL.md"), "# SOUL\n")
     File.write!(Path.join(workspace, "USER.md"), "# USER\n")
     File.write!(Path.join(workspace, "TOOLS.md"), "# TOOLS\n")
-    File.write!(Path.join(workspace, "memory/MEMORY.md"), "# Memory\n")
 
     on_exit(fn -> File.rm_rf!(workspace) end)
 
@@ -200,12 +194,10 @@ defmodule Nex.Agent.Turn.RunnerStreamTest do
         "nex-agent-runner-stream-client-#{System.unique_integer([:positive])}"
       )
 
-    File.mkdir_p!(Path.join(workspace, "memory"))
     File.write!(Path.join(workspace, "AGENTS.md"), "# AGENTS\n")
     File.write!(Path.join(workspace, "SOUL.md"), "# SOUL\n")
     File.write!(Path.join(workspace, "USER.md"), "# USER\n")
     File.write!(Path.join(workspace, "TOOLS.md"), "# TOOLS\n")
-    File.write!(Path.join(workspace, "memory/MEMORY.md"), "# Memory\n")
 
     on_exit(fn -> File.rm_rf!(workspace) end)
 
@@ -241,12 +233,10 @@ defmodule Nex.Agent.Turn.RunnerStreamTest do
         "nex-agent-runner-stream-tools-#{System.unique_integer([:positive])}"
       )
 
-    File.mkdir_p!(Path.join(workspace, "memory"))
     File.write!(Path.join(workspace, "AGENTS.md"), "# AGENTS\n")
     File.write!(Path.join(workspace, "SOUL.md"), "# SOUL\n")
     File.write!(Path.join(workspace, "USER.md"), "# USER\n")
     File.write!(Path.join(workspace, "TOOLS.md"), "# TOOLS\n")
-    File.write!(Path.join(workspace, "memory/MEMORY.md"), "# Memory\n")
 
     on_exit(fn -> File.rm_rf!(workspace) end)
 
@@ -312,12 +302,10 @@ defmodule Nex.Agent.Turn.RunnerStreamTest do
       )
 
     File.mkdir_p!(Path.join(workspace, "lib"))
-    File.mkdir_p!(Path.join(workspace, "memory"))
     File.write!(Path.join(workspace, "AGENTS.md"), "# AGENTS\n")
     File.write!(Path.join(workspace, "SOUL.md"), "# SOUL\n")
     File.write!(Path.join(workspace, "USER.md"), "# USER\n")
     File.write!(Path.join(workspace, "TOOLS.md"), "# TOOLS\n")
-    File.write!(Path.join(workspace, "memory/MEMORY.md"), "# Memory\n")
     File.write!(Path.join(workspace, "lib/sample.ex"), "def needle, do: :ok\n")
 
     on_exit(fn -> File.rm_rf!(workspace) end)
@@ -393,12 +381,10 @@ defmodule Nex.Agent.Turn.RunnerStreamTest do
         "nex-agent-runner-stream-skill-tool-notice-#{System.unique_integer([:positive])}"
       )
 
-    File.mkdir_p!(Path.join(workspace, "memory"))
     File.write!(Path.join(workspace, "AGENTS.md"), "# AGENTS\n")
     File.write!(Path.join(workspace, "SOUL.md"), "# SOUL\n")
     File.write!(Path.join(workspace, "USER.md"), "# USER\n")
     File.write!(Path.join(workspace, "TOOLS.md"), "# TOOLS\n")
-    File.write!(Path.join(workspace, "memory/MEMORY.md"), "# Memory\n")
 
     on_exit(fn -> File.rm_rf!(workspace) end)
 
@@ -467,12 +453,10 @@ defmodule Nex.Agent.Turn.RunnerStreamTest do
         "nex-agent-runner-stream-tool-notice-spacing-#{System.unique_integer([:positive])}"
       )
 
-    File.mkdir_p!(Path.join(workspace, "memory"))
     File.write!(Path.join(workspace, "AGENTS.md"), "# AGENTS\n")
     File.write!(Path.join(workspace, "SOUL.md"), "# SOUL\n")
     File.write!(Path.join(workspace, "USER.md"), "# USER\n")
     File.write!(Path.join(workspace, "TOOLS.md"), "# TOOLS\n")
-    File.write!(Path.join(workspace, "memory/MEMORY.md"), "# Memory\n")
 
     on_exit(fn -> File.rm_rf!(workspace) end)
 
@@ -552,12 +536,10 @@ defmodule Nex.Agent.Turn.RunnerStreamTest do
         "nex-agent-runner-stream-bash-tools-#{System.unique_integer([:positive])}"
       )
 
-    File.mkdir_p!(Path.join(workspace, "memory"))
     File.write!(Path.join(workspace, "AGENTS.md"), "# AGENTS\n")
     File.write!(Path.join(workspace, "SOUL.md"), "# SOUL\n")
     File.write!(Path.join(workspace, "USER.md"), "# USER\n")
     File.write!(Path.join(workspace, "TOOLS.md"), "# TOOLS\n")
-    File.write!(Path.join(workspace, "memory/MEMORY.md"), "# Memory\n")
 
     on_exit(fn -> File.rm_rf!(workspace) end)
 
@@ -658,12 +640,10 @@ defmodule Nex.Agent.Turn.RunnerStreamTest do
         "nex-agent-runner-stream-continue-#{System.unique_integer([:positive])}"
       )
 
-    File.mkdir_p!(Path.join(workspace, "memory"))
     File.write!(Path.join(workspace, "AGENTS.md"), "# AGENTS\n")
     File.write!(Path.join(workspace, "SOUL.md"), "# SOUL\n")
     File.write!(Path.join(workspace, "USER.md"), "# USER\n")
     File.write!(Path.join(workspace, "TOOLS.md"), "# TOOLS\n")
-    File.write!(Path.join(workspace, "memory/MEMORY.md"), "# Memory\n")
 
     on_exit(fn -> File.rm_rf!(workspace) end)
 
@@ -722,12 +702,10 @@ defmodule Nex.Agent.Turn.RunnerStreamTest do
         "nex-agent-runner-image-generation-#{System.unique_integer([:positive])}"
       )
 
-    File.mkdir_p!(Path.join(workspace, "memory"))
     File.write!(Path.join(workspace, "AGENTS.md"), "# AGENTS\n")
     File.write!(Path.join(workspace, "SOUL.md"), "# SOUL\n")
     File.write!(Path.join(workspace, "USER.md"), "# USER\n")
     File.write!(Path.join(workspace, "TOOLS.md"), "# TOOLS\n")
-    File.write!(Path.join(workspace, "memory/MEMORY.md"), "# Memory\n")
 
     on_exit(fn -> File.rm_rf!(workspace) end)
 

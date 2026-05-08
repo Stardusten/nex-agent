@@ -10,7 +10,7 @@ defmodule Nex.Agent.Turn.ContextBuilderTest do
     workspace =
       Path.join(System.tmp_dir!(), "nex-agent-context-#{System.unique_integer([:positive])}")
 
-    File.mkdir_p!(Path.join(workspace, "memory"))
+    File.mkdir_p!(workspace)
     File.write!(Path.join(workspace, "AGENTS.md"), "# AGENTS\n")
 
     File.write!(
@@ -21,7 +21,6 @@ defmodule Nex.Agent.Turn.ContextBuilderTest do
     File.write!(Path.join(workspace, "SOUL.md"), "# SOUL\n")
     File.write!(Path.join(workspace, "USER.md"), "# USER\n")
     File.write!(Path.join(workspace, "TOOLS.md"), "# TOOLS\n")
-    File.write!(Path.join(workspace, "memory/MEMORY.md"), "Project conventions live here.\n")
 
     on_exit(fn -> File.rm_rf!(workspace) end)
     {:ok, workspace: workspace}
@@ -62,7 +61,6 @@ defmodule Nex.Agent.Turn.ContextBuilderTest do
 
     refute prompt =~ "Strict ship checks such as `format`, `credo`, or `dialyzer`"
     refute prompt =~ "ControlPlane observations are the self-observation source of truth"
-    refute prompt =~ "Empty `MEMORY.md` does not imply this is the first conversation"
   end
 
   test "system prompt includes channel output rules and newmsg guidance", %{workspace: workspace} do
@@ -456,17 +454,12 @@ defmodule Nex.Agent.Turn.ContextBuilderTest do
            ]
   end
 
-  test "diagnostics detect user profile leakage in SOUL and style leakage in MEMORY", %{
+  test "diagnostics detect user profile leakage in SOUL", %{
     workspace: workspace
   } do
     File.write!(
       Path.join(workspace, "SOUL.md"),
       "# SOUL\n- **Timezone**: UTC+8\n- **Name**: fenix\n"
-    )
-
-    File.write!(
-      Path.join(workspace, "memory/MEMORY.md"),
-      "Always respond with a formal tone in every answer.\n"
     )
 
     diagnostics = ContextBuilder.build_system_prompt_diagnostics(workspace: workspace)
@@ -477,14 +470,6 @@ defmodule Nex.Agent.Turn.ContextBuilderTest do
                diagnostic.source == "SOUL.md" and
                diagnostic.message ==
                  "SOUL.md contains user profile data; user profile details belong to USER.md."
-           end)
-
-    assert Enum.any?(diagnostics, fn diagnostic ->
-             diagnostic.category == :persona_style_instruction_in_memory and
-               diagnostic.source_layer == :memory and
-               diagnostic.source == "memory/MEMORY.md" and
-               diagnostic.message ==
-                 "MEMORY.md contains persona/style instructions; persona and style guidance belongs to SOUL.md."
            end)
   end
 
@@ -505,7 +490,6 @@ defmodule Nex.Agent.Turn.ContextBuilderTest do
     File.rm!(Path.join(workspace, "SOUL.md"))
     File.rm!(Path.join(workspace, "USER.md"))
     File.rm!(Path.join(workspace, "TOOLS.md"))
-    File.rm!(Path.join(workspace, "memory/MEMORY.md"))
 
     {prompt, diagnostics} =
       ContextBuilder.build_system_prompt_with_diagnostics(workspace: workspace)

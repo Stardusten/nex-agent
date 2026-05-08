@@ -58,7 +58,6 @@ defmodule Nex.Agent.Conversation.FollowUpTest do
     allowed = [
       "executor_status",
       "find",
-      "memory_status",
       "observe",
       "read",
       "skill_get",
