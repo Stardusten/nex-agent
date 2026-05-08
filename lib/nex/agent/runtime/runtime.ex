@@ -213,6 +213,9 @@ defmodule Nex.Agent.Runtime do
                |> Keyword.put(:workspace, workspace)
                |> Keyword.put(:skill_catalog_prompt, skills_data.catalog_prompt)
              ]) do
+        PluginWorkspaceFiles.ensure_declared!(workspace, plugins_data, config)
+        plugins_data = reconcile_plugin_mcp_servers(plugins_data, workspace, config)
+
         definition_opts = fn surface ->
           tool_definition_opts(config, workspace, surface, subagent_profiles, plugins_data)
         end
@@ -239,9 +242,6 @@ defmodule Nex.Agent.Runtime do
               ])
             end
           )
-
-        PluginWorkspaceFiles.ensure_declared!(workspace, plugins_data)
-        plugins_data = reconcile_plugin_mcp_servers(plugins_data, workspace, config)
 
         prompt_data = %{
           system_prompt: prompt,

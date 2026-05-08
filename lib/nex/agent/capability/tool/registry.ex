@@ -748,6 +748,9 @@ defmodule Nex.Agent.Capability.Tool.Registry do
       not MapSet.member?(enabled_plugin_names, name) ->
         true
 
+      is_nil(tool_definition(entry, opts)) ->
+        true
+
       mcp_plugin_entry?(entry) and not plugin_mcp_entry_active?(entry, opts) ->
         true
 

@@ -50,7 +50,8 @@ defmodule Nex.Agent.PluginRuntimePrimitivesTest do
   alias Nex.Agent.Capability.Tool.Registry
   alias Nex.Agent.Conversation.Session
   alias Nex.Agent.Interface.MCP.ServerManager
-  alias Nex.Agent.Runtime.PluginJobRunner
+  alias Nex.Agent.Runtime.{PluginJobRunner, PluginWorkspaceFiles}
+  alias Nex.Agent.Sandbox.{Approval, PermissionRuleStore}
   alias Nex.Agent.Turn.Runner
 
   setup do
@@ -177,6 +178,7 @@ defmodule Nex.Agent.PluginRuntimePrimitivesTest do
           {Task.Supervisor, Nex.Agent.TaskSupervisor},
           {Registry, Registry},
           {PluginJobRunner, PluginJobRunner},
+          {Approval, Approval},
           {ServerManager, ServerManager},
           {Runtime, Runtime}
         ] do
@@ -216,6 +218,8 @@ defmodule Nex.Agent.PluginRuntimePrimitivesTest do
     assert Enum.any?(snapshot.plugins.contributions.jobs, &(&1["id"] == "echo.flush"))
     assert Enum.any?(snapshot.plugins.contributions.workspace_files, &(&1["id"] == "echo.state"))
     assert Enum.any?(snapshot.plugins.contributions.mcp_servers, &(&1["id"] == "echo_mcp"))
+    assert ServerManager.plugin_server_id("workspace:demo-echo", "echo_mcp") in snapshot.plugins.active_mcp_servers
+    assert Enum.any?(snapshot.tools.definitions_all, &(&1["name"] == "echo__remote"))
     assert File.exists?(Path.join(workspace, "plugin_data/echo/state.json"))
   end
 
@@ -404,6 +408,185 @@ defmodule Nex.Agent.PluginRuntimePrimitivesTest do
     assert {:ok, _snapshot} = Runtime.reload(workspace: workspace, config_loader: fn _ -> config end)
     assert Registry.definitions(:all, config: config) |> is_list()
     refute Enum.any?(Registry.definitions(:all, config: config), &(&1["name"] == "bad_plugin_tool"))
+
+    assert {:error, message} = Registry.execute("bad_plugin_tool", %{}, %{workspace: workspace, config: config})
+    assert message =~ "Unknown tool: bad_plugin_tool"
+  end
+
+  test "workspace file initialization uses sandbox filesystem authorization", %{workspace: workspace, config: config} do
+    File.mkdir_p!(Path.join(workspace, "plugins/read-only-file"))
+
+    File.write!(
+      Path.join(workspace, "plugins/read-only-file/nex.plugin.json"),
+      Jason.encode!(%{
+        "id" => "workspace:read-only-file",
+        "title" => "Read Only File",
+        "source" => "workspace",
+        "contributes" => %{
+          "workspaceFiles" => [
+            %{
+              "id" => "readonly.state",
+              "path" => "plugin_data/readonly/state.json",
+              "kind" => "file",
+              "onMissing" => "create",
+              "watch" => true
+            }
+          ]
+        }
+      })
+    )
+
+    config_map = Config.to_map(config)
+
+    config =
+      Config.from_map(
+        config_map
+        |> Map.put("plugins", %{
+          "enabled" => %{
+            "workspace:demo-echo" => true,
+            "workspace:read-only-file" => true
+          }
+        })
+        |> put_in(["tools", "sandbox", "default_profile"], "read_only")
+        |> put_in(["tools", "sandbox", "approval"], %{"default" => "ask"})
+      )
+
+    target = Path.join(workspace, "plugin_data/readonly/state.json")
+
+    assert {:ok, snapshot} = Runtime.reload(workspace: workspace, config_loader: fn _ -> config end)
+    assert Enum.any?(snapshot.plugins.contributions.workspace_files, &(&1["id"] == "readonly.state"))
+    refute File.exists?(target)
+  end
+
+  test "workspace file default allow still honors explicit deny rule", %{workspace: workspace, config: config} do
+    File.mkdir_p!(Path.join(workspace, "plugins/denied-file"))
+
+    File.write!(
+      Path.join(workspace, "plugins/denied-file/nex.plugin.json"),
+      Jason.encode!(%{
+        "id" => "workspace:denied-file",
+        "title" => "Denied File",
+        "source" => "workspace",
+        "contributes" => %{
+          "workspaceFiles" => [
+            %{
+              "id" => "denied.state",
+              "path" => "plugin_data/denied/state.json",
+              "kind" => "file",
+              "onMissing" => "create"
+            }
+          ]
+        }
+      })
+    )
+
+    target = Path.join(workspace, "plugin_data/denied/state.json")
+
+    deny_rule = %{
+      id: "deny-plugin-workspace-file",
+      effect: :deny,
+      scope: :workspace,
+      predicates: [
+        {:resource_eq, :path},
+        {:operation_in, [:write]},
+        {:path_eq, target}
+      ]
+    }
+
+    assert :ok = PermissionRuleStore.save(workspace, [deny_rule])
+
+    if pid = Process.whereis(Approval) do
+      GenServer.stop(pid, :normal)
+    end
+
+    unless eventually(fn -> Process.whereis(Approval) != nil end) do
+      start_supervised!({Approval, name: Approval})
+    end
+
+    config_map = Config.to_map(config)
+
+    config =
+      Config.from_map(
+        Map.put(config_map, "plugins", %{
+          "enabled" => %{
+            "workspace:demo-echo" => true,
+            "workspace:denied-file" => true
+          }
+        })
+      )
+
+    assert {:ok, snapshot} = Runtime.reload(workspace: workspace, config_loader: fn _ -> config end)
+    assert Enum.any?(snapshot.plugins.contributions.workspace_files, &(&1["id"] == "denied.state"))
+    refute File.exists?(target)
+  end
+
+  test "workspace file watch paths cannot escape workspace", %{workspace: workspace, config: config} do
+    File.mkdir_p!(Path.join(workspace, "plugins/escaping-watch"))
+
+    File.write!(
+      Path.join(workspace, "plugins/escaping-watch/nex.plugin.json"),
+      Jason.encode!(%{
+        "id" => "workspace:escaping-watch",
+        "title" => "Escaping Watch",
+        "source" => "workspace",
+        "contributes" => %{
+          "workspaceFiles" => [
+            %{
+              "id" => "escape.watch",
+              "path" => "../escape/state.json",
+              "kind" => "file",
+              "watch" => true
+            }
+          ]
+        }
+      })
+    )
+
+    config_map = Config.to_map(config)
+
+    config =
+      Config.from_map(
+        Map.put(config_map, "plugins", %{
+          "enabled" => %{
+            "workspace:demo-echo" => true,
+            "workspace:escaping-watch" => true
+          }
+        })
+      )
+
+    assert {:ok, snapshot} = Runtime.reload(workspace: workspace, config_loader: fn _ -> config end)
+    refute Enum.any?(PluginWorkspaceFiles.watch_paths(workspace, snapshot.plugins), &String.contains?(&1, "/escape/state.json"))
+  end
+
+  test "plugin MCP connect deny rule overrides config default allow", %{workspace: workspace, config: config} do
+    server_id = ServerManager.plugin_server_id("workspace:demo-echo", "echo_mcp")
+
+    deny_rule = %{
+      id: "deny-plugin-mcp-connect",
+      effect: :deny,
+      scope: :workspace,
+      predicates: [
+        {:resource_eq, :mcp},
+        {:operation_in, [:connect]},
+        {:eq, :mcp_server, "echo_mcp"}
+      ]
+    }
+
+    assert :ok = ServerManager.stop(server_id)
+    assert :ok = PermissionRuleStore.save(workspace, [deny_rule])
+
+    if pid = Process.whereis(Approval) do
+      GenServer.stop(pid, :normal)
+    end
+
+    unless eventually(fn -> Process.whereis(Approval) != nil end) do
+      start_supervised!({Approval, name: Approval})
+    end
+
+    assert {:ok, snapshot} = Runtime.reload(workspace: workspace, config_loader: fn _ -> config end)
+
+    refute server_id in snapshot.plugins.active_mcp_servers
+    refute Enum.any?(snapshot.tools.definitions_all, &(&1["name"] == "echo__remote"))
   end
 
   defp stream_client_from_response(fun) when is_function(fun, 2) do
