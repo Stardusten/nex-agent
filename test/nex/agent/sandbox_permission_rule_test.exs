@@ -36,6 +36,36 @@ defmodule Nex.Agent.SandboxPermissionRuleTest do
     assert String.ends_with?(target, "/nex-agent-permission/a.md")
   end
 
+  test "mcp rules normalize and match mcp requirements" do
+    rule =
+      rule("allow-mcp-connect",
+        effect: :allow,
+        predicates: [
+          {:resource_eq, :mcp},
+          {:operation_in, [:connect]},
+          {:eq, :mcp_server, "echo_mcp"}
+        ]
+      )
+
+    decision =
+      PermissionRule.decide(
+        %{
+          tool_name: "mcp:connect:workspace:demo-echo:echo_mcp",
+          workspace: "/tmp/nex-agent-workspace",
+          metadata: %{
+            "plugin_id" => "workspace:demo-echo",
+            "mcp_server" => "echo_mcp",
+            "mcp_operation" => "connect"
+          }
+        },
+        [rule]
+      )
+
+    assert decision.action == :allow
+    assert decision.winning_rule_id == "allow-mcp-connect"
+    assert Enum.any?(decision.requirement_decisions, &(&1.requirement.resource == :mcp))
+  end
+
   test "same level uses more specific matching rule before broader rule" do
     rules = [
       rule("global-rm-deny",

@@ -348,31 +348,28 @@ defmodule Nex.Agent.Interface.MCP.ServerManager do
   defp authorize_connect(%{"plugin_id" => plugin_id, "id" => contribution_id, "attrs" => %{}}, workspace, config) do
     session_key = "plugin:" <> plugin_id
     raw_event = mcp_raw_event("connect", plugin_id, contribution_id, nil, workspace, [])
+    decision_opts = [extra_rules: config_default_mcp_rules(config, workspace)]
 
-    cond do
-      approval_default_allow?(config, workspace) ->
+    case Approval.debug_decision(workspace, session_key, raw_event, decision_opts) do
+      %{action: :allow} ->
         :ok
 
-      true ->
-        case Approval.debug_decision(workspace, session_key, raw_event) do
-          %{action: :allow} ->
-            :ok
+      %{action: :deny} ->
+        {:error, "approval denied for plugin MCP connect"}
 
-          %{action: :deny} ->
-            {:error, "approval denied for plugin MCP connect"}
-
-          _ ->
-            {:error, "approval required for plugin MCP connect"}
-        end
+      _ ->
+        {:error, "approval required for plugin MCP connect"}
     end
   end
 
   defp authorize_call(%{origin: :plugin, plugin_id: plugin_id, contribution_id: contribution_id}, tool_name, opts) do
-    workspace = Keyword.get(opts, :workspace, reconcile_runtime_context([]).workspace)
+    runtime_context = reconcile_runtime_context(opts)
+    workspace = Keyword.get(opts, :workspace, runtime_context.workspace)
     session_key = Keyword.get(opts, :session_key, "plugin:" <> plugin_id)
     raw_event = mcp_raw_event("call", plugin_id, contribution_id, tool_name, workspace, opts)
+    decision_opts = [extra_rules: config_default_mcp_rules(Keyword.get(opts, :config, runtime_context.config), workspace)]
 
-    case Approval.debug_decision(workspace, session_key, raw_event) do
+    case Approval.debug_decision(workspace, session_key, raw_event, decision_opts) do
       %{action: :allow} ->
         :ok
 
@@ -469,15 +466,32 @@ defmodule Nex.Agent.Interface.MCP.ServerManager do
 
           _ ->
             %{workspace: File.cwd!(), config: nil}
-        end
+      end
     end
   end
 
-  defp approval_default_allow?(%Config{} = config, workspace) do
-    Config.sandbox_runtime(config, workspace: workspace).raw
-    |> Map.get("approval", %{})
-    |> Map.get("default") == "allow"
+  defp config_default_mcp_rules(%Config{} = config, workspace) do
+    raw = Config.sandbox_runtime(config, workspace: workspace).raw || %{}
+    approval = Map.get(raw, "approval") || Map.get(raw, :approval) || %{}
+    default = Map.get(approval, "default") || Map.get(approval, :default)
+
+    case default do
+      "allow" ->
+        [
+          %{
+            id: "config_default_allow_mcp",
+            level: 0,
+            effect: :allow,
+            scope: :workspace,
+            source: :workspace_config,
+            predicates: [{:resource_eq, :mcp}]
+          }
+        ]
+
+      _ ->
+        []
+    end
   end
 
-  defp approval_default_allow?(_config, _workspace), do: false
+  defp config_default_mcp_rules(_config, _workspace), do: []
 end

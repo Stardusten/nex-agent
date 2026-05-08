@@ -34,7 +34,7 @@ defmodule Nex.Agent.Sandbox.PermissionRule do
                         @known_sources ++
                         @known_actor_kinds ++
                         @known_execution ++
-                        ~w(tool command path network process code read write list search remove mkdir stat stream call execute connect filesystem network_fetch shell_escape interpreter_code command_substitution process_substitution encoded_shell unknown)a
+                        ~w(tool command path network process code mcp read write list search remove mkdir stat stream call execute connect filesystem network_fetch shell_escape interpreter_code command_substitution process_substitution encoded_shell unknown)a
 
     def normalize_attrs(attrs) when is_list(attrs), do: attrs |> Map.new() |> normalize_attrs()
 
