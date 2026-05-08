@@ -871,7 +871,9 @@ defmodule Nex.Agent.Runtime.Config do
 
     %{
       "disabled" => normalize_plugin_id_list(Map.get(plugins, "disabled")),
-      "enabled" => normalize_enabled_plugins(Map.get(plugins, "enabled"))
+      "enabled" => normalize_enabled_plugins(Map.get(plugins, "enabled")),
+      "config" => normalize_plugin_config_table(Map.get(plugins, "config")),
+      "secrets" => normalize_plugin_secret_specs(Map.get(plugins, "secrets"))
     }
   end
 
@@ -905,6 +907,38 @@ defmodule Nex.Agent.Runtime.Config do
   end
 
   defp normalize_enabled_plugins(_enabled), do: %{}
+
+  defp normalize_plugin_config_table(%{} = config), do: stringify_map_keys(config)
+  defp normalize_plugin_config_table(_config), do: %{}
+
+  defp normalize_plugin_secret_specs(%{} = secrets) do
+    secrets
+    |> stringify_map_keys()
+    |> Enum.reduce(%{}, fn {id, spec}, acc ->
+      cond do
+        secret_env_ref?(spec) ->
+          Map.put(acc, id, %{"env" => normalize_optional_string(Map.get(spec, "env"))})
+
+        is_map(spec) ->
+          nested = normalize_plugin_secret_specs(spec)
+          if map_size(nested) == 0, do: acc, else: Map.put(acc, id, nested)
+
+        true ->
+          acc
+      end
+    end)
+  end
+
+  defp normalize_plugin_secret_specs(_secrets), do: %{}
+
+  defp secret_env_ref?(%{} = spec) do
+    case normalize_optional_string(Map.get(spec, "env")) do
+      nil -> false
+      _env -> true
+    end
+  end
+
+  defp secret_env_ref?(_spec), do: false
 
   defp normalize_plugin_id(id) when is_binary(id) do
     id = String.trim(id)
@@ -1399,7 +1433,8 @@ defmodule Nex.Agent.Runtime.Config do
 
   defp default_gateway, do: %{"port" => 18_790, "workbench" => default_workbench()}
 
-  defp default_plugins, do: %{"disabled" => [], "enabled" => %{}}
+  defp default_plugins,
+    do: %{"disabled" => [], "enabled" => %{}, "config" => %{}, "secrets" => %{}}
 
   defp default_workbench do
     %{"enabled" => false, "host" => "127.0.0.1", "port" => 50_051, "apps" => %{}}

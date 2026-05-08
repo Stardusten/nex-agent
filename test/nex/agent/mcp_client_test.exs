@@ -56,6 +56,55 @@ defmodule Nex.Agent.MCPClientTest do
     assert :ok = MCP.stop(pid)
   end
 
+  test "stdio transport renders templated args and secret env at process boundary", %{
+    config: config,
+    workspace: workspace
+  } do
+    script = """
+    case "$1" in
+      #{workspace})
+        ;;
+      *)
+        exit 2
+        ;;
+    esac
+
+    while IFS= read -r line; do
+      case "$line" in
+        *\"initialize\"*)
+          printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"capabilities":{}}}'
+          ;;
+        *\"tools/list\"*)
+          printf '{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"token","description":"Token"}]}}\n'
+          ;;
+        *\"tools/call\"*)
+          printf '{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"%s"}]}}\n' "$NEX_MCP_TOKEN"
+          ;;
+      esac
+    done
+    """
+
+    {:ok, pid} =
+      MCP.start_link(
+        transport: "stdio",
+        command: "sh",
+        args: ["-c", script, "ignored", "{{workspace.root}}"],
+        env: [NEX_MCP_TOKEN: "{{secret.mcp_token}}"],
+        secrets: %{"mcp_token" => "stdio-secret"},
+        config: config,
+        cwd: workspace,
+        workspace: workspace
+      )
+
+    assert :ok = MCP.initialize(pid)
+    assert {:ok, %{"tools" => [%{"name" => "token"}]}} = MCP.list_tools(pid)
+
+    assert {:ok, %{"content" => [%{"text" => "stdio-secret"}]}} =
+             MCP.call_tool(pid, "token", %{})
+
+    assert :ok = MCP.stop(pid)
+  end
+
   test "protocol methods reject tool operations before initialize", %{
     config: config,
     workspace: workspace

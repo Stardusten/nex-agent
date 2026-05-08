@@ -213,7 +213,7 @@ defmodule Nex.Agent.Interface.MCP.ServerManager do
             server = %{
               pid: pid,
               name: name,
-              config: normalized,
+              config: redacted_server_config(normalized),
               tool_timeout: config_value(normalized, :tool_timeout, 30),
               tools: [],
               origin: Keyword.get(opts, :origin, :manual),
@@ -308,6 +308,9 @@ defmodule Nex.Agent.Interface.MCP.ServerManager do
                 |> Map.put_new("workspace", runtime_ctx.workspace)
                 |> Map.put_new("cwd", runtime_ctx.workspace)
                 |> Map.put("config", runtime_ctx.config)
+                |> Map.put("plugin_id", entry["plugin_id"])
+                |> Map.put("contribution_id", entry["id"])
+                |> Map.put("plugin_config", plugin_config(runtime_ctx.config, entry["plugin_id"]))
 
               case start_server(
                      acc,
@@ -505,6 +508,15 @@ defmodule Nex.Agent.Interface.MCP.ServerManager do
 
   defp config_default_mcp_rules(_config, _workspace), do: []
 
+  defp plugin_config(%Config{} = config, plugin_id) when is_binary(plugin_id) do
+    config
+    |> Config.plugins_runtime()
+    |> opt_value(:config, %{})
+    |> opt_value(plugin_id, %{})
+  end
+
+  defp plugin_config(_config, _plugin_id), do: %{}
+
   defp config_value(config, key, default) when is_list(config) do
     Keyword.get(config, key, default)
   end
@@ -515,6 +527,51 @@ defmodule Nex.Agent.Interface.MCP.ServerManager do
 
   defp config_value(_config, _key, default), do: default
 
+  defp redacted_server_config(config) when is_list(config) do
+    Enum.map(config, fn
+      {key, value} -> {key, redacted_server_config_value(key, value)}
+      value -> value
+    end)
+  end
+
+  defp redacted_server_config(%{} = config) do
+    Map.new(config, fn {key, value} ->
+      {key, redacted_server_config_value(key, value)}
+    end)
+    |> Map.drop(["config", :config, "runtime_snapshot", :runtime_snapshot, "secrets", :secrets])
+  end
+
+  defp redacted_server_config(config), do: config
+
+  defp redacted_server_config_value(key, value) when key in ["env", :env, "headers", :headers] do
+    redact_value_table(value)
+  end
+
+  defp redacted_server_config_value(key, _value)
+       when key in ["config", :config, "runtime_snapshot", :runtime_snapshot, "secrets", :secrets],
+       do: "[REDACTED]"
+
+  defp redacted_server_config_value(_key, %{} = value), do: redacted_server_config(value)
+
+  defp redacted_server_config_value(_key, value) when is_list(value),
+    do: redacted_server_config(value)
+
+  defp redacted_server_config_value(_key, value), do: value
+
+  defp redact_value_table(value) when is_map(value) do
+    Map.new(value, fn {key, _value} -> {key, "[REDACTED]"} end)
+  end
+
+  defp redact_value_table(value) when is_list(value) do
+    Enum.map(value, fn
+      {key, _value} -> {key, "[REDACTED]"}
+      [key, _value] -> [key, "[REDACTED]"]
+      other -> other
+    end)
+  end
+
+  defp redact_value_table(_value), do: "[REDACTED]"
+
   defp opt_value(opts, key, default \\ nil)
 
   defp opt_value(opts, key, default) when is_list(opts) do
@@ -522,7 +579,8 @@ defmodule Nex.Agent.Interface.MCP.ServerManager do
   end
 
   defp opt_value(opts, key, default) when is_map(opts) do
-    Map.get(opts, key, Map.get(opts, Atom.to_string(key), default))
+    fallback_key = if is_atom(key), do: Atom.to_string(key), else: key
+    Map.get(opts, key, Map.get(opts, fallback_key, default))
   end
 
   defp opt_value(_opts, _key, default), do: default

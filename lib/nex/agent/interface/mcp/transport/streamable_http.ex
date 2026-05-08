@@ -8,7 +8,9 @@ defmodule Nex.Agent.Interface.MCP.Transport.StreamableHTTP do
   """
 
   use GenServer
+  alias Nex.Agent.Extension.Plugin.Template
   alias Nex.Agent.Interface.HTTP
+  alias Nex.Agent.Runtime.Config
 
   @behaviour Nex.Agent.Interface.MCP.Transport
 
@@ -21,9 +23,10 @@ defmodule Nex.Agent.Interface.MCP.Transport.StreamableHTTP do
     :owner,
     :url,
     :workspace,
+    :template_ctx,
     :protocol_version,
     session_id: nil,
-    headers: [],
+    headers_template: [],
     timeout_ms: @default_timeout_ms
   ]
 
@@ -50,14 +53,16 @@ defmodule Nex.Agent.Interface.MCP.Transport.StreamableHTTP do
   @impl true
   def init(opts) do
     with {:ok, owner} <- fetch_owner(opts),
-         {:ok, url} <- fetch_url(opts),
-         {:ok, headers} <- normalize_headers(get_opt(opts, :headers, [])) do
+         {:ok, url} <- fetch_url(opts) do
+      workspace = get_opt(opts, :workspace)
+
       {:ok,
        %__MODULE__{
          owner: owner,
          url: url,
-         workspace: get_opt(opts, :workspace),
-         headers: headers,
+         workspace: workspace,
+         template_ctx: template_context(opts, workspace),
+         headers_template: get_opt(opts, :headers, []),
          timeout_ms: normalize_timeout(get_opt(opts, :timeout_ms, @default_timeout_ms))
        }}
     else
@@ -89,19 +94,25 @@ defmodule Nex.Agent.Interface.MCP.Transport.StreamableHTTP do
   def handle_info(_message, state), do: {:noreply, state}
 
   defp post_json_rpc(request, state) do
-    case HTTP.post(state.url, request_options(request, state)) do
-      {:ok, response} ->
-        next_state = maybe_store_session_id(response, state)
-        parse_response(request, response, next_state)
+    with {:ok, url} <- rendered_url(state),
+         {:ok, headers} <- rendered_headers(state) do
+      case HTTP.post(url, request_options(request, state, headers)) do
+        {:ok, response} ->
+          next_state = maybe_store_session_id(response, state)
+          parse_response(request, response, next_state)
 
+        {:error, reason} ->
+          {:error, reason, state}
+      end
+    else
       {:error, reason} ->
         {:error, reason, state}
     end
   end
 
-  defp request_options(request, state) do
+  defp request_options(request, state, headers) do
     [
-      headers: request_headers(request, state),
+      headers: request_headers(request, state, headers),
       json: request,
       receive_timeout: state.timeout_ms,
       observe_context: %{workspace: state.workspace},
@@ -109,8 +120,8 @@ defmodule Nex.Agent.Interface.MCP.Transport.StreamableHTTP do
     ]
   end
 
-  defp request_headers(request, state) do
-    state.headers
+  defp request_headers(request, state, headers) do
+    headers
     |> put_header("Accept", @accept_header)
     |> put_header("Content-Type", @json_content_type)
     |> maybe_put_protocol_header(request, state)
@@ -272,6 +283,33 @@ defmodule Nex.Agent.Interface.MCP.Transport.StreamableHTTP do
     end
   end
 
+  defp rendered_url(state) do
+    case Template.render_result(state.url, state.template_ctx) do
+      {:ok, %Template.Result{value: url, redactions: []}} when is_binary(url) ->
+        {:ok, url}
+
+      {:ok, %Template.Result{redactions: redactions}} when redactions != [] ->
+        {:error, :secret_not_allowed_in_mcp_url}
+
+      {:ok, _result} ->
+        {:error, :invalid_url}
+
+      {:error, reason} ->
+        {:error, Template.redacted_error(reason)}
+    end
+  end
+
+  defp rendered_headers(state) do
+    with {:ok, %Template.Result{value: headers}} <-
+           Template.render_result(state.headers_template, state.template_ctx),
+         {:ok, normalized} <- normalize_headers(headers) do
+      {:ok, normalized}
+    else
+      {:error, reason} when is_map(reason) -> {:error, Template.redacted_error(reason)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   defp normalize_headers(nil), do: {:ok, []}
 
   defp normalize_headers(headers) when is_map(headers),
@@ -327,6 +365,49 @@ defmodule Nex.Agent.Interface.MCP.Transport.StreamableHTTP do
   end
 
   defp normalize_timeout(_timeout), do: @default_timeout_ms
+
+  defp template_context(opts, workspace) do
+    %{
+      workspace: workspace,
+      workspace_root: workspace,
+      plugin_id: get_opt(opts, :plugin_id),
+      plugin_config: get_opt(opts, :plugin_config),
+      secret_specs: plugin_secret_specs(get_opt(opts, :config)),
+      session_key: get_opt(opts, :session_key),
+      turn_prompt: get_opt(opts, :turn_prompt),
+      channel: get_opt(opts, :channel),
+      chat_id: get_opt(opts, :chat_id)
+    }
+  end
+
+  defp plugin_secret_specs(%Config{} = config) do
+    config
+    |> Config.plugins_runtime()
+    |> get_config_value("secrets", %{})
+  end
+
+  defp plugin_secret_specs(%{} = config) do
+    config
+    |> get_config_value("plugins", %{})
+    |> get_config_value("secrets", %{})
+  end
+
+  defp plugin_secret_specs(_config), do: %{}
+
+  defp get_config_value(%{} = map, key, default) do
+    cond do
+      Map.has_key?(map, key) -> Map.get(map, key)
+      true -> get_existing_atom_value(map, key, default)
+    end
+  end
+
+  defp get_config_value(_value, _key, default), do: default
+
+  defp get_existing_atom_value(map, key, default) do
+    Map.get(map, String.to_existing_atom(key), default)
+  rescue
+    ArgumentError -> default
+  end
 
   defp put_header(headers, name, value) do
     normalized = String.downcase(name)

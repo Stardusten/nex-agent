@@ -11,6 +11,7 @@ defmodule Nex.Agent.Interface.MCP.Transport.Stdio do
   require Logger
 
   alias Nex.Agent.Runtime.Config
+  alias Nex.Agent.Extension.Plugin.Template
   alias Nex.Agent.Sandbox.{Command, Exec, Policy}
   alias Nex.Agent.Sandbox.Process, as: SandboxProcess
 
@@ -121,23 +122,31 @@ defmodule Nex.Agent.Interface.MCP.Transport.Stdio do
     cwd = get_opt(opts, :cwd, File.cwd!())
     workspace = get_opt(opts, :workspace, cwd)
     timeout_ms = get_opt(opts, :timeout_ms, @default_timeout_ms)
+    template_ctx = template_context(opts, workspace)
 
-    command = %Command{
-      program: command,
-      args: opts |> get_opt(:args, []) |> normalize_args(),
-      cwd: cwd,
-      env: opts |> get_opt(:env, %{}) |> normalize_env(),
-      timeout_ms: timeout_ms,
-      metadata: %{
-        workspace: workspace,
-        observe_context: %{workspace: workspace},
-        observe_attrs: %{"interface" => "mcp", "mcp_transport" => "stdio"}
+    with {:ok, %Template.Result{value: args}} <-
+           opts |> get_opt(:args, []) |> Template.render_result(template_ctx),
+         {:ok, %Template.Result{value: env}} <-
+           opts |> get_opt(:env, %{}) |> Template.render_result(template_ctx) do
+      command = %Command{
+        program: command,
+        args: normalize_args(args),
+        cwd: cwd,
+        env: normalize_env(env),
+        timeout_ms: timeout_ms,
+        metadata: %{
+          workspace: workspace,
+          observe_context: %{workspace: workspace},
+          observe_attrs: %{"interface" => "mcp", "mcp_transport" => "stdio"}
+        }
       }
-    }
 
-    case Exec.open(command, sandbox_policy(opts, cwd)) do
-      {:ok, %SandboxProcess{} = process} -> {:ok, process}
-      {:error, reason} -> {:error, reason}
+      case Exec.open(command, sandbox_policy(opts, cwd)) do
+        {:ok, %SandboxProcess{} = process} -> {:ok, process}
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      {:error, reason} -> {:error, Template.redacted_error(reason)}
     end
   end
 
@@ -188,6 +197,21 @@ defmodule Nex.Agent.Interface.MCP.Transport.Stdio do
 
   defp normalize_args(args) when is_list(args), do: Enum.map(args, &to_string/1)
   defp normalize_args(_args), do: []
+
+  defp template_context(opts, workspace) do
+    %{
+      workspace: workspace,
+      workspace_root: workspace,
+      config: get_opt(opts, :config),
+      plugin_id: get_opt(opts, :plugin_id),
+      plugin_config: get_opt(opts, :plugin_config),
+      secrets: get_opt(opts, :secrets),
+      session_key: get_opt(opts, :session_key),
+      turn_prompt: get_opt(opts, :turn_prompt),
+      channel: get_opt(opts, :channel),
+      chat_id: get_opt(opts, :chat_id)
+    }
+  end
 
   defp get_opt(opts, key, default \\ nil)
 
