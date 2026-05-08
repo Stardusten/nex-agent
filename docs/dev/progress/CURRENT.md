@@ -2,7 +2,7 @@
 
 ## Active Workstream
 
-Phase 1 runtime reload foundation is implemented. Phase 3 streaming delivery and Phase 3A architecture convergence are in place. Phase 4 is now closed as the text-IR foundation, Phase 4A is superseded, Phase 5 IM inbound architecture and media projection is implemented, and Phase 7 Feishu streaming converter simplification is in place. Phase 8 session run control and busy follow-up is landed, and Phase 9 follow-up LLM turn and interrupt request is now landed on top of it. Phase 6 Feishu outbound official format/media send remains landed. Phase 18 Workbench App Runtime is now opened as the local-first evolvable console/workbench track. Phase 20 Plugin Runtime Foundation is now planned as the large pluginization track for non-core capabilities. Phase 23 Plugin External Service Foundation is now in progress; Stage 1 Task surface cutover is complete with review fixes and focused tests passing, Stage 2 MCP transport boundary is complete with focused stdio/client tests and compile passing, Stage 3 streamable HTTP MCP transport is complete with JSON/SSE/session-header tests and compile passing, Stage 4 plugin template + SecretBase is complete with secret redaction/template tests and compile passing, Stage 5 unified Task runner/scheduler is complete with debounce/max_runs/action contract tests and compile passing, Stage 6 fake external memory plugin acceptance is complete with enabled/disabled/deny/missing-secret/debounce coverage and compile passing.
+Phase 1 runtime reload foundation is implemented. Phase 3 streaming delivery and Phase 3A architecture convergence are in place. Phase 4 is now closed as the text-IR foundation, Phase 4A is superseded, Phase 5 IM inbound architecture and media projection is implemented, and Phase 7 Feishu streaming converter simplification is in place. Phase 8 session run control and busy follow-up is landed, and Phase 9 follow-up LLM turn and interrupt request is now landed on top of it. Phase 6 Feishu outbound official format/media send remains landed. Phase 18 Workbench App Runtime is now opened as the local-first evolvable console/workbench track. Phase 20 Plugin Runtime Foundation is now planned as the large pluginization track for non-core capabilities. Phase 23 Plugin External Service Foundation is now closed: Task surface cutover, MCP protocol/transport split, streamable HTTP MCP, plugin template + SecretBase, unified Task runner/scheduler, and fake external memory plugin acceptance are implemented with focused tests and compile passing.
 
 ## Why This Is Active
 
@@ -465,6 +465,7 @@ Docs/dev workflow is split into four lanes:
 - [Phase 18B Workbench Static Iframe Apps](../task-plan/phase18b-workbench-sdk-bridge-and-app-authoring.md)
 - [Phase 18C Skill Progressive Disclosure Catalog](../task-plan/phase18c-skill-progressive-disclosure-catalog.md)
 - [Phase 18D Workbench Notes App MVP](../task-plan/phase18d-notes-app-mvp.md)
+- [Phase 23 Plugin External Service Foundation](../task-plan/phase23-plugin-external-service-foundation.md)
 - [2026-04-16 IM Inbound Media Architecture](../findings/2026-04-16-im-inbound-media-architecture.md)
 - [2026-04-16 IM Streaming Capabilities And Delivery Contract](../findings/2026-04-16-im-streaming-capabilities.md)
 - [2026-04-16 Streaming Architecture Convergence](../findings/2026-04-16-streaming-architecture-convergence.md)
@@ -480,16 +481,15 @@ Docs/dev workflow is split into four lanes:
 
 ## Immediate Next Steps
 
-1. Phase 23 Stage 3：实现 streamable HTTP MCP transport，保持 `ServerManager` / `ToolRegistry` 只走统一 `MCP.Client` API。
-2. Phase 21 Command Sandbox And Approval：等待 review/验收；重点看 Seatbelt profile、approval grant 语义、direct file inventory reviewed exemptions、以及 Linux/Windows backend contract 是否还需要补冻结项。
-3. Phase 18D Notes manual review：在真实 config 中配置 `gateway.workbench.apps.notes.root`，授权 notes app 的 `notes:read` / `notes:write`，打开 Workbench 验证真实 vault list/read/write/search/conflict。
-4. Phase 18 Workbench app artifact reload：把 `reload.sh` contract 落成受控 runner/tool 或 owner lane，并补 ControlPlane observations 和权限边界测试。
-5. Phase 18 Workbench：用一个临时 workspace 手动 seed `workbench/apps/<id>/nex.app.json` + `index.html`，启用 `gateway.workbench` 后打开 `http://127.0.0.1:50051/workbench` 验证真实 gateway 下的 shell/reload/permission/observe/SDK bridge 回路。
-6. 用真实 `~/.nex/agent/config.json` 手动改成新 config shape 后重启 gateway，验证多个 Feishu/Discord instance 可以同时注册、收消息、发消息。
-7. 真实 gateway/manual 场景检查 runtime reload 后 channel add/remove/change 是否只影响对应 instance。
-8. 用真实 gateway/manual 场景检查 busy 普通消息 follow-up、`/btw`、`/status`、`/stop`、可选 interrupt tool，以及 follow-up 使用 `observe summary` 的实际交互时序。
-9. Phase 7 留存问题仍需后续处理：Finch 连接池泄漏、飞书 `close_streaming_mode` 404、LLM 空返回兜底。
-10. 用真实 gateway/manual 场景检查 Phase 17 memory notice：普通 owner run 后台 refresh 应在最终回复之后发送 `🧠 Memory - <summary>`；cron、follow-up、subagent 不应发送。
+1. Phase 21 Command Sandbox And Approval：等待 review/验收；重点看 Seatbelt profile、approval grant 语义、direct file inventory reviewed exemptions、以及 Linux/Windows backend contract 是否还需要补冻结项。
+2. Phase 18D Notes manual review：在真实 config 中配置 `gateway.workbench.apps.notes.root`，授权 notes app 的 `notes:read` / `notes:write`，打开 Workbench 验证真实 vault list/read/write/search/conflict。
+3. Phase 18 Workbench app artifact reload：把 `reload.sh` contract 落成受控 runner/tool 或 owner lane，并补 ControlPlane observations 和权限边界测试。
+4. Phase 18 Workbench：用一个临时 workspace 手动 seed `workbench/apps/<id>/nex.app.json` + `index.html`，启用 `gateway.workbench` 后打开 `http://127.0.0.1:50051/workbench` 验证真实 gateway 下的 shell/reload/permission/observe/SDK bridge 回路。
+5. 用真实 `~/.nex/agent/config.json` 手动改成新 config shape 后重启 gateway，验证多个 Feishu/Discord instance 可以同时注册、收消息、发消息。
+6. 真实 gateway/manual 场景检查 runtime reload 后 channel add/remove/change 是否只影响对应 instance。
+7. 用真实 gateway/manual 场景检查 busy 普通消息 follow-up、`/btw`、`/status`、`/stop`、可选 interrupt tool，以及 follow-up 使用 `observe summary` 的实际交互时序。
+8. Phase 7 留存问题仍需后续处理：Finch 连接池泄漏、飞书 `close_streaming_mode` 404、LLM 空返回兜底。
+9. 用真实 gateway/manual 场景检查 Phase 17 memory notice：普通 owner run 后台 refresh 应在最终回复之后发送 `🧠 Memory - <summary>`；cron、follow-up、subagent 不应发送。
 
 ## Reviewer Verification
 
@@ -520,10 +520,13 @@ Docs/dev workflow is split into four lanes:
 - Slack native stream and Telegram/Discord edit adapters are intentionally not part of Phase 3A; Phase 3A exists to make those follow-on integrations land on cleaner boundaries.
 
 
-## Phase 23 Stage 5 handoff
+## Phase 23 closed
 
-- `Nex.Agent.Tasks.Scheduler` now owns schedule normalization, next-run calculation, and due checks for `every` / `at` / 5-field cron.
-- `Nex.Agent.Tasks` persists `action` and supports scheduled user task `agent_turn` action messages while retaining message fallback.
+- `Nex.Agent.Interface.MCP.Client` now owns MCP protocol methods while stdio and streamable HTTP live behind transport adapters.
+- Plugin `mcpServers` can declare streamable HTTP endpoints with `url` / `headers`; `ServerManager`, `ToolRegistry`, hooks, and tasks stay transport-agnostic.
+- `Nex.Agent.Extension.Plugin.Template` and `Nex.Agent.SecretBase` provide the common `{{...}}` config/secret/workspace/session/turn rendering boundary; secret plaintext is allowed only at execution boundaries.
+- `Nex.Agent.Tasks.Scheduler` owns schedule normalization, next-run calculation, and due checks for `every` / `at` / 5-field cron.
+- `Nex.Agent.Tasks` is the only task surface; legacy cron file support is limited to one-time migration into `tasks/tasks.json`.
 - `Nex.Agent.Tasks.Runner` executes plugin `contributes.tasks` definitions with canonical `policy.debounce_key` / `policy.debounce_ms` / `policy.max_runs`; supported plugin task actions remain `tool_call` and `write_workspace_file` only.
-- Plugin task run observations now cover queued / started / finished / failed / debounced.
-- Focused verification passed: `/opt/homebrew/bin/mix test test/nex/agent/plugin_task_runner_test.exs test/nex/agent/tasks_scheduler_test.exs test/nex/agent/plugin_runtime_primitives_test.exs test/nex/agent/bus_test.exs`, `/opt/homebrew/bin/mix test test/nex/agent/tasks_surface_test.exs test/nex/agent/message_tool_test.exs`, and `/opt/homebrew/bin/mix compile --warnings-as-errors`.
+- Stage 6 fake external memory acceptance proves recall hook injection, retain debounce merge, streamable HTTP MCP calls, secret header rendering, bank template rendering, disabled plugin behavior, permission deny, missing secret handling, and secret redaction from snapshot/diagnostics/ControlPlane/logs.
+- Final focused verification passed: `/opt/homebrew/bin/mix test test/nex/agent/plugin_external_service_foundation_test.exs test/nex/agent/plugin_runtime_primitives_test.exs test/nex/agent/mcp_streamable_http_test.exs test/nex/agent/plugin_task_runner_test.exs`, `/opt/homebrew/bin/mix compile --warnings-as-errors`, and `git diff --check`.
