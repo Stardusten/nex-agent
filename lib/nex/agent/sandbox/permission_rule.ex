@@ -372,6 +372,28 @@ defmodule Nex.Agent.Sandbox.PermissionRule do
               expires_at: nil,
               source: :runtime
 
+    @known_predicate_fields [
+      :channel,
+      :chat_id,
+      :command,
+      :command_program,
+      :command_tokens,
+      :cwd,
+      :expanded_path,
+      :host,
+      :inferred_network_hosts,
+      :input_path,
+      :mcp_server,
+      :mcp_tool,
+      :path,
+      :requested_execution,
+      :risk_class,
+      :target_exists?,
+      :tool_name,
+      :workspace
+    ]
+    @known_predicate_field_by_name Map.new(@known_predicate_fields, &{Atom.to_string(&1), &1})
+
     @spec new(map() | keyword() | t()) :: t()
     def new(%__MODULE__{} = rule), do: rule
 
@@ -502,9 +524,8 @@ defmodule Nex.Agent.Sandbox.PermissionRule do
     defp field_atom(value) when is_atom(value), do: value
 
     defp field_atom(value) when is_binary(value) do
-      String.to_existing_atom(value)
-    rescue
-      ArgumentError -> nil
+      @known_predicate_field_by_name
+      |> Map.get(String.trim(value))
     end
 
     defp field_atom(_value), do: nil

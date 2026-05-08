@@ -66,6 +66,40 @@ defmodule Nex.Agent.SandboxPermissionRuleTest do
     assert Enum.any?(decision.requirement_decisions, &(&1.requirement.resource == :mcp))
   end
 
+  test "mcp tool predicates loaded from maps match mcp call requirements" do
+    rule =
+      Rule.new(%{
+        "id" => "allow-mcp-call",
+        "effect" => "allow",
+        "predicates" => [
+          %{"op" => "resource_eq", "resource" => "mcp"},
+          %{"op" => "operation_in", "operations" => ["call"]},
+          %{"op" => "eq", "field" => "mcp_server", "value" => "hindsight"},
+          %{"op" => "in", "field" => "mcp_tool", "values" => ["recall", "retain"]}
+        ]
+      })
+
+    decision =
+      PermissionRule.decide(
+        %{
+          tool_name: "mcp:call:builtin:memory.hindsight:hindsight:recall",
+          workspace: "/tmp/nex-agent-workspace",
+          metadata: %{
+            "plugin_id" => "builtin:memory.hindsight",
+            "mcp_server" => "hindsight",
+            "mcp_tool" => "recall",
+            "mcp_operation" => "call"
+          }
+        },
+        [rule]
+      )
+
+    assert {:eq, :mcp_server, "hindsight"} in rule.predicates
+    assert {:in, :mcp_tool, ["recall", "retain"]} in rule.predicates
+    assert decision.action == :allow
+    assert decision.winning_rule_id == "allow-mcp-call"
+  end
+
   test "same level uses more specific matching rule before broader rule" do
     rules = [
       rule("global-rm-deny",
