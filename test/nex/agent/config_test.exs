@@ -29,7 +29,7 @@ defmodule Nex.Agent.Runtime.ConfigTest do
              "apps" => %{}
            }
 
-    assert Config.plugins_runtime(config) == %{"disabled" => [], "enabled" => %{}}
+    assert Config.plugins_runtime(config) == default_plugins_runtime()
 
     assert Config.self_update_runtime(config) == %{
              "source_repo" => %{
@@ -272,10 +272,11 @@ defmodule Nex.Agent.Runtime.ConfigTest do
           }
       })
 
-    assert Config.plugins_runtime(config) == %{
-             "disabled" => ["builtin:tool.web"],
-             "enabled" => %{"workspace:notes" => true}
-           }
+    assert Config.plugins_runtime(config) ==
+             Map.merge(default_plugins_runtime(), %{
+               "disabled" => ["builtin:memory.hindsight", "builtin:tool.web"],
+               "enabled" => %{"workspace:notes" => true}
+             })
   end
 
   test "unknown provider types are preserved and do not fall back to openai" do
@@ -712,6 +713,20 @@ defmodule Nex.Agent.Runtime.ConfigTest do
   defp signed_token(exp) do
     encode_segment(%{"alg" => "none", "typ" => "JWT"}) <>
       "." <> encode_segment(%{"exp" => exp}) <> ".sig"
+  end
+
+  defp default_plugins_runtime do
+    %{
+      "disabled" => ["builtin:memory.hindsight"],
+      "enabled" => %{},
+      "config" => %{
+        "builtin:memory.hindsight" => %{
+          "mcp_url" => "http://localhost:8888/mcp/",
+          "bank_id" => "nex-{{workspace.hash}}",
+          "authorization_header" => ""
+        }
+      }
+    }
   end
 
   defp encode_segment(map) do

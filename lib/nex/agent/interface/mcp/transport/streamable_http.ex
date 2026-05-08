@@ -10,7 +10,6 @@ defmodule Nex.Agent.Interface.MCP.Transport.StreamableHTTP do
   use GenServer
   alias Nex.Agent.Extension.Plugin.Template
   alias Nex.Agent.Interface.HTTP
-  alias Nex.Agent.Runtime.Config
 
   @behaviour Nex.Agent.Interface.MCP.Transport
 
@@ -341,7 +340,11 @@ defmodule Nex.Agent.Interface.MCP.Transport.StreamableHTTP do
     with {:ok, key} <- normalize_header_part(key),
          {:ok, value} <- normalize_header_part(value),
          true <- key != "" do
-      {:cont, [{key, value} | acc]}
+      if value == "" do
+        {:cont, acc}
+      else
+        {:cont, [{key, value} | acc]}
+      end
     else
       _ -> {:halt, :error}
     end
@@ -372,41 +375,11 @@ defmodule Nex.Agent.Interface.MCP.Transport.StreamableHTTP do
       workspace_root: workspace,
       plugin_id: get_opt(opts, :plugin_id),
       plugin_config: get_opt(opts, :plugin_config),
-      secret_specs: plugin_secret_specs(get_opt(opts, :config)),
       session_key: get_opt(opts, :session_key),
       turn_prompt: get_opt(opts, :turn_prompt),
       channel: get_opt(opts, :channel),
       chat_id: get_opt(opts, :chat_id)
     }
-  end
-
-  defp plugin_secret_specs(%Config{} = config) do
-    config
-    |> Config.plugins_runtime()
-    |> get_config_value("secrets", %{})
-  end
-
-  defp plugin_secret_specs(%{} = config) do
-    config
-    |> get_config_value("plugins", %{})
-    |> get_config_value("secrets", %{})
-  end
-
-  defp plugin_secret_specs(_config), do: %{}
-
-  defp get_config_value(%{} = map, key, default) do
-    cond do
-      Map.has_key?(map, key) -> Map.get(map, key)
-      true -> get_existing_atom_value(map, key, default)
-    end
-  end
-
-  defp get_config_value(_value, _key, default), do: default
-
-  defp get_existing_atom_value(map, key, default) do
-    Map.get(map, String.to_existing_atom(key), default)
-  rescue
-    ArgumentError -> default
   end
 
   defp put_header(headers, name, value) do

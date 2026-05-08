@@ -7,16 +7,10 @@ defmodule Nex.Agent.MCPStreamableHTTPTest do
   setup do
     previous_post = Application.get_env(:nex_agent, :http_test_req_post)
     previous_get = Application.get_env(:nex_agent, :http_test_req_get)
-    previous_secret = System.get_env("NEX_AGENT_MCP_STREAMABLE_HTTP_SECRET")
 
     on_exit(fn ->
       restore_env(:http_test_req_post, previous_post)
       restore_env(:http_test_req_get, previous_get)
-
-      case previous_secret do
-        nil -> System.delete_env("NEX_AGENT_MCP_STREAMABLE_HTTP_SECRET")
-        value -> System.put_env("NEX_AGENT_MCP_STREAMABLE_HTTP_SECRET", value)
-      end
     end)
 
     :ok
@@ -150,18 +144,6 @@ defmodule Nex.Agent.MCPStreamableHTTPTest do
     parent = self()
     workspace = "/tmp/nex-agent-mcp-http-template"
     endpoint = "https://memory.example.test"
-    System.put_env("NEX_AGENT_MCP_STREAMABLE_HTTP_SECRET", "super-secret-token")
-
-    config =
-      Config.from_map(%{
-        "plugins" => %{
-          "secrets" => %{
-            "workspace:memory" => %{
-              "memory_api_token" => %{"env" => "NEX_AGENT_MCP_STREAMABLE_HTTP_SECRET"}
-            }
-          }
-        }
-      })
 
     Application.put_env(:nex_agent, :http_test_req_post, fn url, opts ->
       request = Keyword.fetch!(opts, :json)
@@ -178,19 +160,18 @@ defmodule Nex.Agent.MCPStreamableHTTPTest do
         transport: "streamable-http",
         url: "{{plugin.config.endpoint}}/mcp",
         headers: %{
-          "Authorization" => "Bearer {{secret.memory_api_token}}",
+          "Authorization" => "{{plugin.config.authorization_header}}",
           "X-Memory-Bank" => "{{plugin.config.bank.template}}"
         },
         plugin_id: "workspace:memory",
         plugin_config: %{
           "endpoint" => endpoint,
+          "authorization_header" => "Bearer super-secret-token",
           "bank" => %{"template" => "nex-{{workspace.hash}}"}
         },
-        config: config,
+        config: Config.default(),
         workspace: workspace
       )
-
-    refute inspect(transport_state(pid)) =~ "super-secret-token"
 
     assert :ok = MCP.initialize(pid)
 
@@ -201,26 +182,30 @@ defmodule Nex.Agent.MCPStreamableHTTPTest do
     assert :ok = MCP.stop(pid)
   end
 
-  test "streamable HTTP transport blocks requests with missing header secrets" do
+  test "streamable HTTP transport omits empty rendered headers" do
     parent = self()
 
-    Application.put_env(:nex_agent, :http_test_req_post, fn url, _opts ->
-      send(parent, {:unexpected_post, url})
-      {:ok, %{status: 500, headers: [], body: ""}}
+    Application.put_env(:nex_agent, :http_test_req_post, fn _url, opts ->
+      request = Keyword.fetch!(opts, :json)
+      send(parent, {:post, request, Keyword.fetch!(opts, :headers)})
+
+      case request_method(request) do
+        "initialize" -> json_response(request, %{"capabilities" => %{}})
+        "notifications/initialized" -> {:ok, %{status: 202, headers: [], body: ""}}
+      end
     end)
 
     {:ok, pid} =
       MCP.start_link(
         transport: "streamable-http",
         url: "https://memory.example.test/mcp",
-        headers: %{"Authorization" => "Bearer {{secret.missing}}"}
+        headers: %{"Authorization" => "{{plugin.config.authorization_header}}"},
+        plugin_config: %{"authorization_header" => ""}
       )
 
-    assert {:error, error} = MCP.initialize(pid)
-    assert error.code == :missing_secret
-    assert error.secret_id == "missing"
-    refute inspect(error) =~ "Bearer "
-    refute_received {:unexpected_post, _url}
+    assert :ok = MCP.initialize(pid)
+    assert_receive {:post, %{method: "initialize"}, headers}
+    refute header_value(headers, "authorization")
     assert :ok = MCP.stop(pid)
   end
 
@@ -261,11 +246,6 @@ defmodule Nex.Agent.MCPStreamableHTTPTest do
 
   defp restore_env(key, nil), do: Application.delete_env(:nex_agent, key)
   defp restore_env(key, value), do: Application.put_env(:nex_agent, key, value)
-
-  defp transport_state(client_pid) do
-    %{transport_pid: transport_pid} = :sys.get_state(client_pid)
-    :sys.get_state(transport_pid)
-  end
 
   defp workspace_hash(root) do
     :crypto.hash(:sha256, root)

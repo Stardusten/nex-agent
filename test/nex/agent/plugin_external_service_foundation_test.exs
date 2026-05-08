@@ -1,8 +1,6 @@
 defmodule Nex.Agent.PluginExternalServiceFoundationTest do
   use ExUnit.Case, async: false
 
-  import ExUnit.CaptureLog
-
   alias Nex.Agent.Capability.Hooks
   alias Nex.Agent.Capability.Tool.Registry
   alias Nex.Agent.Interface.MCP.ServerManager
@@ -15,7 +13,6 @@ defmodule Nex.Agent.PluginExternalServiceFoundationTest do
   @plugin_id "workspace:fake-memory"
   @mcp_id "fake_memory_mcp"
   @server_id ServerManager.plugin_server_id(@plugin_id, @mcp_id)
-  @secret_env "NEX_AGENT_STAGE6_FAKE_MEMORY_TOKEN"
   @endpoint "https://fake-memory.example.test/mcp"
 
   setup do
@@ -37,7 +34,6 @@ defmodule Nex.Agent.PluginExternalServiceFoundationTest do
     previous_workspace = Application.get_env(:nex_agent, :workspace_path)
     previous_config_path = Application.get_env(:nex_agent, :config_path)
     previous_post = Application.get_env(:nex_agent, :http_test_req_post)
-    previous_secret = System.get_env(@secret_env)
 
     Application.put_env(:nex_agent, :workspace_path, workspace)
     Application.put_env(:nex_agent, :config_path, Path.join(workspace, "config.json"))
@@ -62,35 +58,27 @@ defmodule Nex.Agent.PluginExternalServiceFoundationTest do
       restore_app_env(:workspace_path, previous_workspace)
       restore_app_env(:config_path, previous_config_path)
       restore_app_env(:http_test_req_post, previous_post)
-      restore_system_env(@secret_env, previous_secret)
       File.rm_rf(workspace)
     end)
 
     {:ok, workspace: workspace}
   end
 
-  test "fake external memory plugin closes recall/retain loop without leaking secrets", %{
+  test "fake external memory plugin closes recall/retain loop with direct config header", %{
     workspace: workspace
   } do
     parent = self()
-    secret = put_fresh_secret()
     install_fake_memory_http(parent)
     config = enabled_config()
 
-    snapshot =
-      capture_log(fn ->
-        assert {:ok, snapshot} = reload_runtime(workspace, config)
-        Process.put(:stage6_snapshot, snapshot)
-      end)
-      |> tap(&refute_contains_secret(&1, secret))
-      |> then(fn _ -> Process.get(:stage6_snapshot) end)
+    assert {:ok, snapshot} = reload_runtime(workspace, config)
 
     assert @server_id in snapshot.plugins.active_mcp_servers
     assert File.exists?(Path.join(workspace, "plugin_data/fake_memory/cache.json"))
     assert File.exists?(Path.join(workspace, "plugin_data/fake_memory/status.json"))
 
     assert_receive {:fake_memory_http, %{method: "initialize", headers: init_headers}}
-    assert secret_authorization_header?(init_headers, secret)
+    assert http_header_value(init_headers, "authorization") == "Bearer fake-memory-token"
     assert http_header_value(init_headers, "x-memory-bank") == expected_bank(workspace, nil)
     assert_receive {:fake_memory_http, %{method: "notifications/initialized"}}
 
@@ -106,42 +94,37 @@ defmodule Nex.Agent.PluginExternalServiceFoundationTest do
         turn_prompt: "where did I park?"
       )
 
-    action_log =
-      capture_log(fn ->
-        assert {:ok, [fragment]} = Hooks.run(:prompt_build_before, hooks, ctx)
-        Process.put(:stage6_recall_fragment, fragment)
+    assert {:ok, [fragment]} = Hooks.run(:prompt_build_before, hooks, ctx)
 
-        assert_receive {:fake_memory_http,
-                        %{method: "tools/call", tool: "recall", arguments: recall_args}}
+    assert_receive {:fake_memory_http,
+                    %{method: "tools/call", tool: "recall", arguments: recall_args}}
 
-        assert recall_args["query"] == "where did I park?"
-        assert recall_args["bank"] == expected_bank(workspace, "discord:fake")
+    assert recall_args["query"] == "where did I park?"
+    assert recall_args["bank"] == expected_bank(workspace, "discord:fake")
 
-        assert {:ok, []} =
-                 Hooks.run(
-                   :conversation_turn_finished,
-                   hooks,
-                   %{ctx | turn_prompt: "retain stale prompt"}
-                 )
+    assert {:ok, []} =
+             Hooks.run(
+               :conversation_turn_finished,
+               hooks,
+               %{ctx | turn_prompt: "retain stale prompt"}
+             )
 
-        assert {:ok, []} =
-                 Hooks.run(
-                   :conversation_turn_finished,
-                   hooks,
-                   %{ctx | turn_prompt: "retain final prompt"}
-                 )
+    assert {:ok, []} =
+             Hooks.run(
+               :conversation_turn_finished,
+               hooks,
+               %{ctx | turn_prompt: "retain final prompt"}
+             )
 
-        assert eventually(fn ->
-                 retain_calls = http_tool_calls("retain")
+    assert eventually(fn ->
+             retain_calls = http_tool_calls("retain")
 
-                 length(retain_calls) == 1 and
-                   List.first(retain_calls).arguments["input"] == "retain final prompt" and
-                   List.first(retain_calls).arguments["bank"] ==
-                     expected_bank(workspace, "discord:fake")
-               end)
-      end)
+             length(retain_calls) == 1 and
+               List.first(retain_calls).arguments["input"] == "retain final prompt" and
+               List.first(retain_calls).arguments["bank"] ==
+                 expected_bank(workspace, "discord:fake")
+           end)
 
-    fragment = Process.get(:stage6_recall_fragment)
     assert fragment["kind"] == "tool_result"
     assert fragment["content"] =~ "remembered:where did I park?"
     assert fragment["content"] =~ expected_bank(workspace, "discord:fake")
@@ -149,20 +132,12 @@ defmodule Nex.Agent.PluginExternalServiceFoundationTest do
     observations = Query.query(%{"limit" => 100}, workspace: workspace)
     assert Enum.any?(observations, &(&1["tag"] == "plugin.task.debounced"))
     assert Enum.any?(observations, &(&1["tag"] == "plugin.task.finished"))
-
-    refute_contains_secret(action_log, secret)
-    refute_contains_secret(snapshot, secret)
-    refute_contains_secret(snapshot.plugins.diagnostics, secret)
-    refute_contains_secret(observations, secret)
-    refute_contains_secret(control_plane_body(workspace), secret)
-    refute_contains_secret(ServerManager.list(), secret)
   end
 
   test "disabled fake external memory plugin contributes no executable tools", %{
     workspace: workspace
   } do
     parent = self()
-    put_fresh_secret()
     install_fake_memory_http(parent)
     config = disabled_config()
 
@@ -185,7 +160,6 @@ defmodule Nex.Agent.PluginExternalServiceFoundationTest do
 
   test "permission deny blocks fake external memory MCP connection", %{workspace: workspace} do
     parent = self()
-    put_fresh_secret()
     install_fake_memory_http(parent)
 
     deny_rule = %{
@@ -210,35 +184,18 @@ defmodule Nex.Agent.PluginExternalServiceFoundationTest do
     refute_received {:fake_memory_http, _event}
   end
 
-  test "missing secret prevents HTTP MCP requests and records redacted diagnostics", %{
+  test "empty direct config authorization header is omitted", %{
     workspace: workspace
   } do
     parent = self()
-    secret = put_fresh_secret()
-    System.delete_env(@secret_env)
     install_fake_memory_http(parent)
-    config = enabled_config()
+    config = enabled_config(%{"authorization_header" => ""})
 
-    log =
-      capture_log(fn ->
-        assert {:ok, snapshot} = reload_runtime(workspace, config)
-        Process.put(:stage6_missing_secret_snapshot, snapshot)
-      end)
+    assert {:ok, snapshot} = reload_runtime(workspace, config)
 
-    snapshot = Process.get(:stage6_missing_secret_snapshot)
-
-    refute @server_id in snapshot.plugins.active_mcp_servers
-    refute Enum.any?(snapshot.tools.definitions_all, &(&1["name"] == "fake_memory__recall"))
-    refute_received {:fake_memory_http, _event}
-
-    observations = Query.query(%{"limit" => 100}, workspace: workspace)
-    assert Enum.any?(observations, &(&1["tag"] == "plugin.secret.resolve.failed"))
-
-    refute_contains_secret(log, secret)
-    refute_contains_secret(snapshot, secret)
-    refute_contains_secret(snapshot.plugins.diagnostics, secret)
-    refute_contains_secret(observations, secret)
-    refute_contains_secret(control_plane_body(workspace), secret)
+    assert @server_id in snapshot.plugins.active_mcp_servers
+    assert_receive {:fake_memory_http, %{method: "initialize", headers: init_headers}}
+    refute http_header_value(init_headers, "authorization")
   end
 
   defp fake_memory_manifest do
@@ -338,7 +295,7 @@ defmodule Nex.Agent.PluginExternalServiceFoundationTest do
             "transport" => "streamable-http",
             "url" => "{{plugin.config.endpoint}}",
             "headers" => %{
-              "Authorization" => "Bearer {{secret.api_token}}",
+              "Authorization" => "{{plugin.config.authorization_header}}",
               "X-Memory-Bank" => "{{plugin.config.bank_template}}"
             },
             "tool_timeout" => 1
@@ -348,20 +305,20 @@ defmodule Nex.Agent.PluginExternalServiceFoundationTest do
     }
   end
 
-  defp enabled_config do
+  defp enabled_config(overrides \\ %{}) do
     config(%{
       "disabled" => [],
       "enabled" => %{@plugin_id => true},
       "config" => %{
-        @plugin_id => %{
-          "endpoint" => @endpoint,
-          "bank_template" => "bank:{{workspace.hash}}:{{session.key}}"
-        }
-      },
-      "secrets" => %{
-        @plugin_id => %{
-          "api_token" => %{"env" => @secret_env}
-        }
+        @plugin_id =>
+          Map.merge(
+            %{
+              "endpoint" => @endpoint,
+              "bank_template" => "bank:{{workspace.hash}}:{{session.key}}",
+              "authorization_header" => "Bearer fake-memory-token"
+            },
+            overrides
+          )
       }
     })
   end
@@ -373,12 +330,8 @@ defmodule Nex.Agent.PluginExternalServiceFoundationTest do
       "config" => %{
         @plugin_id => %{
           "endpoint" => @endpoint,
-          "bank_template" => "bank:{{workspace.hash}}:{{session.key}}"
-        }
-      },
-      "secrets" => %{
-        @plugin_id => %{
-          "api_token" => %{"env" => @secret_env}
+          "bank_template" => "bank:{{workspace.hash}}:{{session.key}}",
+          "authorization_header" => "Bearer fake-memory-token"
         }
       }
     })
@@ -472,12 +425,6 @@ defmodule Nex.Agent.PluginExternalServiceFoundationTest do
     end)
   end
 
-  defp put_fresh_secret do
-    secret = "secret-" <> Integer.to_string(System.unique_integer([:positive, :monotonic]))
-    System.put_env(@secret_env, secret)
-    secret
-  end
-
   defp http_tool_calls(tool) do
     {:messages, messages} = Process.info(self(), :messages)
 
@@ -517,13 +464,6 @@ defmodule Nex.Agent.PluginExternalServiceFoundationTest do
     end)
   end
 
-  defp secret_authorization_header?(headers, secret) do
-    case http_header_value(headers, "authorization") do
-      "Bearer " <> value -> value == secret
-      _other -> false
-    end
-  end
-
   defp expected_bank(workspace, session_key) do
     "bank:#{workspace_hash(workspace)}:#{session_key}"
   end
@@ -532,27 +472,6 @@ defmodule Nex.Agent.PluginExternalServiceFoundationTest do
     :crypto.hash(:sha256, root)
     |> Base.encode16(case: :lower)
     |> String.slice(0, 12)
-  end
-
-  defp refute_contains_secret(value, secret) do
-    refute contains_secret?(value, secret)
-  end
-
-  defp contains_secret?(value, secret), do: String.contains?(inspect(value), secret)
-
-  defp control_plane_body(workspace) do
-    dir = Path.join([workspace, "control_plane", "observations"])
-
-    case File.ls(dir) do
-      {:ok, files} ->
-        files
-        |> Enum.filter(&String.ends_with?(&1, ".jsonl"))
-        |> Enum.map(&File.read!(Path.join(dir, &1)))
-        |> Enum.join("\n")
-
-      {:error, _reason} ->
-        ""
-    end
   end
 
   defp restart_approval do
@@ -579,7 +498,4 @@ defmodule Nex.Agent.PluginExternalServiceFoundationTest do
 
   defp restore_app_env(key, nil), do: Application.delete_env(:nex_agent, key)
   defp restore_app_env(key, value), do: Application.put_env(:nex_agent, key, value)
-
-  defp restore_system_env(key, nil), do: System.delete_env(key)
-  defp restore_system_env(key, value), do: System.put_env(key, value)
 end

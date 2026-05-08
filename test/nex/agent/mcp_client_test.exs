@@ -89,8 +89,8 @@ defmodule Nex.Agent.MCPClientTest do
         transport: "stdio",
         command: "sh",
         args: ["-c", script, "ignored", "{{workspace.root}}"],
-        env: [NEX_MCP_TOKEN: "{{secret.mcp_token}}"],
-        secrets: %{"mcp_token" => "stdio-secret"},
+        env: [NEX_MCP_TOKEN: "{{plugin.config.mcp_token}}"],
+        plugin_config: %{"mcp_token" => "stdio-secret"},
         config: config,
         cwd: workspace,
         workspace: workspace

@@ -35,18 +35,17 @@ Phase 22 已经让 plugin 可以贡献 `hooks`、`jobs`、`workspaceFiles`、`mc
    - 初始化后若收到 `Mcp-Session-Id` / `MCP-Session-Id`，后续请求必须带回。
    - GET SSE listener 本 phase 可以不保持长连接；如果实现，必须不影响 request/response 主路径。
 4. plugin template 统一使用 `{{...}}` 语法；不引入 `${...}`。
-5. template 支持 plugin config、secret reference、workspace/session/turn/channel 变量，以及稳定 bank template 所需变量。
-6. 新增最小 `SecretBase` contract，用于解析 secret 引用；secret 不进入 manifest 明文、snapshot 可打印结构、diagnostics、ControlPlane attrs 或日志。
-7. 对外只暴露 Task：Workbench/API/plugin manifest/runtime docs 不再暴露 Cron、ScheduledTask、PluginJob、job queue。
-8. 本 phase 只冻结并实现最小 queue policy：
+5. template 支持 plugin config、workspace/session/turn/channel 变量，以及稳定 bank template 所需变量；plugin service credentials 走普通 plugin config。
+6. 对外只暴露 Task：Workbench/API/plugin manifest/runtime docs 不再暴露 Cron、ScheduledTask、PluginJob、job queue。
+7. 本 phase 只冻结并实现最小 queue policy：
    - `debounce_key`
    - `debounce_ms`
    - `max_runs`
-9. 不实现 operation polling DSL；外部服务如果需要 operation status，先通过普通 tool 显式查询或后续 phase 再扩展通用 task continuation。
-10. 用 fake external memory plugin / fake streamable HTTP MCP server 做验收，证明：
+8. 不实现 operation polling DSL；外部服务如果需要 operation status，先通过普通 tool 显式查询或后续 phase 再扩展通用 task continuation。
+9. 用 fake external memory plugin / fake streamable HTTP MCP server 做验收，证明：
     - prompt 前 recall hook 可通过 HTTP MCP tool 注入 context。
     - turn-finished retain task 可 debounce 合并。
-    - plugin config + secret + bank template 能安全渲染到 HTTP header/body。
+    - plugin config header + bank template 能渲染到 HTTP header/body，空 header 会被省略。
     - disabled plugin 后 HTTP MCP tool 不可见也不可执行。
     - secret 不在 snapshot/diagnostics/ControlPlane/log 中明文出现。
 
@@ -259,7 +258,7 @@ stdio 形态继续支持：
   "command": "memory-mcp",
   "args": ["--workspace", "{{workspace.root}}"],
   "env": {
-    "TOKEN": "{{secret.memory_api_token}}"
+    "TOKEN": "{{plugin.config.memory_api_token}}"
   }
 }
 ```
@@ -274,14 +273,14 @@ streamable HTTP 形态固定为：
   "transport": "streamable-http",
   "url": "{{plugin.config.endpoint}}/mcp",
   "headers": {
-    "Authorization": "Bearer {{secret.memory_api_token}}",
+    "Authorization": "{{plugin.config.authorization_header}}",
     "X-Memory-Bank": "{{plugin.config.bank.template}}"
   },
   "timeout_ms": 30000
 }
 ```
 
-`headers` 可以引用 secret，但任何诊断和日志必须使用 redacted value。
+`headers` 使用 plugin config 渲染；值为空字符串时调用方应省略该 header。
 
 ### 7) Template syntax
 
@@ -292,7 +291,6 @@ streamable HTTP 形态固定为：
 ```text
 {{plugin.id}}
 {{plugin.config.<key>}}
-{{secret.<id>}}
 {{workspace.root}}
 {{workspace.hash}}
 {{session.key}}
@@ -311,17 +309,11 @@ bank template 必须通过同一模板机制表达，例如：
 }
 ```
 
-模板解析结果必须能携带 redaction metadata。不能只返回普通字符串后再靠调用方猜哪些字段敏感。
+模板解析结果保留统一 result shape，方便调用方在需要时继续携带展示值。
 
-### 8) SecretBase contract
+### 8) Plugin service credential config
 
-新增最小模块 contract：
-
-```elixir
-defmodule Nex.Agent.SecretBase do
-  @callback resolve(String.t(), map()) :: {:ok, String.t()} | {:error, term()}
-end
-```
+plugin service credentials 直接作为 plugin config 字段进入统一 config contract，例如 `authorization_header`。本 phase 不新增独立 secret resolver。
 
 第一版 resolver 可以只支持环境变量或 runtime config 声明，但必须满足：
 
@@ -418,17 +410,14 @@ plugin.task.started
 plugin.task.finished
 plugin.task.failed
 plugin.template.render.failed
-plugin.secret.resolve.failed
 ```
-
-这些 observation 不能包含 secret 明文。
 
 ## 执行顺序 / stage 依赖
 
 1. Stage 1：Task public surface cutover，先删除 Cron/ScheduledTask/PluginJob 对外入口，建立 `Nex.Agent.Tasks` 与 `snapshot.tasks`。
 2. Stage 2：MCP transport boundary，拆 protocol/transport，不复制 MCP 方法实现。
 3. Stage 3：streamable HTTP MCP client，依赖 Stage 2。
-4. Stage 4：plugin template + SecretBase，依赖 Stage 2/3，因为 HTTP headers/env 需要安全渲染。
+4. Stage 4：plugin template + direct plugin config rendering，依赖 Stage 2/3，因为 HTTP headers/env 需要统一渲染。
 5. Stage 5：Task runner trigger/policy，依赖 Stage 1/4。
 6. Stage 6：fake external memory plugin end-to-end 验收，依赖 Stage 3/4/5。
 
@@ -587,30 +576,25 @@ plugin.secret.resolve.failed
 - `lib/nex/agent/interface/mcp/transport/stdio.ex`
 - `lib/nex/agent/interface/mcp/transport/streamable_http.ex`
 - `test/nex/agent/plugin_template_test.exs`（新增）
-- `test/nex/agent/secret_base_test.exs`（新增）
 - `test/nex/agent/mcp_streamable_http_test.exs`
 
 ### 这一步要做
 
 - 扩展 `Template.render/2` 或新增 resolver，使其支持 `{{path.to.value}}`。
-- 支持 plugin config、secret、workspace、session、turn、channel、chat_id。
-- resolver 返回 rendered value 和 redaction metadata。
-- 新增最小 `SecretBase`，第一版可从明确传入的 test secret map 或 env resolver 解析。
+- 支持 plugin config、workspace、session、turn、channel、chat_id。
+- resolver 返回 rendered value 和统一 result shape。
 - MCP stdio env、streamable HTTP headers 统一使用 resolver。
 
 ### 实施注意事项
 
 - 不要读取安全禁区文件。
-- 不要把 secret 明文写进 Runtime.Snapshot 可打印字段。
-- 不要把 secret 明文写进 ControlPlane attrs、diagnostics、Logger。
 - 不要支持 `${...}`。
-- missing secret 必须产生明确 diagnostic / ControlPlane warning，并阻止对应外部连接使用空 token 静默继续。
+- 空 header 渲染结果必须省略，避免使用空 token 静默连接。
 
 ### 本 stage 验收
 
-- `{{plugin.config.endpoint}}`、`{{secret.foo}}`、`{{workspace.hash}}`、`{{session.key}}` 可渲染。
-- secret 明文只出现在执行边界的 header/env 中。
-- 所有 error/log/diagnostic 中只出现 `[REDACTED]` 或 secret id。
+- `{{plugin.config.endpoint}}`、`{{plugin.config.authorization_header}}`、`{{workspace.hash}}`、`{{session.key}}` 可渲染。
+- 空 header 渲染结果不会发出对应 HTTP header。
 
 ### 本 stage 验证
 
@@ -716,9 +700,8 @@ plugin.secret.resolve.failed
 - `ToolRegistry`、Runner、hook executor 按 MCP transport 写分支。
 - streamable HTTP 和 stdio 复制两套 MCP protocol method 实现。
 - `${...}` 被引入为 plugin template 语法。
-- secret 明文出现在 snapshot、diagnostics、ControlPlane attrs、Logger output、test failure diff。
 - 业务模块直接读取 `~/.nex/agent/config.json`、`~/.zshrc` 或其他安全禁区。
 - plugin manifest 自动授予 network/file/MCP/tool 权限。
 - 新增第二套 schedule 持久文件或和 `Runtime.Snapshot.tasks` 并行的 task truth source。
 - 新增 operation polling DSL、arbitrary retry DSL、plugin-owned long-running worker。
-- fake external memory plugin 测试只能跑 happy path，没有覆盖 disabled plugin、permission deny、missing secret、debounce 合并。
+- fake external memory plugin 测试只能跑 happy path，没有覆盖 disabled plugin、permission deny、空 header 省略、debounce 合并。

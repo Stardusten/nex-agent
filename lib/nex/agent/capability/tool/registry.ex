@@ -1313,7 +1313,10 @@ defmodule Nex.Agent.Capability.Tool.Registry do
   defp reason_type(reason) when is_atom(reason), do: Atom.to_string(reason)
   defp reason_type(_reason), do: "error"
 
-  defp error_summary(reason), do: reason |> to_string() |> String.slice(0, 1000)
+  defp error_summary(reason) when is_binary(reason), do: String.slice(reason, 0, 1000)
+
+  defp error_summary(reason),
+    do: reason |> inspect(limit: 20, printable_limit: 1000) |> String.slice(0, 1000)
 
   defp args_summary(args) do
     args

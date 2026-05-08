@@ -205,7 +205,6 @@ defmodule Nex.Agent.Interface.MCP.Transport.Stdio do
       config: get_opt(opts, :config),
       plugin_id: get_opt(opts, :plugin_id),
       plugin_config: get_opt(opts, :plugin_config),
-      secrets: get_opt(opts, :secrets),
       session_key: get_opt(opts, :session_key),
       turn_prompt: get_opt(opts, :turn_prompt),
       channel: get_opt(opts, :channel),

@@ -1,0 +1,157 @@
+{
+  "id": "builtin:memory.hindsight",
+  "title": "Hindsight Memory",
+  "version": "0.1.0",
+  "enabled": true,
+  "source": "builtin",
+  "description": "Built-in external memory plugin backed by Hindsight MCP.",
+  "contributes": {
+    "mcpServers": [
+      {
+        "id": "hindsight",
+        "transport": "streamable-http",
+        "url": "{{plugin.config.mcp_url}}",
+        "headers": {
+          "Authorization": "{{plugin.config.authorization_header}}",
+          "X-Bank-Id": "{{plugin.config.bank_id}}"
+        },
+        "tool_timeout": 30
+      }
+    ],
+    "tools": [
+      {
+        "name": "hindsight__recall",
+        "from": "mcp:hindsight/recall",
+        "description": "Recall relevant long-term memories from the configured Hindsight bank.",
+        "surfaces": ["all", "base", "follow_up", "subagent", "task"],
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {"type": "string", "description": "Natural-language query for relevant long-term memory."},
+            "max_tokens": {"type": "integer", "description": "Maximum tokens to return."},
+            "budget": {"type": "string", "enum": ["low", "mid", "high"], "description": "Search thoroughness."},
+            "tags": {"type": "array", "items": {"type": "string"}, "description": "Optional tag filter."}
+          },
+          "required": ["query"]
+        }
+      },
+      {
+        "name": "hindsight__retain",
+        "from": "mcp:hindsight/retain",
+        "description": "Store durable, source-backed information in the configured Hindsight bank.",
+        "surfaces": ["all", "base", "task"],
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "content": {"type": "string", "description": "Fact, preference, decision, or reusable experience to retain."},
+            "context": {"type": "string", "description": "Category for the retained memory."},
+            "timestamp": {"type": "string", "description": "ISO 8601 timestamp for the source event."},
+            "tags": {"type": "array", "items": {"type": "string"}, "description": "Tags for organizing and filtering this memory."},
+            "metadata": {"type": "object", "description": "Source pointer and other non-secret provenance metadata."}
+          },
+          "required": ["content"]
+        }
+      },
+      {
+        "name": "hindsight__mental_model",
+        "from": "mcp:hindsight/get_mental_model",
+        "description": "Retrieve a Hindsight mental model by id.",
+        "surfaces": ["all", "base", "follow_up", "subagent", "task"],
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "mental_model_id": {"type": "string", "description": "The Hindsight mental model id."}
+          },
+          "required": ["mental_model_id"]
+        }
+      },
+      {
+        "name": "hindsight__operation_status",
+        "from": "mcp:hindsight/get_operation",
+        "description": "Check status for a Hindsight asynchronous operation.",
+        "surfaces": ["all", "base", "task"],
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "operation_id": {"type": "string", "description": "The Hindsight operation id."}
+          },
+          "required": ["operation_id"]
+        }
+      }
+    ],
+    "skills": [
+      {
+        "id": "builtin:hindsight-memory",
+        "path": "skills/hindsight-memory/SKILL.md"
+      }
+    ],
+    "hooks": [
+      {
+        "id": "hindsight.prompt.memory",
+        "event": "prompt.build.before",
+        "action": {
+          "type": "add_tool_result",
+          "tool": "hindsight__recall",
+          "args": {
+            "query": "{{turn.prompt}}",
+            "max_tokens": 4096,
+            "budget": "mid"
+          },
+          "title": "Hindsight Memory",
+          "maxChars": 8000,
+          "onError": "warn"
+        }
+      },
+      {
+        "id": "hindsight.after_turn.retain",
+        "event": "conversation.turn.finished",
+        "action": {
+          "type": "enqueue_task",
+          "task": "hindsight.retain",
+          "onError": "warn"
+        }
+      }
+    ],
+    "tasks": [
+      {
+        "id": "hindsight.retain",
+        "policy": {
+          "debounce_key": "retain:{{plugin.id}}:{{session.key}}",
+          "debounce_ms": 1000,
+          "max_runs": 1
+        },
+        "action": {
+          "type": "tool_call",
+          "tool": "hindsight__retain",
+          "args": {
+            "content": "{{turn.prompt}}",
+            "context": "nex_agent_turn",
+            "tags": ["nex-agent", "session:{{session.key}}"],
+            "metadata": {
+              "source": "nex_agent",
+              "workspace": "{{workspace.root}}",
+              "session_key": "{{session.key}}",
+              "channel": "{{channel}}",
+              "chat_id": "{{chat_id}}"
+            }
+          }
+        }
+      }
+    ],
+    "workspaceFiles": [
+      {
+        "id": "hindsight.status",
+        "path": "memory/hindsight/status.json",
+        "kind": "file",
+        "onMissing": "create",
+        "watch": true
+      },
+      {
+        "id": "hindsight.exports",
+        "path": "memory/hindsight/exports",
+        "kind": "dir",
+        "onMissing": "create"
+      }
+    ]
+  }
+}

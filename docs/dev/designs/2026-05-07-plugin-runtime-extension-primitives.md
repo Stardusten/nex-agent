@@ -187,26 +187,18 @@ job 默认不对用户发消息。它只维护 runtime 状态，除非插件明�
   "source": "builtin",
   "description": "Required memory plugin backed by Hindsight.",
   "config": {
-    "bank": {
-      "scope": "workspace",
-      "template": "nex-{workspace_hash}"
-    }
+    "mcp_url": "http://localhost:8888/mcp/",
+    "bank_id": "nex-{{workspace.hash}}",
+    "authorization_header": ""
   },
-  "secrets": [
-    {
-      "id": "hindsight.api_key",
-      "env": "HINDSIGHT_API_KEY",
-      "required": true
-    }
-  ],
   "contributes": {
     "mcpServers": [
       {
         "id": "hindsight",
         "transport": "streamable-http",
-        "url": "${config.endpoint}/mcp",
+        "url": "{{plugin.config.mcp_url}}",
         "headers": {
-          "Authorization": "Bearer ${secret:hindsight.api_key}"
+          "Authorization": "{{plugin.config.authorization_header}}"
         },
         "toolPrefix": "hindsight__"
       }

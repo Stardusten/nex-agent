@@ -2,11 +2,10 @@ defmodule Nex.Agent.Extension.Plugin.Template do
   @moduledoc """
   Template resolver for plugin contribution attrs.
 
-  The resolver returns both the execution value and a redacted projection so
-  callers do not have to guess which paths carried secret material.
+  The resolver expands plugin config, workspace, session, turn, and channel
+  placeholders. Sensitive values follow the same direct config route as the
+  rest of NexAgent runtime config.
   """
-
-  alias Nex.Agent.SecretBase
 
   defmodule Result do
     @moduledoc false
@@ -18,7 +17,6 @@ defmodule Nex.Agent.Extension.Plugin.Template do
           required(:code) => atom(),
           required(:message) => String.t(),
           optional(:path) => String.t(),
-          optional(:secret_id) => String.t(),
           optional(:reason) => term(),
           optional(:redacted_value) => term()
         }
@@ -47,7 +45,7 @@ defmodule Nex.Agent.Extension.Plugin.Template do
 
   @spec redacted_error(render_error() | term()) :: term()
   def redacted_error(%{} = error),
-    do: Map.take(error, [:code, :message, :path, :secret_id, :reason])
+    do: Map.take(error, [:code, :message, :path, :reason])
 
   def redacted_error(error), do: error
 
@@ -143,24 +141,6 @@ defmodule Nex.Agent.Extension.Plugin.Template do
     |> case do
       {:error, error} -> {:error, error}
       {rendered, redacted, redactions} -> {:ok, result(rendered, redacted, redactions)}
-    end
-  end
-
-  defp resolve_placeholder("secret." <> secret_id = path, ctx, _depth) do
-    case SecretBase.resolve(secret_id, ctx) do
-      {:ok, value} ->
-        redaction = %{path: path, secret_id: secret_id, replacement: "[REDACTED]"}
-        {:ok, value, "[REDACTED]", [redaction]}
-
-      {:error, reason} ->
-        {:error,
-         %{
-           code: :missing_secret,
-           message: "missing secret #{secret_id}",
-           path: path,
-           secret_id: secret_id,
-           reason: reason
-         }}
     end
   end
 

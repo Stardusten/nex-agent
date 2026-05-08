@@ -23,7 +23,9 @@ defmodule Nex.Agent.Runtime.PluginWorkspaceFiles do
   end
 
   defp workspace_files(plugins_data) do
-    contributions = Map.get(plugins_data, :contributions) || Map.get(plugins_data, "contributions") || %{}
+    contributions =
+      Map.get(plugins_data, :contributions) || Map.get(plugins_data, "contributions") || %{}
+
     Map.get(contributions, :workspace_files) || Map.get(contributions, "workspace_files") || []
   end
 
@@ -36,7 +38,8 @@ defmodule Nex.Agent.Runtime.PluginWorkspaceFiles do
       actor: %{"kind" => "system", "id" => "plugin-workspace-file"}
     }
 
-    case {Map.get(attrs, "onMissing"), Map.get(attrs, "kind", "file"), workspace_path(workspace, entry)} do
+    case {Map.get(attrs, "onMissing"), Map.get(attrs, "kind", "file"),
+          workspace_path(workspace, entry)} do
       {"create", "dir", path} ->
         validate_workspace_path!(workspace, path)
         ensure_directory(path, ctx)
@@ -57,19 +60,25 @@ defmodule Nex.Agent.Runtime.PluginWorkspaceFiles do
           "contribution_id" => entry["id"],
           "error_summary" => Exception.message(e)
         },
-      workspace: workspace
+        workspace: workspace
       )
-    :ok
+
+      :ok
   end
 
   defp ensure_directory(path, ctx) do
-    with :ok <- authorize_workspace_write(path, ctx) do
+    with {:ok, _info} <- authorize_workspace_write(path, ctx) do
       FileSystem.mkdir_p(path, ctx)
     end
     |> case do
-      :ok -> :ok
-      {:ask, _request} -> raise "workspace directory creation requires approval: #{path}"
-      {:error, reason} -> raise "workspace directory creation failed for #{path}: #{inspect(reason)}"
+      :ok ->
+        :ok
+
+      {:ask, _request} ->
+        raise "workspace directory creation requires approval: #{path}"
+
+      {:error, reason} ->
+        raise "workspace directory creation failed for #{path}: #{inspect(reason)}"
     end
   end
 
@@ -78,8 +87,11 @@ defmodule Nex.Agent.Runtime.PluginWorkspaceFiles do
       {:ok, info} ->
         unless File.exists?(info.expanded_path) do
           case FileSystem.write_file(info, "", ctx) do
-            :ok -> :ok
-            {:error, reason} -> raise "workspace file creation failed for #{path}: #{inspect(reason)}"
+            :ok ->
+              :ok
+
+            {:error, reason} ->
+              raise "workspace file creation failed for #{path}: #{inspect(reason)}"
           end
         end
 
@@ -163,7 +175,8 @@ defmodule Nex.Agent.Runtime.PluginWorkspaceFiles do
     expanded_workspace = Path.expand(workspace)
     expanded_path = Path.expand(path)
 
-    if expanded_path == expanded_workspace or String.starts_with?(expanded_path, expanded_workspace <> "/") do
+    if expanded_path == expanded_workspace or
+         String.starts_with?(expanded_path, expanded_workspace <> "/") do
       :ok
     else
       raise ArgumentError, "workspace file path escapes workspace: #{expanded_path}"
