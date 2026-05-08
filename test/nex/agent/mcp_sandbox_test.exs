@@ -30,6 +30,7 @@ defmodule Nex.Agent.MCPSandboxTest do
 
     {:ok, pid} =
       MCP.start_link(
+        transport: "stdio",
         command: "sh",
         args: ["-c", script],
         config: config,
@@ -37,7 +38,7 @@ defmodule Nex.Agent.MCPSandboxTest do
         workspace: File.cwd!()
       )
 
-    assert {:ok, %{"capabilities" => %{}}} = MCP.initialize(pid)
+    assert :ok = MCP.initialize(pid)
     assert {:ok, %{"tools" => [%{"name" => "echo"}]}} = MCP.list_tools(pid)
     assert :ok = MCP.stop(pid)
   end

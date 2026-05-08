@@ -357,6 +357,7 @@ defmodule Nex.Agent.PluginRuntimePrimitivesTest do
              ServerManager.start(
                "echo_mcp",
                [
+                 transport: "stdio",
                  command: "sh",
                  args: ["-c", mcp_script],
                  config: config,

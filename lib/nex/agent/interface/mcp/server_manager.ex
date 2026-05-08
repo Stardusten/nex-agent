@@ -19,7 +19,8 @@ defmodule Nex.Agent.Interface.MCP.ServerManager do
     GenServer.start_link(__MODULE__, %{servers: %{}, registry: nil}, opts ++ [name: @name])
   end
 
-  @spec start(String.t(), keyword() | map(), keyword()) :: {:ok, String.t()} | {:error, String.t()}
+  @spec start(String.t(), keyword() | map(), keyword()) ::
+          {:ok, String.t()} | {:error, String.t()}
   def start(name, config, opts \\ []) do
     GenServer.call(@name, {:start, name, config, opts})
   end
@@ -128,25 +129,15 @@ defmodule Nex.Agent.Interface.MCP.ServerManager do
   end
 
   def handle_call(:start_configured, _from, state) do
-    configured = Application.get_env(:nex_agent, :mcp_servers, %{})
-
-    results =
-      Enum.map(configured, fn {name, config} ->
-        start(name, config)
-      end)
-
-    successes =
-      results
-      |> Enum.filter(&match?({:ok, _}, &1))
-      |> Enum.map(fn {:ok, id} -> id end)
-
-    {:reply, {:ok, successes}, state}
+    {:ok, server_ids, state} = start_configured_servers(state)
+    {:reply, {:ok, server_ids}, state}
   end
 
   def handle_call({:start_and_register, registry}, _from, state) do
-    {:ok, server_ids} = start_configured()
+    {:ok, server_ids, state} = start_configured_servers(state)
+    state = %{state | registry: registry}
     Enum.each(server_ids, &register_tools_to_registry(&1, state, registry))
-    {:reply, {:ok, server_ids}, %{state | registry: registry}}
+    {:reply, {:ok, server_ids}, state}
   end
 
   def handle_call({:register_tools, server_id}, _from, state) do
@@ -185,20 +176,27 @@ defmodule Nex.Agent.Interface.MCP.ServerManager do
     :ok
   end
 
-  defp normalize_config(config) when is_map(config) do
-    Enum.map(config, fn {k, v} ->
-      key =
-        case k do
-          key when is_atom(key) -> key
-          key -> String.to_atom(to_string(key))
-        end
-
-      {key, v}
-    end)
-  end
-
+  defp normalize_config(config) when is_map(config), do: config
   defp normalize_config(config) when is_list(config), do: config
   defp normalize_config(_config), do: []
+
+  defp start_configured_servers(state) do
+    configured = Application.get_env(:nex_agent, :mcp_servers, %{})
+
+    {server_ids, state} =
+      Enum.reduce(configured, {[], state}, fn {name, config}, {server_ids, acc_state} ->
+        case start_server(acc_state, to_string(name), config, []) do
+          {:ok, server_id, next_state} ->
+            {[server_id | server_ids], next_state}
+
+          {:error, reason, next_state} ->
+            Logger.warning("[MCP] Failed to start configured server #{inspect(name)}: #{reason}")
+            {server_ids, next_state}
+        end
+      end)
+
+    {:ok, Enum.reverse(server_ids), state}
+  end
 
   defp start_server(state, name, config, opts) do
     server_id =
@@ -210,12 +208,12 @@ defmodule Nex.Agent.Interface.MCP.ServerManager do
     case MCP.start_link(normalized) do
       {:ok, pid} ->
         case MCP.initialize(pid) do
-          {:ok, _init_result} ->
+          :ok ->
             server = %{
               pid: pid,
               name: name,
               config: normalized,
-              tool_timeout: Keyword.get(normalized, :tool_timeout, 30),
+              tool_timeout: config_value(normalized, :tool_timeout, 30),
               tools: [],
               origin: Keyword.get(opts, :origin, :manual),
               plugin_id: Keyword.get(opts, :plugin_id),
@@ -267,7 +265,9 @@ defmodule Nex.Agent.Interface.MCP.ServerManager do
   end
 
   defp desired_plugin_servers(plugin_data) do
-    contributions = Map.get(plugin_data, :contributions) || Map.get(plugin_data, "contributions") || %{}
+    contributions =
+      Map.get(plugin_data, :contributions) || Map.get(plugin_data, "contributions") || %{}
+
     Map.get(contributions, :mcp_servers) || Map.get(contributions, "mcp_servers") || []
   end
 
@@ -297,10 +297,6 @@ defmodule Nex.Agent.Interface.MCP.ServerManager do
         Map.has_key?(acc.servers, runtime_id) ->
           acc
 
-        not supported_plugin_server?(entry) ->
-          Logger.warning("[MCP] Skipping unsupported plugin MCP server #{runtime_id}")
-          acc
-
         true ->
           case authorize_connect(entry, runtime_ctx.workspace, runtime_ctx.config) do
             :ok ->
@@ -316,12 +312,10 @@ defmodule Nex.Agent.Interface.MCP.ServerManager do
                      acc,
                      entry["id"],
                      start_config,
-                     [
-                       server_id: runtime_id,
-                       origin: :plugin,
-                       plugin_id: entry["plugin_id"],
-                       contribution_id: entry["id"]
-                     ]
+                     server_id: runtime_id,
+                     origin: :plugin,
+                     plugin_id: entry["plugin_id"],
+                     contribution_id: entry["id"]
                    ) do
                 {:ok, _runtime_id, next_state} ->
                   next_state
@@ -342,10 +336,11 @@ defmodule Nex.Agent.Interface.MCP.ServerManager do
     end)
   end
 
-  defp supported_plugin_server?(%{"attrs" => %{"command" => command}}) when is_binary(command), do: true
-  defp supported_plugin_server?(_entry), do: false
-
-  defp authorize_connect(%{"plugin_id" => plugin_id, "id" => contribution_id, "attrs" => %{}}, workspace, config) do
+  defp authorize_connect(
+         %{"plugin_id" => plugin_id, "id" => contribution_id, "attrs" => %{}},
+         workspace,
+         config
+       ) do
     session_key = "plugin:" <> plugin_id
     raw_event = mcp_raw_event("connect", plugin_id, contribution_id, nil, workspace, [])
     decision_opts = [extra_rules: config_default_mcp_rules(config, workspace)]
@@ -362,12 +357,20 @@ defmodule Nex.Agent.Interface.MCP.ServerManager do
     end
   end
 
-  defp authorize_call(%{origin: :plugin, plugin_id: plugin_id, contribution_id: contribution_id}, tool_name, opts) do
+  defp authorize_call(
+         %{origin: :plugin, plugin_id: plugin_id, contribution_id: contribution_id},
+         tool_name,
+         opts
+       ) do
     runtime_context = reconcile_runtime_context(opts)
     workspace = Keyword.get(opts, :workspace, runtime_context.workspace)
     session_key = Keyword.get(opts, :session_key, "plugin:" <> plugin_id)
     raw_event = mcp_raw_event("call", plugin_id, contribution_id, tool_name, workspace, opts)
-    decision_opts = [extra_rules: config_default_mcp_rules(Keyword.get(opts, :config, runtime_context.config), workspace)]
+
+    decision_opts = [
+      extra_rules:
+        config_default_mcp_rules(Keyword.get(opts, :config, runtime_context.config), workspace)
+    ]
 
     case Approval.debug_decision(workspace, session_key, raw_event, decision_opts) do
       %{action: :allow} ->
@@ -387,7 +390,8 @@ defmodule Nex.Agent.Interface.MCP.ServerManager do
               session_key: session_key,
               channel: Keyword.get(opts, :channel),
               chat_id: Keyword.get(opts, :chat_id),
-              description: "Allow plugin MCP tool call #{tool_name} for #{plugin_id}/#{contribution_id}",
+              description:
+                "Allow plugin MCP tool call #{tool_name} for #{plugin_id}/#{contribution_id}",
               grant_key: first_grant_key(raw_event),
               grant_options: PermissionRule.grant_options(raw_event),
               authorized_actor: actor_from_opts(opts),
@@ -395,9 +399,14 @@ defmodule Nex.Agent.Interface.MCP.ServerManager do
             })
 
           case Approval.request(request, publish?: false) do
-            {:ok, :approved} -> :ok
-            {:error, :denied} -> {:error, "approval denied for plugin MCP tool call"}
-            {:error, reason} -> {:error, "approval failed for plugin MCP tool call: #{inspect(reason)}"}
+            {:ok, :approved} ->
+              :ok
+
+            {:error, :denied} ->
+              {:error, "approval denied for plugin MCP tool call"}
+
+            {:error, reason} ->
+              {:error, "approval failed for plugin MCP tool call: #{inspect(reason)}"}
           end
         else
           {:error, "approval required for plugin MCP tool call"}
@@ -466,7 +475,7 @@ defmodule Nex.Agent.Interface.MCP.ServerManager do
 
           _ ->
             %{workspace: File.cwd!(), config: nil}
-      end
+        end
     end
   end
 
@@ -494,4 +503,14 @@ defmodule Nex.Agent.Interface.MCP.ServerManager do
   end
 
   defp config_default_mcp_rules(_config, _workspace), do: []
+
+  defp config_value(config, key, default) when is_list(config) do
+    Keyword.get(config, key, default)
+  end
+
+  defp config_value(config, key, default) when is_map(config) do
+    Map.get(config, key, Map.get(config, Atom.to_string(key), default))
+  end
+
+  defp config_value(_config, _key, default), do: default
 end

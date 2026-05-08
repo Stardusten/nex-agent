@@ -2,7 +2,7 @@
 
 ## Active Workstream
 
-Phase 1 runtime reload foundation is implemented. Phase 3 streaming delivery and Phase 3A architecture convergence are in place. Phase 4 is now closed as the text-IR foundation, Phase 4A is superseded, Phase 5 IM inbound architecture and media projection is implemented, and Phase 7 Feishu streaming converter simplification is in place. Phase 8 session run control and busy follow-up is landed, and Phase 9 follow-up LLM turn and interrupt request is now landed on top of it. Phase 6 Feishu outbound official format/media send remains landed. Phase 18 Workbench App Runtime is now opened as the local-first evolvable console/workbench track. Phase 20 Plugin Runtime Foundation is now planned as the large pluginization track for non-core capabilities. Phase 23 Plugin External Service Foundation is now in progress; Stage 1 Task surface cutover is complete with review fixes and focused tests passing, and the next implementation step is Stage 2 MCP transport boundary.
+Phase 1 runtime reload foundation is implemented. Phase 3 streaming delivery and Phase 3A architecture convergence are in place. Phase 4 is now closed as the text-IR foundation, Phase 4A is superseded, Phase 5 IM inbound architecture and media projection is implemented, and Phase 7 Feishu streaming converter simplification is in place. Phase 8 session run control and busy follow-up is landed, and Phase 9 follow-up LLM turn and interrupt request is now landed on top of it. Phase 6 Feishu outbound official format/media send remains landed. Phase 18 Workbench App Runtime is now opened as the local-first evolvable console/workbench track. Phase 20 Plugin Runtime Foundation is now planned as the large pluginization track for non-core capabilities. Phase 23 Plugin External Service Foundation is now in progress; Stage 1 Task surface cutover is complete with review fixes and focused tests passing, Stage 2 MCP transport boundary is complete with focused stdio/client tests and compile passing, and the next implementation step is Stage 3 streamable HTTP transport.
 
 ## Why This Is Active
 
@@ -480,7 +480,7 @@ Docs/dev workflow is split into four lanes:
 
 ## Immediate Next Steps
 
-1. Phase 23 Stage 2：拆 `Nex.Agent.Interface.MCP` 为 protocol client + transport adapter，保持 stdio 行为不变。
+1. Phase 23 Stage 3：实现 streamable HTTP MCP transport，保持 `ServerManager` / `ToolRegistry` 只走统一 `MCP.Client` API。
 2. Phase 21 Command Sandbox And Approval：等待 review/验收；重点看 Seatbelt profile、approval grant 语义、direct file inventory reviewed exemptions、以及 Linux/Windows backend contract 是否还需要补冻结项。
 3. Phase 18D Notes manual review：在真实 config 中配置 `gateway.workbench.apps.notes.root`，授权 notes app 的 `notes:read` / `notes:write`，打开 Workbench 验证真实 vault list/read/write/search/conflict。
 4. Phase 18 Workbench app artifact reload：把 `reload.sh` contract 落成受控 runner/tool 或 owner lane，并补 ControlPlane observations 和权限边界测试。
