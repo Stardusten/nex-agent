@@ -293,13 +293,13 @@ defmodule Nex.Agent.Capability.Hooks do
   end
 
   defp execute_tool_fragment(entry, ctx, tool, raw_args, remaining) do
-    args = Template.render(raw_args, ctx)
-
     tool_ctx =
       ctx
       |> Map.put(:plugin_id, Map.get(entry, "plugin_id"))
       |> Map.put(:hook_id, Map.get(entry, "id"))
       |> Map.put(:actor, Map.get(ctx, :actor) || %{"kind" => "owner_run", "id" => "hook"})
+
+    args = Template.render(raw_args, tool_ctx)
 
     case ToolRegistry.execute(tool, args, tool_ctx) do
       {:ok, result} ->
