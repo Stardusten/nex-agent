@@ -30,7 +30,8 @@ defmodule Nex.Agent.Interface.MCP.ServerManager do
     GenServer.call(@name, {:stop, server_id})
   end
 
-  @spec call_tool(String.t(), String.t(), map(), keyword()) :: {:ok, map()} | {:error, String.t()}
+  @spec call_tool(String.t(), String.t(), map(), keyword() | map()) ::
+          {:ok, map()} | {:error, String.t()}
   def call_tool(server_id, tool_name, arguments, opts \\ []) do
     GenServer.call(@name, {:call_tool, server_id, tool_name, arguments, opts}, 60_000)
   end
@@ -363,13 +364,13 @@ defmodule Nex.Agent.Interface.MCP.ServerManager do
          opts
        ) do
     runtime_context = reconcile_runtime_context(opts)
-    workspace = Keyword.get(opts, :workspace, runtime_context.workspace)
-    session_key = Keyword.get(opts, :session_key, "plugin:" <> plugin_id)
+    workspace = opt_value(opts, :workspace, runtime_context.workspace)
+    session_key = opt_value(opts, :session_key, "plugin:" <> plugin_id)
     raw_event = mcp_raw_event("call", plugin_id, contribution_id, tool_name, workspace, opts)
 
     decision_opts = [
       extra_rules:
-        config_default_mcp_rules(Keyword.get(opts, :config, runtime_context.config), workspace)
+        config_default_mcp_rules(opt_value(opts, :config, runtime_context.config), workspace)
     ]
 
     case Approval.debug_decision(workspace, session_key, raw_event, decision_opts) do
@@ -388,8 +389,8 @@ defmodule Nex.Agent.Interface.MCP.ServerManager do
               subject: contribution_id <> "/" <> tool_name,
               workspace: workspace,
               session_key: session_key,
-              channel: Keyword.get(opts, :channel),
-              chat_id: Keyword.get(opts, :chat_id),
+              channel: opt_value(opts, :channel),
+              chat_id: opt_value(opts, :chat_id),
               description:
                 "Allow plugin MCP tool call #{tool_name} for #{plugin_id}/#{contribution_id}",
               grant_key: first_grant_key(raw_event),
@@ -426,8 +427,8 @@ defmodule Nex.Agent.Interface.MCP.ServerManager do
     %{
       tool_name: tool_event_name,
       workspace: workspace,
-      channel: Keyword.get(opts, :channel),
-      chat_id: Keyword.get(opts, :chat_id),
+      channel: opt_value(opts, :channel),
+      chat_id: opt_value(opts, :chat_id),
       actor: actor_from_opts(opts),
       metadata: %{
         "plugin_id" => plugin_id,
@@ -439,7 +440,7 @@ defmodule Nex.Agent.Interface.MCP.ServerManager do
   end
 
   defp actor_from_opts(opts) do
-    case Keyword.get(opts, :actor) do
+    case opt_value(opts, :actor) do
       %{} = actor -> actor
       value when is_binary(value) -> %{"id" => value}
       _ -> %{"kind" => "system", "id" => "plugin-mcp"}
@@ -454,15 +455,15 @@ defmodule Nex.Agent.Interface.MCP.ServerManager do
   end
 
   defp interactive_opts?(opts) do
-    present?(Keyword.get(opts, :channel)) and present?(Keyword.get(opts, :chat_id))
+    present?(opt_value(opts, :channel)) and present?(opt_value(opts, :chat_id))
   end
 
   defp present?(value) when is_binary(value), do: String.trim(value) != ""
   defp present?(_value), do: false
 
   defp reconcile_runtime_context(opts) do
-    workspace = Keyword.get(opts, :workspace)
-    config = Keyword.get(opts, :config)
+    workspace = opt_value(opts, :workspace)
+    config = opt_value(opts, :config)
 
     cond do
       is_binary(workspace) ->
@@ -513,4 +514,16 @@ defmodule Nex.Agent.Interface.MCP.ServerManager do
   end
 
   defp config_value(_config, _key, default), do: default
+
+  defp opt_value(opts, key, default \\ nil)
+
+  defp opt_value(opts, key, default) when is_list(opts) do
+    Keyword.get(opts, key, default)
+  end
+
+  defp opt_value(opts, key, default) when is_map(opts) do
+    Map.get(opts, key, Map.get(opts, Atom.to_string(key), default))
+  end
+
+  defp opt_value(_opts, _key, default), do: default
 end

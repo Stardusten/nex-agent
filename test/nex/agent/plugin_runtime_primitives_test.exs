@@ -386,6 +386,111 @@ defmodule Nex.Agent.PluginRuntimePrimitivesTest do
              })
   end
 
+  test "plugin mcpServers can use streamable HTTP without granting network permission", %{
+    workspace: workspace,
+    config: config
+  } do
+    parent = self()
+    previous_post = Application.get_env(:nex_agent, :http_test_req_post)
+
+    Application.put_env(:nex_agent, :http_test_req_post, fn url, opts ->
+      request = Keyword.fetch!(opts, :json)
+      headers = Keyword.fetch!(opts, :headers)
+      send(parent, {:streamable_http_post, url, request, headers})
+
+      case http_request_method(request) do
+        "initialize" ->
+          http_json_response(request, %{"capabilities" => %{}},
+            headers: [{"content-type", "application/json"}, {"MCP-Session-Id", "plugin-sess"}]
+          )
+
+        "notifications/initialized" ->
+          {:ok, %{status: 202, headers: [], body: ""}}
+
+        "tools/call" ->
+          http_json_response(request, %{"echo" => "http-pong"})
+      end
+    end)
+
+    on_exit(fn -> restore_env(:http_test_req_post, previous_post) end)
+
+    File.mkdir_p!(Path.join(workspace, "plugins/http-mcp"))
+
+    File.write!(
+      Path.join(workspace, "plugins/http-mcp/nex.plugin.json"),
+      Jason.encode!(%{
+        "id" => "workspace:http-mcp",
+        "title" => "HTTP MCP",
+        "source" => "workspace",
+        "contributes" => %{
+          "tools" => [
+            %{
+              "name" => "http__remote",
+              "from" => "mcp:http_mcp/http_echo",
+              "description" => "Remote HTTP MCP echo.",
+              "parameters" => %{
+                "type" => "object",
+                "properties" => %{"text" => %{"type" => "string"}}
+              }
+            }
+          ],
+          "mcpServers" => [
+            %{
+              "id" => "http_mcp",
+              "transport" => "streamable-http",
+              "url" => "https://mcp.example.test/mcp",
+              "headers" => %{"X-Plugin" => "http-mcp"}
+            }
+          ]
+        }
+      })
+    )
+
+    config =
+      config
+      |> Config.to_map()
+      |> Map.put("plugins", %{
+        "enabled" => %{"workspace:demo-echo" => true, "workspace:http-mcp" => true}
+      })
+      |> Config.from_map()
+
+    assert {:ok, snapshot} =
+             Runtime.reload(workspace: workspace, config_loader: fn _ -> config end)
+
+    Registry.reload()
+
+    server_id = ServerManager.plugin_server_id("workspace:http-mcp", "http_mcp")
+    assert server_id in snapshot.plugins.active_mcp_servers
+
+    assert_receive {:streamable_http_post, "https://mcp.example.test/mcp",
+                    %{method: "initialize"}, init_headers}
+
+    assert http_header_value(init_headers, "x-plugin") == "http-mcp"
+    refute http_header_value(init_headers, "mcp-session-id")
+
+    assert_receive {:streamable_http_post, "https://mcp.example.test/mcp",
+                    %{method: "notifications/initialized"}, ready_headers}
+
+    assert http_header_value(ready_headers, "mcp-session-id") == "plugin-sess"
+
+    assert Enum.any?(
+             Registry.definitions(:all, plugin_data: snapshot.plugins, config: config),
+             &(&1["name"] == "http__remote")
+           )
+
+    assert {:ok, %{"echo" => "http-pong"}} =
+             Registry.execute("http__remote", %{"text" => "ping"}, %{
+               workspace: workspace,
+               runtime_snapshot: snapshot,
+               config: config
+             })
+
+    assert_receive {:streamable_http_post, "https://mcp.example.test/mcp",
+                    %{method: "tools/call"}, call_headers}
+
+    assert http_header_value(call_headers, "mcp-session-id") == "plugin-sess"
+  end
+
   test "malformed plugin module contribution does not crash registry", %{
     workspace: workspace,
     config: config
@@ -672,4 +777,30 @@ defmodule Nex.Agent.PluginRuntimePrimitivesTest do
       eventually(fun, attempts - 1)
     end
   end
+
+  defp http_json_response(request, result, opts \\ []) do
+    {:ok,
+     %{
+       status: 200,
+       headers: Keyword.get(opts, :headers, [{"content-type", "application/json"}]),
+       body: %{"jsonrpc" => "2.0", "id" => http_request_id(request), "result" => result}
+     }}
+  end
+
+  defp http_request_method(%{method: method}), do: method
+  defp http_request_method(%{"method" => method}), do: method
+
+  defp http_request_id(%{id: id}), do: id
+  defp http_request_id(%{"id" => id}), do: id
+
+  defp http_header_value(headers, name) do
+    name = String.downcase(name)
+
+    Enum.find_value(headers, fn {key, value} ->
+      if String.downcase(to_string(key)) == name, do: to_string(value)
+    end)
+  end
+
+  defp restore_env(key, nil), do: Application.delete_env(:nex_agent, key)
+  defp restore_env(key, value), do: Application.put_env(:nex_agent, key, value)
 end

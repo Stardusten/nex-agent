@@ -78,8 +78,8 @@ defmodule Nex.Agent.MCPClientTest do
   end
 
   test "unsupported transports fail at the client boundary" do
-    assert {:error, {:unsupported_transport, "streamable-http"}} =
-             MCP.start_link(%{"transport" => "streamable-http", "url" => "http://127.0.0.1/mcp"})
+    assert {:error, {:unsupported_transport, "websocket"}} =
+             MCP.start_link(%{"transport" => "websocket", "url" => "http://127.0.0.1/mcp"})
   end
 
   test "transport is explicit instead of defaulting to stdio" do

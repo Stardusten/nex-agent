@@ -9,10 +9,10 @@ defmodule Nex.Agent.Interface.MCP.Client do
 
   use GenServer
 
-  alias Nex.Agent.Interface.MCP.Transport.Stdio
+  alias Nex.Agent.Interface.MCP.Transport.{Stdio, StreamableHTTP}
 
   @default_timeout 30_000
-  @protocol_version "2024-11-05"
+  @protocol_version "2025-11-25"
 
   defstruct [
     :transport_pid,
@@ -135,16 +135,11 @@ defmodule Nex.Agent.Interface.MCP.Client do
   defp send_request(state, request, from, method) do
     request_id = state.request_id + 1
     request = Map.put(request, :id, request_id)
+    pending_requests = Map.put(state.pending_requests, request_id, %{from: from, method: method})
+    next_state = %{state | request_id: request_id, pending_requests: pending_requests}
 
-    case state.transport_module.send_request(state.transport_pid, request) do
+    case next_state.transport_module.send_request(next_state.transport_pid, request) do
       :ok ->
-        next_state = %{
-          state
-          | request_id: request_id,
-            pending_requests:
-              Map.put(state.pending_requests, request_id, %{from: from, method: method})
-        }
-
         {:noreply, next_state}
 
       {:error, reason} ->
@@ -204,6 +199,7 @@ defmodule Nex.Agent.Interface.MCP.Client do
 
     case transport do
       "stdio" -> {:ok, Stdio, opts}
+      "streamable-http" -> {:ok, StreamableHTTP, opts}
       nil -> {:error, :transport_required}
       other -> {:error, {:unsupported_transport, other}}
     end

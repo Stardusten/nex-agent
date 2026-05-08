@@ -973,6 +973,11 @@ defmodule Nex.Agent.Capability.Tool.Registry do
   defp plugin_ctx_metadata(ctx) do
     %{
       workspace: Map.get(ctx, :workspace) || Map.get(ctx, "workspace") || File.cwd!(),
+      config:
+        Map.get(ctx, :config) || Map.get(ctx, "config") ||
+          runtime_snapshot_config(
+            Map.get(ctx, :runtime_snapshot) || Map.get(ctx, "runtime_snapshot")
+          ),
       session_key: Map.get(ctx, :session_key) || Map.get(ctx, "session_key") || "default",
       channel: Map.get(ctx, :channel) || Map.get(ctx, "channel"),
       chat_id: Map.get(ctx, :chat_id) || Map.get(ctx, "chat_id"),
@@ -988,6 +993,10 @@ defmodule Nex.Agent.Capability.Tool.Registry do
   end
 
   defp mcp_server_from_entry(_entry), do: nil
+
+  defp runtime_snapshot_config(%{config: config}), do: config
+  defp runtime_snapshot_config(%{"config" => config}), do: config
+  defp runtime_snapshot_config(_snapshot), do: nil
 
   defp maybe_register_runtime_tool(tools, name, module) do
     case Map.get(tools, name) do
