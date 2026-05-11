@@ -1178,6 +1178,7 @@ defmodule Nex.Agent.Conversation.InboundWorker do
               cancel_ref: run.cancel_ref,
               workspace: workspace,
               parent_chat_id: Map.get(metadata, "parent_chat_id"),
+              metadata: metadata,
               schedule_memory_refresh: false
             ]
             |> maybe_put_opt(:media, prompt_envelope.attachments)

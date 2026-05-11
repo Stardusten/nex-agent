@@ -16,6 +16,7 @@ defmodule Nex.Agent.Channel.Feishu.StreamConverter do
     :instance_id,
     :chat_id,
     :metadata,
+    :active_message_id,
     :active_card_id,
     :active_sequence,
     active_text: "",
@@ -27,6 +28,7 @@ defmodule Nex.Agent.Channel.Feishu.StreamConverter do
           chat_id: String.t(),
           instance_id: String.t(),
           metadata: map(),
+          active_message_id: String.t() | nil,
           active_card_id: String.t() | nil,
           active_sequence: pos_integer() | nil,
           active_text: String.t(),
@@ -116,6 +118,30 @@ defmodule Nex.Agent.Channel.Feishu.StreamConverter do
         end
     end
   end
+
+  @doc "Close and clear the current card so control-lane actions do not get merged with later text."
+  @spec seal_before_action(t()) :: {:ok, t()}
+  def seal_before_action(%__MODULE__{} = state) do
+    if placeholder_card?(state) do
+      delete_active_message(state)
+    else
+      close_active_card(state)
+    end
+
+    {:ok,
+     %{
+       state
+       | active_message_id: nil,
+         active_card_id: nil,
+         active_sequence: nil,
+         active_text: ""
+     }}
+  end
+
+  defp placeholder_card?(%__MODULE__{active_text: @placeholder_text, active_sequence: 1}),
+    do: true
+
+  defp placeholder_card?(%__MODULE__{}), do: false
 
   # ── consume: split by <newmsg/> and process each segment ──────────────
 
@@ -227,7 +253,8 @@ defmodule Nex.Agent.Channel.Feishu.StreamConverter do
     {:ok,
      %{
        state
-       | active_card_id: nil,
+       | active_message_id: nil,
+         active_card_id: nil,
          active_sequence: nil,
          active_text: ""
      }}
@@ -239,14 +266,15 @@ defmodule Nex.Agent.Channel.Feishu.StreamConverter do
       "open_card content_len=#{byte_size(content)} preview=#{inspect(String.slice(content, 0, 80))}"
     )
 
-    with {:ok, %{card_id: card_id}} <-
+    with {:ok, %{message_id: message_id, card_id: card_id}} <-
            Feishu.open_stream_card(state.instance_id, state.chat_id, content, state.metadata) do
-      trace(state, "open_card_done card_id=#{card_id}")
+      trace(state, "open_card_done message_id=#{message_id} card_id=#{card_id}")
 
       {:ok,
        %{
          state
-         | active_card_id: card_id,
+         | active_message_id: message_id,
+           active_card_id: card_id,
            active_sequence: 1,
            active_text: content
        }}
@@ -290,6 +318,27 @@ defmodule Nex.Agent.Channel.Feishu.StreamConverter do
         )
 
         :ok
+    end
+  end
+
+  defp delete_active_message(%__MODULE__{active_message_id: nil} = state) do
+    close_active_card(state)
+  end
+
+  defp delete_active_message(%__MODULE__{active_message_id: message_id} = state) do
+    trace(state, "delete_placeholder_message message_id=#{inspect(message_id)}")
+
+    case Feishu.delete_message(state.instance_id, message_id) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        trace(
+          state,
+          "delete_placeholder_message_failed message_id=#{inspect(message_id)} reason=#{inspect(reason)}"
+        )
+
+        close_active_card(state)
     end
   end
 

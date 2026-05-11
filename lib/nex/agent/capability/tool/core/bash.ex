@@ -319,7 +319,11 @@ defmodule Nex.Agent.Capability.Tool.Core.Bash do
   end
 
   defp actor_from_ctx(ctx) do
-    case Map.get(ctx, :user_id) || Map.get(ctx, "user_id") || Map.get(ctx, :actor) do
+    metadata = Map.get(ctx, :metadata) || Map.get(ctx, "metadata") || %{}
+
+    case Map.get(ctx, :user_id) || Map.get(ctx, "user_id") ||
+           Map.get(metadata, "user_id") || Map.get(metadata, :user_id) ||
+           Map.get(ctx, :actor) do
       nil -> nil
       %{} = value -> value
       value -> %{"id" => to_string(value)}

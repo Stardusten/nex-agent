@@ -1926,14 +1926,25 @@ defmodule Nex.Agent.Turn.Runner do
     runtime_snapshot = Keyword.get(opts, :runtime_snapshot)
     runtime_config = runtime_snapshot && runtime_snapshot.config
     channel = Keyword.get(opts, :channel)
+    chat_id = Keyword.get(opts, :chat_id)
+    metadata = Keyword.get(opts, :metadata, %{})
+    user_id = metadata_actor_id(metadata)
+
+    sender_id =
+      metadata_value(metadata, "sender_id") ||
+        metadata_value(metadata, :sender_id) ||
+        user_id
 
     %{
       channel: channel,
       channel_type: runtime_config && Config.channel_type(runtime_config, channel),
-      chat_id: Keyword.get(opts, :chat_id),
+      chat_id: chat_id,
       parent_chat_id: hook_parent_chat_id(opts),
       session_key: Keyword.get(opts, :session_key),
       run_id: Keyword.get(opts, :run_id),
+      user_id: user_id,
+      sender_id: sender_id,
+      actor: actor_from_metadata(metadata, channel, chat_id),
       cancel_ref: Keyword.get(opts, :cancel_ref),
       tools_filter: Keyword.get(opts, :tools_filter),
       provider: Keyword.get(opts, :provider),
@@ -1950,11 +1961,34 @@ defmodule Nex.Agent.Turn.Runner do
       runtime_snapshot: runtime_snapshot,
       stream_sink: Keyword.get(opts, :stream_sink),
       project: Keyword.get(opts, :project),
-      metadata: Keyword.get(opts, :metadata, %{}),
+      metadata: metadata,
       llm_stream_client: Keyword.get(opts, :llm_stream_client),
       req_llm_stream_text_fun: Keyword.get(opts, :req_llm_stream_text_fun),
       llm_call_fun: Keyword.get(opts, :llm_call_fun)
     }
+  end
+
+  defp metadata_actor_id(metadata) do
+    metadata_value(metadata, "user_id") ||
+      metadata_value(metadata, :user_id) ||
+      metadata_value(metadata, "sender_id") ||
+      metadata_value(metadata, :sender_id)
+  end
+
+  defp actor_from_metadata(metadata, channel, chat_id) do
+    user_id = metadata_actor_id(metadata)
+
+    if is_binary(user_id) and user_id != "" do
+      %{
+        "user_id" => user_id,
+        "sender_id" =>
+          metadata_value(metadata, "sender_id") || metadata_value(metadata, :sender_id) || user_id,
+        "channel" => channel,
+        "chat_id" => chat_id
+      }
+      |> Enum.reject(fn {_key, value} -> is_nil(value) or value == "" end)
+      |> Map.new()
+    end
   end
 
   defp tool_registry_resolution_opts(opts, filter) do

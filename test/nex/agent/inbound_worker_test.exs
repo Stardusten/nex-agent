@@ -667,7 +667,7 @@ defmodule Nex.Agent.Conversation.InboundWorkerTest do
     })
 
     assert_receive {:prompt_opts, "hello", "123", metadata}, 1_000
-    assert is_nil(metadata)
+    assert metadata["parent_chat_id"] == "123"
   end
 
   test "inbound worker creates new agents through configured agent_start_fun", %{

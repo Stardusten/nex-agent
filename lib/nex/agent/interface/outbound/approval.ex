@@ -26,6 +26,8 @@ defmodule Nex.Agent.Interface.Outbound.Approval do
 
   @spec metadata(Request.t()) :: map()
   def metadata(%Request{} = request) do
+    buttons_allowed? = not is_nil(request.authorized_actor)
+
     %{
       @metadata_key => %{
         "type" => "approval_request",
@@ -38,8 +40,12 @@ defmodule Nex.Agent.Interface.Outbound.Approval do
         "risk_class" => Map.get(request.metadata, "risk_class"),
         "risk_hint" => Map.get(request.metadata, "risk_hint"),
         "recommended_rule" => recommended_rule_metadata(request),
+        "authorized_actor" => request.authorized_actor,
+        "buttons_allowed" => buttons_allowed?,
         "actions" => actions(request)
       },
+      "approval_authorized_actor" => request.authorized_actor,
+      "approval_buttons_allowed" => buttons_allowed?,
       "_approval_request_id" => request.id
     }
   end
@@ -58,7 +64,33 @@ defmodule Nex.Agent.Interface.Outbound.Approval do
   @spec approval_request?(map() | nil) :: boolean()
   def approval_request?(metadata), do: is_map(request(metadata))
 
+  @spec buttons_allowed?(Request.t() | map() | nil) :: boolean()
+  def buttons_allowed?(%Request{authorized_actor: actor}), do: not is_nil(actor)
+
+  def buttons_allowed?(metadata) when is_map(metadata) do
+    case request(metadata) do
+      %{"buttons_allowed" => true} ->
+        true
+
+      %{"buttons_allowed" => "true"} ->
+        true
+
+      _request ->
+        Map.get(metadata, "approval_buttons_allowed") == true or
+          Map.get(metadata, :approval_buttons_allowed) == true
+    end
+  end
+
+  def buttons_allowed?(_metadata), do: false
+
   @spec actions(Request.t()) :: [action()]
+  def actions(%Request{kind: :runtime_env} = request) do
+    rule_actions(request) ++
+      [
+        action("deny_once", "Decline", "/deny #{request.id}", "danger")
+      ]
+  end
+
   def actions(%Request{} = request) do
     maybe_once_action(request) ++
       rule_actions(request) ++

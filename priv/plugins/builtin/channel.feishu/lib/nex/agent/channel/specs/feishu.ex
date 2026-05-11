@@ -4,9 +4,11 @@ defmodule Nex.Agent.Interface.Channel.Specs.Feishu do
   @behaviour Nex.Agent.Interface.Channel.Spec
   require Logger
 
+  alias Nex.Agent.Channel.Feishu
   alias Nex.Agent.Channel.Feishu.StreamConverter
   alias Nex.Agent.Channel.Feishu.StreamState
   alias Nex.Agent.Interface.Outbound.Action, as: OutboundAction
+  alias Nex.Agent.Interface.Outbound.Approval, as: OutboundApproval
 
   @stream_flush_ms 500
   @impl true
@@ -179,21 +181,96 @@ defmodule Nex.Agent.Interface.Channel.Specs.Feishu do
   defp handle_action_event(%StreamState{} = stream_state, payload, opts) do
     fallback = OutboundAction.fallback_content(payload)
 
-    if fallback == "" do
-      {:ok, stream_state}
-    else
-      stream_state
-      |> cancel_flush()
-      |> flush_stream()
-      |> case do
-        {:ok, flushed} ->
-          handle_stream_event(flushed, {:text, "\n" <> fallback <> "\n"}, opts)
+    cond do
+      fallback == "" ->
+        {:ok, stream_state}
 
-        error ->
-          error
-      end
+      approval_payload?(payload) ->
+        send_approval_card_or_fallback(stream_state, payload, fallback, opts)
+
+      true ->
+        append_action_fallback(stream_state, fallback, opts)
     end
   end
+
+  defp send_approval_card_or_fallback(%StreamState{} = stream_state, payload, fallback, opts) do
+    case stream_state |> cancel_flush() |> flush_stream() do
+      {:ok, flushed} ->
+        metadata = action_metadata(payload)
+
+        with {:ok, sealed_converter} <- StreamConverter.seal_before_action(flushed.converter) do
+          sealed = %{
+            flushed
+            | converter: sealed_converter,
+              pending_text: "",
+              flush_timer_ref: nil
+          }
+
+          case send_approval_card(sealed, fallback, metadata) do
+            :ok ->
+              {:ok, sealed}
+
+            {:error, reason} ->
+              feishu_stream_trace(
+                sealed,
+                "approval_card_send_failed reason=#{inspect(reason)} fallback_to_text=true"
+              )
+
+              handle_stream_event(sealed, {:text, "\n" <> fallback <> "\n"}, opts)
+          end
+        end
+
+      error ->
+        error
+    end
+  end
+
+  defp append_action_fallback(%StreamState{} = stream_state, fallback, opts) do
+    stream_state
+    |> cancel_flush()
+    |> flush_stream()
+    |> case do
+      {:ok, flushed} ->
+        with {:ok, sealed_converter} <- StreamConverter.seal_before_action(flushed.converter) do
+          sealed = %{
+            flushed
+            | converter: sealed_converter,
+              pending_text: "",
+              flush_timer_ref: nil
+          }
+
+          handle_stream_event(sealed, {:text, "\n" <> fallback <> "\n"}, opts)
+        end
+
+      error ->
+        error
+    end
+  end
+
+  defp approval_payload?(payload) do
+    payload
+    |> action_metadata()
+    |> OutboundApproval.approval_request?()
+  end
+
+  defp action_metadata(%{metadata: metadata}) when is_map(metadata), do: metadata
+  defp action_metadata(%{"metadata" => metadata}) when is_map(metadata), do: metadata
+  defp action_metadata(_payload), do: %{}
+
+  defp send_approval_card(
+         %StreamState{converter: %{instance_id: instance_id, chat_id: chat_id}},
+         fallback,
+         metadata
+       )
+       when is_binary(instance_id) and is_binary(chat_id) do
+    case Feishu.send_card(instance_id, chat_id, fallback, metadata) do
+      {:ok, _message_id} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp send_approval_card(_stream_state, _fallback, _metadata),
+    do: {:error, :missing_stream_route}
 
   @impl true
   def handle_stream_timer(%StreamState{} = stream_state, :flush, _opts) do

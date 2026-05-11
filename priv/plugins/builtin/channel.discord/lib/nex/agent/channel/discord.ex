@@ -738,6 +738,7 @@ defmodule Nex.Agent.Channel.Discord do
         channel: state.instance_id,
         chat_id: to_string(channel_id),
         sender_id: to_string(author_id),
+        user_id: to_string(author_id),
         text: raw,
         command: %Invocation{name: name, args: args, raw: raw, source: :native},
         message_type: :text,
@@ -745,6 +746,7 @@ defmodule Nex.Agent.Channel.Discord do
         metadata: %{
           "channel_type" => "discord",
           "guild_id" => guild_id,
+          "user_id" => author_id,
           "application_id" => Map.get(data, "application_id"),
           "interaction_id" => Map.get(data, "id"),
           "interaction_token" => Map.get(data, "token"),
@@ -777,7 +779,7 @@ defmodule Nex.Agent.Channel.Discord do
     case OutboundApproval.custom_id_parts(custom_id) do
       {:ok, %{request_id: request_id, action_id: action_id}} ->
         state = register_interaction_approval_message(data, request_id, state)
-        _ = resolve_approval_component(request_id, action_id, data)
+        _ = resolve_approval_component(request_id, action_id, data, state)
         state
 
       :error ->
@@ -825,8 +827,8 @@ defmodule Nex.Agent.Channel.Discord do
     end
   end
 
-  defp resolve_approval_component(request_id, action_id, data) do
-    actor = approval_actor_from_interaction(data)
+  defp resolve_approval_component(request_id, action_id, data, state) do
+    actor = approval_actor_from_interaction(data, state)
 
     case OutboundApproval.choice_for_action(action_id) do
       {:approve, choice} ->
@@ -848,12 +850,16 @@ defmodule Nex.Agent.Channel.Discord do
     end
   end
 
-  defp approval_actor_from_interaction(data) do
+  defp approval_actor_from_interaction(data, state) do
+    user_id = get_in(data, ["member", "user", "id"]) || get_in(data, ["user", "id"])
+
     %{
-      "sender_id" => get_in(data, ["member", "user", "id"]) || get_in(data, ["user", "id"]),
+      "sender_id" => user_id,
+      "user_id" => user_id,
       "username" =>
         get_in(data, ["member", "user", "username"]) || get_in(data, ["user", "username"]),
-      "channel" => Map.get(data, "channel_id")
+      "channel" => state.instance_id,
+      "chat_id" => Map.get(data, "channel_id")
     }
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
     |> Map.new()
@@ -871,6 +877,7 @@ defmodule Nex.Agent.Channel.Discord do
         channel: state.instance_id,
         chat_id: to_string(channel_id),
         sender_id: to_string(author_id),
+        user_id: to_string(author_id),
         text: invocation.raw,
         command: invocation,
         message_type: :text,
@@ -878,6 +885,7 @@ defmodule Nex.Agent.Channel.Discord do
         metadata: %{
           "channel_type" => "discord",
           "guild_id" => guild_id,
+          "user_id" => author_id,
           "application_id" => Map.get(data, "application_id"),
           "interaction_id" => Map.get(data, "id"),
           "interaction_token" => Map.get(data, "token"),
@@ -960,6 +968,7 @@ defmodule Nex.Agent.Channel.Discord do
         "guild_id" => Map.get(data, "guild_id"),
         "message_id" => Map.get(data, "id"),
         "origin_channel_id" => origin_channel_id,
+        "user_id" => to_string(author_id),
         "username" => get_in(data, ["author", "username"])
       }
       |> maybe_put_metadata("parent_chat_id", parent_chat_id)
@@ -968,6 +977,7 @@ defmodule Nex.Agent.Channel.Discord do
       channel: state.instance_id,
       chat_id: to_string(chat_id),
       sender_id: to_string(author_id),
+      user_id: to_string(author_id),
       text: content,
       message_type: :text,
       raw: data,
@@ -1233,8 +1243,13 @@ defmodule Nex.Agent.Channel.Discord do
     do: %{"content" => to_string(content || ""), "embeds" => []}
 
   defp render_discord_action_body(content, metadata) when is_map(metadata) do
-    render_discord_approval_body(content, metadata) ||
-      render_discord_generic_action_body(metadata)
+    if OutboundApproval.approval_request?(metadata) and
+         not OutboundApproval.buttons_allowed?(metadata) do
+      nil
+    else
+      render_discord_approval_body(content, metadata) ||
+        render_discord_generic_action_body(metadata)
+    end
   end
 
   defp render_discord_action_body(_content, _metadata), do: nil
@@ -1251,7 +1266,8 @@ defmodule Nex.Agent.Channel.Discord do
           |> Enum.map(&discord_approval_button(request_id, &1))
           |> Enum.reject(&is_nil/1)
 
-        if is_binary(request_id) and buttons != [] do
+        if OutboundApproval.buttons_allowed?(metadata) and is_binary(request_id) and
+             buttons != [] do
           %{
             "flags" => @components_v2_flag,
             "components" =>

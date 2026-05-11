@@ -18,7 +18,9 @@ defmodule Nex.Agent.Channel.Feishu do
   alias Nex.Agent.Interface.Inbound.Envelope
   alias Nex.Agent.Interface.IMIR.Text, as: IMText
   alias Nex.Agent.Interface.Media.{Hydrator, Ref}
+  alias Nex.Agent.Interface.Outbound.Approval, as: OutboundApproval
   alias Nex.Agent.Interface.Outbound.Message, as: OutboundMessage
+  alias Nex.Agent.Sandbox.Approval
   alias Nex.Agent.Sandbox.FileSystem
 
   @feishu_api "https://open.feishu.cn/open-apis"
@@ -38,6 +40,8 @@ defmodule Nex.Agent.Channel.Feishu do
     :allow_from,
     :enabled,
     :http_post_fun,
+    :http_patch_fun,
+    :http_delete_fun,
     :http_put_fun,
     :http_post_multipart_fun,
     :http_get_fun,
@@ -50,7 +54,8 @@ defmodule Nex.Agent.Channel.Feishu do
     :ws_ping_timer,
     :ws_service_id,
     ws_pending_fragments: %{},
-    processed_message_ids: []
+    processed_message_ids: [],
+    approval_messages: %{}
   ]
 
   @type t :: %__MODULE__{
@@ -62,6 +67,8 @@ defmodule Nex.Agent.Channel.Feishu do
           allow_from: [String.t()],
           enabled: boolean(),
           http_post_fun: (String.t(), map(), keyword() -> {:ok, map()} | {:error, term()}),
+          http_patch_fun: (String.t(), map(), keyword() -> {:ok, map()} | {:error, term()}),
+          http_delete_fun: (String.t(), keyword() -> {:ok, map()} | {:error, term()}),
           http_put_fun: (String.t(), map(), keyword() -> {:ok, map()} | {:error, term()}),
           http_post_multipart_fun: (String.t(), keyword(), keyword() ->
                                       {:ok, map()} | {:error, term()}),
@@ -75,7 +82,8 @@ defmodule Nex.Agent.Channel.Feishu do
           ws_ping_timer: reference() | nil,
           ws_service_id: integer() | nil,
           ws_pending_fragments: map(),
-          processed_message_ids: [String.t()]
+          processed_message_ids: [String.t()],
+          approval_messages: %{optional(String.t()) => map()}
         }
 
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -177,6 +185,15 @@ defmodule Nex.Agent.Channel.Feishu do
     end
   end
 
+  @doc "Delete a Feishu message by message_id."
+  @spec delete_message(String.t(), String.t()) :: :ok | {:error, term()}
+  def delete_message(instance_id, message_id) do
+    case Nex.Agent.Interface.Channel.Registry.whereis(instance_id) do
+      nil -> {:error, :feishu_not_running}
+      pid -> GenServer.call(pid, {:delete_message, message_id}, 15_000)
+    end
+  end
+
   defp feishu_stream_trace(metadata, message) when is_map(metadata) do
     trace_id = Map.get(metadata, "_feishu_stream_trace_id")
     started_at_ms = Map.get(metadata, "_feishu_stream_started_at_ms")
@@ -246,6 +263,8 @@ defmodule Nex.Agent.Channel.Feishu do
       allow_from: normalize_allow_from(feishu["allow_from"]),
       enabled: Map.get(feishu, "enabled", false) == true,
       http_post_fun: Keyword.get(opts, :http_post_fun, &default_http_post/3),
+      http_patch_fun: Keyword.get(opts, :http_patch_fun, &default_http_patch/3),
+      http_delete_fun: Keyword.get(opts, :http_delete_fun, &default_http_delete/2),
       http_put_fun: Keyword.get(opts, :http_put_fun, &default_http_put/3),
       http_post_multipart_fun:
         Keyword.get(opts, :http_post_multipart_fun, &default_http_post_multipart/3),
@@ -259,11 +278,13 @@ defmodule Nex.Agent.Channel.Feishu do
       ws_ping_timer: nil,
       ws_service_id: nil,
       ws_pending_fragments: %{},
-      processed_message_ids: []
+      processed_message_ids: [],
+      approval_messages: %{}
     }
 
     Bus.subscribe(Nex.Agent.Interface.Outbound.topic_for_channel(instance_id))
     Bus.subscribe(:task_complete)
+    Bus.subscribe(:sandbox_approval_resolved)
 
     state =
       if state.enabled do
@@ -380,15 +401,21 @@ defmodule Nex.Agent.Channel.Feishu do
 
   @impl true
   def handle_call({:ingest_event, payload}, _from, state) do
-    case normalize_event(payload, state.instance_id) do
-      {:challenge, challenge} ->
-        {:reply, {:ok, %{"challenge" => challenge}}, state}
-
-      {:ok, inbound} ->
-        {:reply, :ok, process_inbound_message(inbound, state)}
+    case maybe_handle_card_action_payload(payload, state) do
+      {:handled, new_state} ->
+        {:reply, :ok, new_state}
 
       :ignore ->
-        {:reply, :ok, state}
+        case normalize_event(payload, state.instance_id) do
+          {:challenge, challenge} ->
+            {:reply, {:ok, %{"challenge" => challenge}}, state}
+
+          {:ok, inbound} ->
+            {:reply, :ok, process_inbound_message(inbound, state)}
+
+          :ignore ->
+            {:reply, :ok, state}
+        end
     end
   end
 
@@ -412,6 +439,18 @@ defmodule Nex.Agent.Channel.Feishu do
 
       {:error, reason, new_state} ->
         Logger.warning("[Feishu] CardKit close_streaming_mode failed: #{inspect(reason)}")
+        {:reply, {:error, reason}, new_state}
+    end
+  end
+
+  @impl true
+  def handle_call({:delete_message, message_id}, _from, state) do
+    case do_delete_message(message_id, state) do
+      {:ok, new_state} ->
+        {:reply, :ok, new_state}
+
+      {:error, reason, new_state} ->
+        Logger.warning("[Feishu] message delete failed: #{inspect(reason)}")
         {:reply, {:error, reason}, new_state}
     end
   end
@@ -452,6 +491,23 @@ defmodule Nex.Agent.Channel.Feishu do
       end
     end
 
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info({:bus_message, :sandbox_approval_resolved, payload}, state)
+      when is_map(payload) do
+    state =
+      if approval_resolution_for_channel?(payload, state.instance_id) do
+        update_resolved_approval_message(payload, state)
+      else
+        state
+      end
+
+    {:noreply, state}
+  end
+
+  def handle_info({:bus_message, :sandbox_approval_resolved, _payload}, state) do
     {:noreply, state}
   end
 
@@ -728,22 +784,216 @@ defmodule Nex.Agent.Channel.Feishu do
   defp handle_ws_event_payload(payload, state) do
     Logger.info("[Feishu] WS event payload=#{inspect(payload, limit: 500, printable_limit: 500)}")
 
-    case normalize_event(payload, state.instance_id) do
-      {:ok, inbound} ->
-        Logger.info(
-          "[Feishu] Inbound sender=#{inbound.sender_id} chat=#{inbound.chat_id} content=#{inspect(inbound.text)}"
-        )
-
-        process_inbound_message(inbound, state)
+    case maybe_handle_card_action_payload(payload, state) do
+      {:handled, new_state} ->
+        new_state
 
       :ignore ->
-        Logger.debug("[Feishu] Event ignored keys=#{inspect(Map.keys(payload))}")
-        state
+        case normalize_event(payload, state.instance_id) do
+          {:ok, inbound} ->
+            Logger.info(
+              "[Feishu] Inbound sender=#{inbound.sender_id} chat=#{inbound.chat_id} content=#{inspect(inbound.text)}"
+            )
 
-      {:challenge, _} ->
-        state
+            process_inbound_message(inbound, state)
+
+          :ignore ->
+            Logger.debug("[Feishu] Event ignored keys=#{inspect(Map.keys(payload))}")
+            state
+
+          {:challenge, _} ->
+            state
+        end
     end
   end
+
+  defp maybe_handle_card_action_payload(payload, state) when is_map(payload) do
+    case approval_card_action(payload, state.instance_id) do
+      {:ok, action} ->
+        if card_action_allowed?(action, state) do
+          state = register_card_action_approval_message(action, state)
+          _result = resolve_approval_card_action(action)
+          {:handled, state}
+        else
+          Logger.warning(
+            "[Feishu] approval card action denied sender=#{inspect(action.sender_id)} chat=#{inspect(action.chat_id)}"
+          )
+
+          {:handled, state}
+        end
+
+      :ignore ->
+        :ignore
+    end
+  end
+
+  defp maybe_handle_card_action_payload(_payload, _state), do: :ignore
+
+  defp approval_card_action(payload, instance_id) do
+    event = map_get(payload, "event") || payload
+    action = map_get(event, "action") || map_get(payload, "action")
+    value = action |> map_get("value") |> normalize_card_action_value()
+
+    with {:ok, request_id, action_id} <- approval_card_action_ids(value) do
+      operator = map_get(event, "operator") || map_get(payload, "operator") || %{}
+      context = map_get(event, "context") || %{}
+      sender_id = card_action_sender_id(operator, value)
+      chat_id = card_action_chat_id(context, value)
+      message_id = card_action_message_id(event, context, value)
+
+      {:ok,
+       %{
+         request_id: request_id,
+         action_id: action_id,
+         sender_id: sender_id,
+         chat_id: chat_id,
+         message_id: message_id,
+         actor:
+           %{
+             "sender_id" => sender_id,
+             "user_id" => sender_id,
+             "channel" => instance_id,
+             "chat_id" => chat_id
+           }
+           |> Enum.reject(fn {_key, value} -> is_nil(value) or value == "" end)
+           |> Map.new()
+       }}
+    else
+      :error -> :ignore
+    end
+  end
+
+  defp approval_card_action_ids(value) when is_map(value) do
+    custom_id = map_get(value, "custom_id") || map_get(value, "nex_custom_id")
+
+    case OutboundApproval.custom_id_parts(custom_id) do
+      {:ok, %{request_id: request_id, action_id: action_id}} ->
+        {:ok, request_id, action_id}
+
+      :error ->
+        request_id = map_get(value, "request_id")
+        action_id = map_get(value, "action_id")
+
+        if present_string?(request_id) and valid_approval_action?(action_id) do
+          {:ok, request_id, action_id}
+        else
+          :error
+        end
+    end
+  end
+
+  defp approval_card_action_ids(_value), do: :error
+
+  defp valid_approval_action?(action_id) when is_binary(action_id) do
+    OutboundApproval.choice_for_action(action_id) != :error
+  end
+
+  defp valid_approval_action?(_action_id), do: false
+
+  defp normalize_card_action_value(value) when is_binary(value) do
+    case Jason.decode(value) do
+      {:ok, %{} = decoded} -> stringify_keys(decoded)
+      _ -> %{}
+    end
+  end
+
+  defp normalize_card_action_value(value) when is_map(value), do: stringify_keys(value)
+  defp normalize_card_action_value(_value), do: %{}
+
+  defp card_action_sender_id(operator, value) do
+    operator_id = map_get(operator, "operator_id") || map_get(operator, "user_id") || %{}
+
+    [
+      map_get(operator_id, "open_id"),
+      map_get(operator, "open_id"),
+      map_get(operator_id, "user_id"),
+      map_get(operator, "user_id"),
+      map_get(value, "sender_id")
+    ]
+    |> first_present_string()
+  end
+
+  defp card_action_chat_id(context, value) do
+    [
+      map_get(context, "open_chat_id"),
+      map_get(context, "chat_id"),
+      map_get(value, "chat_id")
+    ]
+    |> first_present_string()
+  end
+
+  defp card_action_message_id(event, context, value) do
+    [
+      map_get(context, "open_message_id"),
+      map_get(context, "message_id"),
+      map_get(event, "open_message_id"),
+      map_get(event, "message_id"),
+      map_get(value, "message_id")
+    ]
+    |> first_present_string()
+  end
+
+  defp card_action_allowed?(action, state) do
+    allowed?(action.sender_id, state.allow_from) or allowed?(action.chat_id, state.allow_from)
+  end
+
+  defp resolve_approval_card_action(%{request_id: request_id, action_id: action_id, actor: actor}) do
+    case OutboundApproval.choice_for_action(action_id) do
+      {:approve, choice} ->
+        if Process.whereis(Approval) do
+          Approval.approve_request(request_id, choice, authorized_actor: actor)
+        else
+          {:error, :approval_unavailable}
+        end
+
+      {:deny, choice} ->
+        if Process.whereis(Approval) do
+          Approval.deny_request(request_id, choice, authorized_actor: actor)
+        else
+          {:error, :approval_unavailable}
+        end
+
+      :error ->
+        {:error, :unknown_approval_action}
+    end
+  end
+
+  defp register_card_action_approval_message(
+         %{request_id: request_id, chat_id: chat_id, message_id: message_id},
+         state
+       )
+       when is_binary(request_id) and request_id != "" and is_binary(message_id) and
+              message_id != "" do
+    register_approval_message_in_state(
+      state,
+      request_id,
+      chat_id,
+      message_id,
+      "Approval request",
+      %{"_approval_request_id" => request_id}
+    )
+  end
+
+  defp register_card_action_approval_message(_action, state), do: state
+
+  defp map_get(map, key) when is_map(map),
+    do: Map.get(map, key) || Map.get(map, String.to_atom(key))
+
+  defp map_get(_map, _key), do: nil
+
+  defp first_present_string(values) do
+    Enum.find_value(values, fn
+      value when is_binary(value) ->
+        value = String.trim(value)
+        if value == "", do: nil, else: value
+
+      _ ->
+        nil
+    end)
+  end
+
+  defp present_string?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present_string?(_value), do: false
 
   defp schedule_ws_ping(%{ws_ping_interval: nil} = state), do: state
 
@@ -1559,7 +1809,7 @@ defmodule Nex.Agent.Channel.Feishu do
       {:error, :not_configured, state}
     else
       payload = %{metadata: metadata}
-      card = CardBuilder.to_interactive_content(content)
+      card = CardBuilder.to_interactive_content(content, metadata: metadata, chat_id: chat_id)
 
       with {:ok, token, state} <- get_tenant_access_token(state),
            {:ok, receive_id_type} <- outbound_receive_id_type(payload, chat_id),
@@ -1577,6 +1827,7 @@ defmodule Nex.Agent.Channel.Feishu do
         message_id =
           get_in(body, ["data", "message_id"]) || ""
 
+        state = maybe_register_approval_message(state, chat_id, message_id, content, metadata)
         {:ok, message_id, state}
       else
         {:error, reason} -> {:error, reason, state}
@@ -1592,6 +1843,8 @@ defmodule Nex.Agent.Channel.Feishu do
 
       card =
         CardBuilder.to_interactive_content(content,
+          metadata: metadata,
+          chat_id: chat_id,
           streaming_mode: true,
           single_markdown?: true,
           element_id: "content"
@@ -1621,11 +1874,12 @@ defmodule Nex.Agent.Channel.Feishu do
   end
 
   defp send_inline_card(payload, chat_id, content, state) do
-    card = CardBuilder.to_interactive_content(content)
+    metadata = Map.get(payload, :metadata) || Map.get(payload, "metadata") || %{}
+    card = CardBuilder.to_interactive_content(content, metadata: metadata, chat_id: chat_id)
 
     with {:ok, token, state} <- get_tenant_access_token(state),
          {:ok, receive_id_type} <- outbound_receive_id_type(payload, chat_id),
-         {:ok, _body} <-
+         {:ok, body} <-
            feishu_post(
              state,
              "/im/v1/messages?receive_id_type=#{receive_id_type}",
@@ -1636,11 +1890,197 @@ defmodule Nex.Agent.Channel.Feishu do
              },
              [{"Authorization", "Bearer #{token}"}]
            ) do
-      {:ok, state}
+      message_id = get_in(body, ["data", "message_id"]) || ""
+      {:ok, maybe_register_approval_message(state, chat_id, message_id, content, metadata)}
     else
       {:error, reason} -> {:error, reason, state}
     end
   end
+
+  defp maybe_register_approval_message(state, chat_id, message_id, _content, metadata) do
+    case OutboundApproval.request(metadata) do
+      %{"request_id" => request_id} = request
+      when is_binary(request_id) and request_id != "" ->
+        register_approval_message_in_state(
+          state,
+          request_id,
+          chat_id,
+          message_id,
+          approval_row_content(request, :pending),
+          metadata
+        )
+
+      _ ->
+        state
+    end
+  end
+
+  defp register_approval_message_in_state(
+         state,
+         request_id,
+         chat_id,
+         message_id,
+         content,
+         metadata
+       ) do
+    if is_binary(request_id) and request_id != "" and is_binary(message_id) and message_id != "" do
+      record = %{
+        chat_id: to_string(chat_id || ""),
+        message_id: message_id,
+        content: to_string(content || ""),
+        metadata: metadata || %{}
+      }
+
+      %{state | approval_messages: Map.put(state.approval_messages, request_id, record)}
+    else
+      state
+    end
+  end
+
+  defp approval_resolution_for_channel?(payload, instance_id) do
+    channel = Map.get(payload, :channel) || Map.get(payload, "channel")
+    is_nil(channel) or channel == instance_id
+  end
+
+  defp update_resolved_approval_message(payload, state) do
+    request_id = Map.get(payload, :request_id) || Map.get(payload, "request_id")
+
+    case Map.get(state.approval_messages, request_id) do
+      nil ->
+        state
+
+      record ->
+        status =
+          normalize_approval_status(Map.get(payload, :status) || Map.get(payload, "status"))
+
+        choice =
+          normalize_approval_choice(Map.get(payload, :choice) || Map.get(payload, "choice"))
+
+        request = Map.get(payload, :request) || Map.get(payload, "request")
+        content = approval_row_content(request || record.metadata, status, choice, record.content)
+
+        case do_update_message_card(record.message_id, content, state) do
+          {:ok, new_state} ->
+            %{new_state | approval_messages: Map.delete(new_state.approval_messages, request_id)}
+
+          {:error, reason, new_state} ->
+            Logger.warning("[Feishu] approval card update failed: #{inspect(reason)}")
+            new_state
+        end
+    end
+  end
+
+  defp do_update_message_card(message_id, content, state) do
+    if not state.enabled or state.app_id == "" or state.app_secret == "" do
+      {:error, :not_configured, state}
+    else
+      card = CardBuilder.to_interactive_content(content, metadata: %{}, update_multi?: true)
+
+      with {:ok, token, state} <- get_tenant_access_token(state),
+           {:ok, _body} <-
+             feishu_patch(
+               state,
+               "/im/v1/messages/#{message_id}",
+               %{"content" => Jason.encode!(card)},
+               [{"Authorization", "Bearer #{token}"}]
+             ) do
+        {:ok, state}
+      else
+        {:error, reason} -> {:error, reason, state}
+      end
+    end
+  end
+
+  defp approval_row_content(request, :pending) do
+    approval_row_base(request) <> " _(Waiting approval)_"
+  end
+
+  defp approval_row_content(request, status, choice, fallback) do
+    base =
+      case approval_row_base(request) do
+        "" -> strip_approval_status(fallback)
+        value -> value
+      end
+
+    "#{base} _(#{OutboundApproval.status_label(status, choice)})_"
+  end
+
+  defp approval_row_base(%Nex.Agent.Sandbox.Approval.Request{kind: :command, subject: subject}) do
+    "⚙️ Bash - " <> approval_subject(subject)
+  end
+
+  defp approval_row_base(%Nex.Agent.Sandbox.Approval.Request{description: description}) do
+    "🔐 Approval - " <> approval_subject(description)
+  end
+
+  defp approval_row_base(%{} = request) do
+    request = OutboundApproval.request(request) || stringify_keys(request)
+    kind = Map.get(request, "kind")
+    subject = Map.get(request, "subject")
+    description = Map.get(request, "description")
+
+    cond do
+      kind == "command" and is_binary(subject) and subject != "" ->
+        "⚙️ Bash - " <> approval_subject(subject)
+
+      is_binary(description) and description != "" ->
+        "🔐 Approval - " <> approval_subject(description)
+
+      true ->
+        ""
+    end
+  end
+
+  defp approval_row_base(_request), do: ""
+
+  defp approval_subject(subject) do
+    subject
+    |> to_string()
+    |> String.replace("\n", " ")
+    |> String.trim()
+    |> String.slice(0, 140)
+  end
+
+  defp strip_approval_status(content) do
+    content
+    |> to_string()
+    |> String.replace(~r/\s+_\([^)]*\)_\s*$/, "")
+    |> String.trim()
+  end
+
+  defp normalize_approval_status(status)
+       when status in [:approved, :denied, :timeout, :cancelled],
+       do: status
+
+  defp normalize_approval_status(status) when is_binary(status) do
+    case status do
+      "approved" -> :approved
+      "denied" -> :denied
+      "timeout" -> :timeout
+      "cancelled" -> :cancelled
+      _ -> :approved
+    end
+  end
+
+  defp normalize_approval_status(_status), do: :approved
+
+  defp normalize_approval_choice(choice)
+       when choice in [:once, :all, :session, :similar, :always, :grant],
+       do: choice
+
+  defp normalize_approval_choice(choice) when is_binary(choice) do
+    case choice do
+      "once" -> :once
+      "all" -> :all
+      "session" -> :session
+      "similar" -> :similar
+      "always" -> :always
+      "grant" -> :grant
+      _ -> :once
+    end
+  end
+
+  defp normalize_approval_choice(_choice), do: :once
 
   defp create_cardkit_card(card, token, state) do
     with {:ok, body} <-
@@ -1705,6 +2145,29 @@ defmodule Nex.Agent.Channel.Feishu do
     end
   end
 
+  defp do_delete_message(message_id, state) do
+    cond do
+      not state.enabled or state.app_id == "" or state.app_secret == "" ->
+        {:error, :not_configured, state}
+
+      not is_binary(message_id) or message_id == "" ->
+        {:error, :invalid_message_id, state}
+
+      true ->
+        with {:ok, token, state} <- get_tenant_access_token(state),
+             {:ok, _body} <-
+               feishu_delete(
+                 state,
+                 "/im/v1/messages/#{message_id}",
+                 [{"Authorization", "Bearer #{token}"}]
+               ) do
+          {:ok, state}
+        else
+          {:error, reason} -> {:error, reason, state}
+        end
+    end
+  end
+
   defp extract_tenant_token(%{"code" => 0, "tenant_access_token" => token, "expire" => expire})
        when is_binary(token) and is_integer(expire) do
     {:ok, token, expire}
@@ -1734,6 +2197,18 @@ defmodule Nex.Agent.Channel.Feishu do
     |> normalize_feishu_response()
   end
 
+  defp feishu_patch(state, path, body, headers) do
+    state.http_patch_fun.(@feishu_api <> path, body, headers)
+    |> normalize_req_response()
+    |> normalize_feishu_response()
+  end
+
+  defp feishu_delete(state, path, headers) do
+    state.http_delete_fun.(@feishu_api <> path, headers)
+    |> normalize_req_response()
+    |> normalize_feishu_response()
+  end
+
   defp feishu_post_multipart(state, path, body, headers) do
     state.http_post_multipart_fun.(@feishu_api <> path, body, headers)
     |> normalize_req_response()
@@ -1751,6 +2226,21 @@ defmodule Nex.Agent.Channel.Feishu do
   defp default_http_put(url, body, headers) do
     HTTP.put(url,
       json: body,
+      headers: headers,
+      receive_timeout: @default_send_timeout_ms
+    )
+  end
+
+  defp default_http_patch(url, body, headers) do
+    HTTP.patch(url,
+      json: body,
+      headers: headers,
+      receive_timeout: @default_send_timeout_ms
+    )
+  end
+
+  defp default_http_delete(url, headers) do
+    HTTP.delete(url,
       headers: headers,
       receive_timeout: @default_send_timeout_ms
     )

@@ -193,7 +193,8 @@ defmodule Nex.Agent.Channel.DiscordTest do
         workspace: File.cwd!(),
         session_key: "#{@instance_id}:123",
         channel: @instance_id,
-        chat_id: "123"
+        chat_id: "123",
+        authorized_actor: approval_actor("123")
       })
 
     send(
@@ -236,6 +237,37 @@ defmodule Nex.Agent.Channel.DiscordTest do
            end)
   end
 
+  test "approval outbound without authorized actor renders text fallback", %{pid: pid} do
+    request =
+      Request.new(%{
+        id: "approval_component_no_actor",
+        kind: :command,
+        operation: :execute,
+        subject: "git status",
+        description: "Allow shell command: read command using git",
+        grant_key: "command:execute:exact:no-actor",
+        workspace: File.cwd!(),
+        session_key: "#{@instance_id}:123",
+        channel: @instance_id,
+        chat_id: "123"
+      })
+
+    send(
+      pid,
+      {:bus_message, {:channel_outbound, @instance_id},
+       %{
+         chat_id: "123",
+         content: "Approval required: #{request.description}",
+         metadata: OutboundApproval.metadata(request)
+       }}
+    )
+
+    assert_receive {:http_post, url, %{"content" => content, "embeds" => []}, _headers}
+    assert url =~ "/channels/123/messages"
+    assert content =~ "Approval required:"
+    refute_receive {:http_post, _url, %{"components" => _components}, _headers}, 50
+  end
+
   test "approval outbound renders risk hint when present", %{pid: pid} do
     request =
       Request.new(%{
@@ -252,7 +284,8 @@ defmodule Nex.Agent.Channel.DiscordTest do
         workspace: File.cwd!(),
         session_key: "#{@instance_id}:123",
         channel: @instance_id,
-        chat_id: "123"
+        chat_id: "123",
+        authorized_actor: approval_actor("123")
       })
 
     send(
@@ -291,7 +324,8 @@ defmodule Nex.Agent.Channel.DiscordTest do
         workspace: File.cwd!(),
         session_key: "#{@instance_id}:123",
         channel: @instance_id,
-        chat_id: "123"
+        chat_id: "123",
+        authorized_actor: approval_actor("123")
       })
 
     payload = OutboundAction.command_payload(request, :allowed)
@@ -341,7 +375,8 @@ defmodule Nex.Agent.Channel.DiscordTest do
         workspace: File.cwd!(),
         session_key: "#{@instance_id}:123",
         channel: @instance_id,
-        chat_id: "123"
+        chat_id: "123",
+        authorized_actor: approval_actor("123")
       })
 
     task = Task.async(fn -> Nex.Agent.Sandbox.Approval.request(request, publish?: false) end)
@@ -422,7 +457,8 @@ defmodule Nex.Agent.Channel.DiscordTest do
         workspace: File.cwd!(),
         session_key: "#{@instance_id}:123",
         channel: @instance_id,
-        chat_id: "123"
+        chat_id: "123",
+        authorized_actor: approval_actor("123")
       })
 
     payload = OutboundApproval.payload(request, "Approval required")
@@ -477,7 +513,8 @@ defmodule Nex.Agent.Channel.DiscordTest do
         workspace: File.cwd!(),
         session_key: "#{@instance_id}:123",
         channel: @instance_id,
-        chat_id: "123"
+        chat_id: "123",
+        authorized_actor: approval_actor("123")
       })
 
     assert {:ok, converter} =
@@ -521,7 +558,8 @@ defmodule Nex.Agent.Channel.DiscordTest do
         workspace: File.cwd!(),
         session_key: "#{@instance_id}:123",
         channel: @instance_id,
-        chat_id: "123"
+        chat_id: "123",
+        authorized_actor: approval_actor("123")
       })
 
     request2 =
@@ -535,7 +573,8 @@ defmodule Nex.Agent.Channel.DiscordTest do
         workspace: File.cwd!(),
         session_key: "#{@instance_id}:123",
         channel: @instance_id,
-        chat_id: "123"
+        chat_id: "123",
+        authorized_actor: approval_actor("123")
       })
 
     assert {:ok, converter} =
@@ -621,7 +660,8 @@ defmodule Nex.Agent.Channel.DiscordTest do
         workspace: File.cwd!(),
         session_key: "#{@instance_id}:123",
         channel: @instance_id,
-        chat_id: "123"
+        chat_id: "123",
+        authorized_actor: approval_actor("123")
       })
 
     assert {:ok, converter} =
@@ -679,7 +719,8 @@ defmodule Nex.Agent.Channel.DiscordTest do
         workspace: File.cwd!(),
         session_key: "#{@instance_id}:123",
         channel: @instance_id,
-        chat_id: "123"
+        chat_id: "123",
+        authorized_actor: approval_actor("123")
       })
 
     content = """
@@ -917,9 +958,11 @@ defmodule Nex.Agent.Channel.DiscordTest do
     # chat_id is the auto-created thread ID, not the original channel
     refute inbound.chat_id == "123"
     assert inbound.sender_id == "user-1"
+    assert inbound.user_id == "user-1"
     assert inbound.text == "hello discord"
     assert inbound.metadata["message_id"] == "msg-1"
     assert inbound.metadata["parent_chat_id"] == "123"
+    assert inbound.metadata["user_id"] == "user-1"
   end
 
   test "message inside a thread responds without @mention", %{pid: pid} do
@@ -1168,4 +1211,13 @@ defmodule Nex.Agent.Channel.DiscordTest do
   end
 
   defp eventually(_fun, 0), do: false
+
+  defp approval_actor(chat_id) do
+    %{
+      "user_id" => "user-1",
+      "sender_id" => "user-1",
+      "channel" => @instance_id,
+      "chat_id" => chat_id
+    }
+  end
 end

@@ -13,7 +13,7 @@ defmodule Nex.Agent.Sandbox.Approval do
   alias Nex.Agent.Interface.Outbound
   alias Nex.Agent.Interface.Outbound.Approval, as: OutboundApproval
   alias Nex.Agent.Observe.ControlPlane.Log
-  alias Nex.Agent.Sandbox.Approval.Request
+  alias Nex.Agent.Sandbox.Approval.{Request, Router}
   alias Nex.Agent.Sandbox.{PermissionRule, PermissionRuleStore}
   require Log
 
@@ -90,6 +90,11 @@ defmodule Nex.Agent.Sandbox.Approval do
     GenServer.call(server(opts), {:pending, Path.expand(workspace), session_key})
   end
 
+  @spec pending_workspace(String.t(), keyword()) :: [Request.t()]
+  def pending_workspace(workspace, opts \\ []) do
+    GenServer.call(server(opts), {:pending_workspace, Path.expand(workspace), opts})
+  end
+
   @spec approved?(String.t(), String.t(), Request.t() | String.t(), keyword()) :: boolean()
   def approved?(workspace, session_key, request_or_grant_key, opts \\ []) do
     GenServer.call(
@@ -112,7 +117,8 @@ defmodule Nex.Agent.Sandbox.Approval do
     GenServer.call(server(opts), {:list_rules, Path.expand(workspace), session_key})
   end
 
-  @spec revoke_rule(String.t(), String.t(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  @spec revoke_rule(String.t(), String.t(), String.t(), keyword()) ::
+          {:ok, map()} | {:error, term()}
   def revoke_rule(workspace, session_key, rule_ref, opts \\ []) when is_binary(rule_ref) do
     GenServer.call(
       server(opts),
@@ -154,43 +160,57 @@ defmodule Nex.Agent.Sandbox.Approval do
         {:reply, {:error, :denied}, state}
 
       :ask ->
-        request = %{request | from: from}
+        route = Router.route(request)
+        request = put_delivery_route(%{request | from: from}, route)
         state = add_pending(state, request)
-        observe_request("sandbox.approval.requested", request, %{"status" => "pending"})
+
+        observe_request("sandbox.approval.requested", request, %{
+          "status" => "pending",
+          "delivery" => route
+        })
+
         notify_pending(request, opts)
-        if Keyword.get(opts, :publish?, true), do: publish_request(request)
+        if route == :session and Keyword.get(opts, :publish?, true), do: publish_request(request)
         {:noreply, state}
     end
   end
 
-  def handle_call({:approve, workspace, session_key, :all, _opts}, _from, state) do
+  def handle_call({:approve, workspace, session_key, :all, opts}, _from, state) do
     state = ensure_workspace_loaded(state, workspace)
     {requests, state} = pop_all_pending(state, workspace, session_key)
     {rule_required, approvable} = Enum.split_with(requests, &rule_approval_required?/1)
-    state = Enum.reduce(rule_required, state, &add_pending(&2, &1))
+    {authorized, unauthorized} = Enum.split_with(approvable, &authorized_resolution?(&1, opts))
+    state = Enum.reduce(rule_required ++ unauthorized, state, &add_pending(&2, &1))
 
-    Enum.each(approvable, &resolve_request(&1, :approved, :all, nil))
+    Enum.each(authorized, &resolve_request(&1, :approved, :all, nil))
 
     {:reply,
      {:ok,
       %{
-        approved: length(approvable),
+        approved: length(authorized),
         skipped_rule_required: length(rule_required),
+        skipped_unauthorized: length(unauthorized),
         granted: nil,
         choice: :all
       }}, state}
   end
 
-  def handle_call({:approve, workspace, session_key, choice, _opts}, _from, state)
+  def handle_call({:approve, workspace, session_key, choice, opts}, _from, state)
       when choice in [:once, :session, :similar, :always] do
     state = ensure_workspace_loaded(state, workspace)
 
     with {:ok, request} <- peek_pending(state, workspace, session_key),
+         :ok <- authorize_resolution(request, opts),
          {:ok, grant_spec} <- grant_spec_for_choice(request, choice),
          {:ok, state, grant} <-
            apply_grant_spec(state, workspace, session_key, request, grant_spec) do
       {_request, state} = pop_pending_by_id(state, workspace, session_key, request.id)
-      swept = sweep_approved_pending(state, workspace, session_key, grant)
+
+      swept =
+        state
+        |> sweep_approved_pending(workspace, session_key, grant)
+        |> Enum.filter(&authorized_resolution?(&1, opts))
+
       state = pop_requests(state, swept)
 
       resolve_request(request, :approved, choice, grant)
@@ -203,17 +223,22 @@ defmodule Nex.Agent.Sandbox.Approval do
     end
   end
 
-  def handle_call({:approve_request, request_id, choice, _opts}, _from, state)
+  def handle_call({:approve_request, request_id, choice, opts}, _from, state)
       when choice in [:once, :session, :similar, :always] do
     with {:ok, request} <- pending_by_request_id(state, request_id),
          state <- ensure_workspace_loaded(state, request.workspace),
+         :ok <- authorize_resolution(request, opts),
          {:ok, grant_spec} <- grant_spec_for_choice(request, choice),
          {:ok, state, grant} <-
            apply_grant_spec(state, request.workspace, request.session_key, request, grant_spec) do
       {_request, state} =
         pop_pending_by_id(state, request.workspace, request.session_key, request.id)
 
-      swept = sweep_approved_pending(state, request.workspace, request.session_key, grant)
+      swept =
+        state
+        |> sweep_approved_pending(request.workspace, request.session_key, grant)
+        |> Enum.filter(&authorized_resolution?(&1, opts))
+
       state = pop_requests(state, swept)
 
       resolve_request(request, :approved, choice, grant)
@@ -242,32 +267,40 @@ defmodule Nex.Agent.Sandbox.Approval do
     {:reply, {:error, {:unknown_approval_choice, choice}}, state}
   end
 
-  def handle_call({:deny, workspace, session_key, :all, _opts}, _from, state) do
+  def handle_call({:deny, workspace, session_key, :all, opts}, _from, state) do
     {requests, state} = pop_all_pending(state, workspace, session_key)
-    Enum.each(requests, &resolve_request(&1, :denied, :all, nil))
-    {:reply, {:ok, %{denied: length(requests), choice: :all}}, state}
+    {authorized, unauthorized} = Enum.split_with(requests, &authorized_resolution?(&1, opts))
+    state = Enum.reduce(unauthorized, state, &add_pending(&2, &1))
+    Enum.each(authorized, &resolve_request(&1, :denied, :all, nil))
+
+    {:reply,
+     {:ok,
+      %{denied: length(authorized), skipped_unauthorized: length(unauthorized), choice: :all}},
+     state}
   end
 
-  def handle_call({:deny, workspace, session_key, :once, _opts}, _from, state) do
-    case pop_next_pending(state, workspace, session_key) do
-      {:ok, request, state} ->
-        resolve_request(request, :denied, :once, nil)
-        {:reply, {:ok, %{denied: 1, choice: :once}}, state}
+  def handle_call({:deny, workspace, session_key, :once, opts}, _from, state) do
+    with {:ok, request} <- peek_pending(state, workspace, session_key),
+         :ok <- authorize_resolution(request, opts) do
+      {_request, state} = pop_pending_by_id(state, workspace, session_key, request.id)
 
+      resolve_request(request, :denied, :once, nil)
+      {:reply, {:ok, %{denied: 1, choice: :once}}, state}
+    else
       {:error, reason} ->
         {:reply, {:error, reason}, state}
     end
   end
 
-  def handle_call({:deny_request, request_id, :once, _opts}, _from, state) do
-    case pending_by_request_id(state, request_id) do
-      {:ok, request} ->
-        {_request, state} =
-          pop_pending_by_id(state, request.workspace, request.session_key, request.id)
+  def handle_call({:deny_request, request_id, :once, opts}, _from, state) do
+    with {:ok, request} <- pending_by_request_id(state, request_id),
+         :ok <- authorize_resolution(request, opts) do
+      {_request, state} =
+        pop_pending_by_id(state, request.workspace, request.session_key, request.id)
 
-        resolve_request(request, :denied, :once, nil)
-        {:reply, {:ok, %{denied: 1, choice: :once, request_id: request.id}}, state}
-
+      resolve_request(request, :denied, :once, nil)
+      {:reply, {:ok, %{denied: 1, choice: :once, request_id: request.id}}, state}
+    else
       {:error, reason} ->
         {:reply, {:error, reason}, state}
     end
@@ -287,6 +320,20 @@ defmodule Nex.Agent.Sandbox.Approval do
 
   def handle_call({:pending, workspace, session_key}, _from, state) do
     {:reply, Enum.map(pending_requests(state, workspace, session_key), &hide_from/1), state}
+  end
+
+  def handle_call({:pending_workspace, workspace, opts}, _from, state) do
+    route = Keyword.get(opts, :delivery)
+
+    requests =
+      state.pending_by_id
+      |> Map.values()
+      |> Enum.filter(&(Path.expand(&1.workspace) == workspace))
+      |> Enum.filter(&matches_delivery?(&1, route))
+      |> Enum.sort_by(&DateTime.to_unix(&1.requested_at || DateTime.utc_now(), :microsecond))
+      |> Enum.map(&hide_from/1)
+
+    {:reply, requests, state}
   end
 
   def handle_call({:approved?, workspace, session_key, request_or_grant_key}, _from, state) do
@@ -347,6 +394,16 @@ defmodule Nex.Agent.Sandbox.Approval do
 
   defp server(opts), do: Keyword.get(opts, :server, __MODULE__)
 
+  defp put_delivery_route(%Request{metadata: metadata} = request, route) do
+    %{request | metadata: Map.put(metadata || %{}, "delivery", Atom.to_string(route))}
+  end
+
+  defp matches_delivery?(_request, nil), do: true
+
+  defp matches_delivery?(%Request{metadata: metadata}, route) do
+    Map.get(metadata || %{}, "delivery") == Atom.to_string(route)
+  end
+
   defp add_pending(%__MODULE__{} = state, %Request{} = request) do
     key = session_scope_key(request.workspace, request.session_key)
 
@@ -363,17 +420,6 @@ defmodule Nex.Agent.Sandbox.Approval do
     case pending_requests(state, workspace, session_key) do
       [request | _] -> {:ok, request}
       [] -> {:error, :no_pending_request}
-    end
-  end
-
-  defp pop_next_pending(state, workspace, session_key) do
-    case peek_pending(state, workspace, session_key) do
-      {:ok, request} ->
-        {_request, state} = pop_pending_by_id(state, workspace, session_key, request.id)
-        {:ok, request, state}
-
-      {:error, reason} ->
-        {:error, reason}
     end
   end
 
@@ -440,6 +486,85 @@ defmodule Nex.Agent.Sandbox.Approval do
 
   defp pending_by_request_id(_state, _request_id), do: {:error, :no_pending_request}
 
+  defp authorized_resolution?(%Request{} = request, opts) do
+    authorize_resolution(request, opts) == :ok
+  end
+
+  defp authorize_resolution(%Request{authorized_actor: actor}, _opts)
+       when actor in [nil, %{}],
+       do: :ok
+
+  defp authorize_resolution(%Request{authorized_actor: expected}, opts) when is_map(expected) do
+    actor = resolution_actor(opts)
+
+    if actor_matches?(expected, actor) do
+      :ok
+    else
+      {:error, :unauthorized}
+    end
+  end
+
+  defp resolution_actor(opts) when is_list(opts) do
+    Keyword.get(opts, :authorized_actor) || Keyword.get(opts, :actor)
+  end
+
+  defp resolution_actor(opts) when is_map(opts) do
+    Map.get(opts, :authorized_actor) ||
+      Map.get(opts, "authorized_actor") ||
+      Map.get(opts, :actor) ||
+      Map.get(opts, "actor")
+  end
+
+  defp resolution_actor(_opts), do: nil
+
+  defp actor_matches?(expected, actual) when is_map(expected) and is_map(actual) do
+    expected_principal = actor_principal(expected)
+    actual_principal = actor_principal(actual)
+
+    present?(expected_principal) and expected_principal == actual_principal and
+      actor_field_matches?(expected, actual, ["channel", "platform"]) and
+      actor_field_matches?(expected, actual, ["chat_id"])
+  end
+
+  defp actor_matches?(_expected, _actual), do: false
+
+  defp actor_principal(actor) when is_map(actor) do
+    actor_value(actor, ["user_id", "sender_id", "id"])
+  end
+
+  defp actor_principal(_actor), do: nil
+
+  defp actor_field_matches?(expected, actual, keys) do
+    expected_value = actor_value(expected, keys)
+    actual_value = actor_value(actual, keys)
+
+    is_nil(expected_value) or is_nil(actual_value) or expected_value == actual_value
+  end
+
+  defp actor_value(actor, keys) when is_map(actor) and is_list(keys) do
+    Enum.find_value(keys, fn key ->
+      case Map.get(actor, key) || Map.get(actor, String.to_atom(key)) do
+        value when is_binary(value) ->
+          value = String.trim(value)
+          if value == "", do: nil, else: value
+
+        value when is_atom(value) and not is_nil(value) ->
+          Atom.to_string(value)
+
+        value when is_integer(value) ->
+          Integer.to_string(value)
+
+        _ ->
+          nil
+      end
+    end)
+  end
+
+  defp actor_value(_actor, _keys), do: nil
+
+  defp present?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present?(_value), do: false
+
   defp pop_requests(state, requests) when is_list(requests) do
     Enum.reduce(requests, state, fn %Request{} = request, acc ->
       {_request, acc} = pop_pending_by_id(acc, request.workspace, request.session_key, request.id)
@@ -448,11 +573,21 @@ defmodule Nex.Agent.Sandbox.Approval do
   end
 
   defp grant_spec_for_choice(%Request{} = request, :once) do
-    if rule_approval_required?(request) do
-      {:error, :permission_approval_requires_rule}
-    else
-      {:ok, :once}
+    cond do
+      request.kind == :runtime_env ->
+        {:error, :runtime_env_approval_requires_workspace_rule}
+
+      rule_approval_required?(request) ->
+        {:error, :permission_approval_requires_rule}
+
+      true ->
+        {:ok, :once}
     end
+  end
+
+  defp grant_spec_for_choice(%Request{kind: :runtime_env}, choice)
+       when choice in [:session, :similar] do
+    {:error, :runtime_env_approval_requires_workspace_rule}
   end
 
   defp grant_spec_for_choice(%Request{} = request, :similar) do
@@ -679,8 +814,12 @@ defmodule Nex.Agent.Sandbox.Approval do
     end
   end
 
-  defp validate_revocable_rule(%PermissionRule.Rule{effect: :allow, level: 0, source: :owner_grant}),
-    do: :ok
+  defp validate_revocable_rule(%PermissionRule.Rule{
+         effect: :allow,
+         level: 0,
+         source: :owner_grant
+       }),
+       do: :ok
 
   defp validate_revocable_rule(%PermissionRule.Rule{effect: effect}) when effect != :allow,
     do: {:error, :permission_rule_revoke_cannot_remove_non_allow_rule}
@@ -966,7 +1105,10 @@ defmodule Nex.Agent.Sandbox.Approval do
     Map.new(attrs, fn {key, value} -> {to_string(key), to_string(value)} end)
   end
 
-  defp observe_rule_revoked(workspace, session_key, %{rule_ref: rule_ref, persistence: persistence}) do
+  defp observe_rule_revoked(workspace, session_key, %{
+         rule_ref: rule_ref,
+         persistence: persistence
+       }) do
     Log.info(
       "permission.rule.revoked",
       %{
